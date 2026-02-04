@@ -1,0 +1,15 @@
+appId: com.terminal-division.app
+productName: Terminal Division
+
+mac:
+  target:
+    - dmg
+  icon: resources/icon.icns
+  extendInfo:
+    LSEnvironment:
+      LANG: ja_JP.UTF-8
+      LC_ALL: ja_JP.UTF-8
+
+win:
+  target:
+    - nsis

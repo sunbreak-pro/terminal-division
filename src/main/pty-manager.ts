@@ -31,12 +31,15 @@ class PtyManager {
 
     try {
       const ptyProcess = pty.spawn(shell, [], {
+        encoding: 'utf8',
         name: 'xterm-256color',
         cols: 80,
         rows: 24,
         cwd: homeDir,
         env: {
           ...process.env,
+          LANG: 'ja_JP.UTF-8',
+          LC_ALL: 'ja_JP.UTF-8',
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor'
         } as { [key: string]: string }

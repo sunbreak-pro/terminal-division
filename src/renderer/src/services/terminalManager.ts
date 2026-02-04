@@ -46,16 +46,30 @@ export function getOrCreate(
 
   // Register terminal.onData listener ONCE during instance creation
   const terminalDataDisposable = terminal.onData((data) => {
-    // Skip data during composition to prevent partial text being sent
-    if (isComposing) {
+    console.log(
+      '[onData] isComposing:',
+      isComposing,
+      'lastCompositionData:',
+      lastCompositionData ? JSON.stringify(lastCompositionData) : null,
+      'data:',
+      JSON.stringify(data)
+    )
+
+    // Non-ASCII characters (Japanese, etc.) are handled by compositionend only.
+    // Skip them here to prevent double-send or corruption during long IME compositions.
+    if (/[^\x00-\x7F]/.test(data)) {
+      console.log('[onData] SKIPPED (non-ASCII)')
       return
     }
+
     // Skip if this data was already sent via compositionend (prevent double-send)
     if (lastCompositionData !== null && data === lastCompositionData) {
       lastCompositionData = null
+      console.log('[onData] SKIPPED (duplicate of compositionend)')
       return
     }
     lastCompositionData = null
+    console.log('[onData] SENT')
     callbacks.onData(data)
   })
 
@@ -77,16 +91,22 @@ export function getOrCreate(
     const textarea = terminal.element?.querySelector('textarea')
     if (textarea) {
       textarea.addEventListener('compositionstart', () => {
+        console.log('[compositionstart]')
         isComposing = true
         lastCompositionData = null
       })
+      textarea.addEventListener('compositionupdate', (e: CompositionEvent) => {
+        console.log('[compositionupdate] data:', JSON.stringify(e.data))
+      })
       textarea.addEventListener('compositionend', (e: CompositionEvent) => {
+        console.log('[compositionend] data:', JSON.stringify(e.data))
         isComposing = false
         // Send the confirmed text directly from compositionend event
         // This avoids relying on xterm.js's setTimeout(0) which can race with
         // the next compositionstart when macOS IME splits long compositions
         if (e.data && e.data.length > 0) {
           lastCompositionData = e.data
+          console.log('[compositionend] SENDING:', JSON.stringify(e.data))
           callbacks.onData(e.data)
         }
       })
