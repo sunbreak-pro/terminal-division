@@ -5,7 +5,6 @@ export interface TerminalInstance {
   terminal: Terminal
   fitAddon: FitAddon
   ptyCreated: boolean
-  isComposing: boolean
   compositionRegistered: boolean
   dataListenerRemover: (() => void) | null
   exitListenerRemover: (() => void) | null
@@ -37,13 +36,26 @@ export function getOrCreate(
   const fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
 
-  // IME composition state flag
+  // IME composition state tracking
+  // When composing (e.g., typing Japanese), macOS IME may split long compositions
+  // and xterm.js may fire onData with partial text. We skip those to prevent corruption.
   let isComposing = false
+  // Track data sent via compositionend to prevent double-sending
+  // (xterm.js sends the same data via setTimeout(0) after compositionend)
+  let lastCompositionData: string | null = null
 
   // Register terminal.onData listener ONCE during instance creation
-  // Skip sending data to PTY during IME composition to prevent character duplication
   const terminalDataDisposable = terminal.onData((data) => {
-    if (isComposing) return
+    // Skip data during composition to prevent partial text being sent
+    if (isComposing) {
+      return
+    }
+    // Skip if this data was already sent via compositionend (prevent double-send)
+    if (lastCompositionData !== null && data === lastCompositionData) {
+      lastCompositionData = null
+      return
+    }
+    lastCompositionData = null
     callbacks.onData(data)
   })
 
@@ -60,11 +72,31 @@ export function getOrCreate(
     }
   })
 
+  // Function to register composition event listeners on the textarea
+  const registerCompositionListeners = (): void => {
+    const textarea = terminal.element?.querySelector('textarea')
+    if (textarea) {
+      textarea.addEventListener('compositionstart', () => {
+        isComposing = true
+        lastCompositionData = null
+      })
+      textarea.addEventListener('compositionend', (e: CompositionEvent) => {
+        isComposing = false
+        // Send the confirmed text directly from compositionend event
+        // This avoids relying on xterm.js's setTimeout(0) which can race with
+        // the next compositionstart when macOS IME splits long compositions
+        if (e.data && e.data.length > 0) {
+          lastCompositionData = e.data
+          callbacks.onData(e.data)
+        }
+      })
+    }
+  }
+
   const instance: TerminalInstance = {
     terminal,
     fitAddon,
     ptyCreated: false,
-    isComposing: false,
     compositionRegistered: false,
     dataListenerRemover: () => {
       terminalDataDisposable.dispose()
@@ -73,14 +105,9 @@ export function getOrCreate(
     exitListenerRemover
   }
 
-  // Create a closure to update isComposing from composition events
-  // Store the setter on the instance for use in attachToContainer
-  ;(instance as TerminalInstance & { setComposing: (v: boolean) => void }).setComposing = (
-    v: boolean
-  ) => {
-    isComposing = v
-    instance.isComposing = v
-  }
+  // Store the registration function for use in attachToContainer
+  ;(instance as TerminalInstance & { _registerComposition?: () => void })._registerComposition =
+    registerCompositionListeners
 
   registry.set(id, instance)
   return instance
@@ -143,18 +170,14 @@ export function attachToContainer(id: string, container: HTMLElement): void {
     instance.terminal.open(container)
   }
 
-  // Register IME composition events (only once)
-  const textarea = instance.terminal.element?.querySelector('textarea')
-  const setComposing = (instance as TerminalInstance & { setComposing?: (v: boolean) => void })
-    .setComposing
-  if (textarea && !instance.compositionRegistered && setComposing) {
-    textarea.addEventListener('compositionstart', () => {
-      setComposing(true)
-    })
-    textarea.addEventListener('compositionend', () => {
-      setComposing(false)
-    })
-    instance.compositionRegistered = true
+  // Register composition event listeners after terminal is attached to DOM
+  if (!instance.compositionRegistered) {
+    const registerFn = (instance as TerminalInstance & { _registerComposition?: () => void })
+      ._registerComposition
+    if (registerFn) {
+      registerFn()
+      instance.compositionRegistered = true
+    }
   }
 }
 
