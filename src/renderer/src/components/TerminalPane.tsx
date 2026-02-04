@@ -114,8 +114,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(({ id }) => {
       height: '100%',
       width: '100%',
       position: 'relative' as const,
-      outline: isActive ? `2px solid ${theme.colors.accent}` : 'none',
-      outlineOffset: '-2px'
+      boxSizing: 'border-box' as const,
+      border: isActive ? `1.5px solid ${theme.colors.activeTerminal}` : '1.5px solid transparent'
     }),
     [isActive]
   )

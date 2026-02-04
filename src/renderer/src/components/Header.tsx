@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import {
   useActiveTerminalId,
   useTerminalCount,
@@ -6,12 +6,14 @@ import {
   useTerminalActions
 } from '../stores/terminalStore'
 import { theme } from '../styles/theme'
+import ShortcutsModal from './ShortcutsModal'
 
 const Header: React.FC = React.memo(() => {
   const activeTerminalId = useActiveTerminalId()
   const terminalCount = useTerminalCount()
   const canSplit = useCanSplit()
   const { splitTerminal, closeTerminal } = useTerminalActions()
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false)
 
   const canSplitNow = canSplit()
   const canClose = terminalCount > 1
@@ -122,6 +124,21 @@ const Header: React.FC = React.memo(() => {
     [activeTerminalId]
   )
 
+  const handleOpenShortcuts = useCallback(() => {
+    setIsShortcutsModalOpen(true)
+  }, [])
+
+  const handleCloseShortcuts = useCallback(() => {
+    setIsShortcutsModalOpen(false)
+  }, [])
+
+  const handleShortcutsButtonEnter = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.backgroundColor = theme.colors.buttonHover
+    },
+    []
+  )
+
   return (
     <header
       className="titlebar-drag-region"
@@ -221,6 +238,33 @@ const Header: React.FC = React.memo(() => {
         </button>
 
         <button
+          onClick={handleOpenShortcuts}
+          style={buttonStyle}
+          title="ショートカットキー一覧"
+          onMouseEnter={handleShortcutsButtonEnter}
+          onMouseLeave={handleButtonLeave}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <rect x="2" y="4" width="20" height="16" rx="2" />
+            <line x1="6" y1="8" x2="6" y2="8" />
+            <line x1="10" y1="8" x2="10" y2="8" />
+            <line x1="14" y1="8" x2="14" y2="8" />
+            <line x1="18" y1="8" x2="18" y2="8" />
+            <line x1="6" y1="12" x2="6" y2="12" />
+            <line x1="18" y1="12" x2="18" y2="12" />
+            <line x1="8" y1="16" x2="16" y2="16" />
+          </svg>
+          ショートカット
+        </button>
+
+        <button
           onClick={handleClose}
           disabled={!canClose}
           style={closeButtonStyle}
@@ -242,6 +286,8 @@ const Header: React.FC = React.memo(() => {
           閉じる
         </button>
       </div>
+
+      <ShortcutsModal isOpen={isShortcutsModalOpen} onClose={handleCloseShortcuts} />
     </header>
   )
 })

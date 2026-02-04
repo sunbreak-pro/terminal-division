@@ -62,11 +62,12 @@ body {
   overflow-y: auto !important;
 }
 
-/* Resizable panels */
+/* Resizable panels - react-resizable-panels v4 */
 [data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id] {
   width: 4px;
   background-color: #3c3c3c;
   transition: background-color 0.15s ease;
+  cursor: col-resize;
 }
 
 [data-panel-group-direction="horizontal"] > [data-panel-resize-handle-id]:hover,
@@ -78,9 +79,15 @@ body {
   height: 4px;
   background-color: #3c3c3c;
   transition: background-color 0.15s ease;
+  cursor: row-resize;
 }
 
 [data-panel-group-direction="vertical"] > [data-panel-resize-handle-id]:hover,
 [data-panel-group-direction="vertical"] > [data-panel-resize-handle-id][data-resize-handle-active] {
   background-color: #007acc;
+}
+
+[data-panel-resize-handle-id] {
+  touch-action: none;
+  user-select: none;
 }

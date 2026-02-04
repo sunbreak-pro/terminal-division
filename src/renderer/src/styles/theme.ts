@@ -6,6 +6,7 @@ export const theme = {
     text: '#d4d4d4',
     textSecondary: '#888888',
     accent: '#007acc',
+    activeTerminal: '#ff8c00',
     border: '#3c3c3c',
     borderActive: '#007acc',
     buttonHover: '#3c3c3c',
