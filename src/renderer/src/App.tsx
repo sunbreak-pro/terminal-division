@@ -10,6 +10,7 @@ import {
 } from "./stores/terminalStore";
 import { theme } from "./styles/theme";
 import { getAllTerminalIds } from "./utils/layoutUtils";
+import * as terminalManager from "./services/terminalManager";
 
 const App: React.FC = () => {
   const activeTerminalId = useActiveTerminalId();
@@ -65,10 +66,37 @@ const App: React.FC = () => {
       }
 
       // Cmd + Shift + D: 横に分割 (vertical direction = top/bottom split)
-      if (isMeta && isShift && !isOption && e.key === "d") {
+      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "d") {
         e.preventDefault();
         if (activeTerminalId && canSplitNow) {
           splitTerminal(activeTerminalId, "vertical");
+        }
+        return;
+      }
+
+      // Cmd + Shift + 矢印: 行選択
+      if (isMeta && isShift && !isOption) {
+        if (
+          e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown"
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (activeTerminalId) {
+            terminalManager.selectCurrentLine(activeTerminalId);
+          }
+          return;
+        }
+      }
+
+      // Cmd + Shift + A: 現在行を選択
+      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeTerminalId) {
+          terminalManager.selectCurrentLine(activeTerminalId);
         }
         return;
       }
@@ -116,7 +144,7 @@ const App: React.FC = () => {
       }
 
       // Cmd + Shift + Z: Redo（zsh の redo を送信）
-      if (isMeta && isShift && !isOption && e.key === "z") {
+      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {

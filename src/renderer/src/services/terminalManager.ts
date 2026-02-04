@@ -1,6 +1,16 @@
 import { Terminal, ITerminalOptions } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
+// 入力履歴の状態管理
+interface InputHistoryState {
+  undoStack: string[] // 過去の入力履歴
+  redoStack: string[] // undoした入力
+  currentLine: string // 現在の行内容
+}
+
+// undoスタックの最大サイズ
+const MAX_UNDO_STACK_SIZE = 100
+
 export interface TerminalInstance {
   terminal: Terminal
   fitAddon: FitAddon
@@ -8,6 +18,7 @@ export interface TerminalInstance {
   compositionRegistered: boolean
   dataListenerRemover: (() => void) | null
   exitListenerRemover: (() => void) | null
+  inputHistory: InputHistoryState
 }
 
 // Module-scope registry (independent of React lifecycle)
@@ -55,10 +66,11 @@ export function getOrCreate(
       JSON.stringify(data)
     )
 
-    // Non-ASCII characters (Japanese, etc.) are handled by compositionend only.
+    // Non-ASCII characters during IME composition are handled by compositionend only.
     // Skip them here to prevent double-send or corruption during long IME compositions.
-    if (/[^\x00-\x7F]/.test(data)) {
-      console.log('[onData] SKIPPED (non-ASCII)')
+    // But allow non-ASCII when NOT composing (e.g., paste operations).
+    if (isComposing && /[^\x00-\x7F]/.test(data)) {
+      console.log('[onData] SKIPPED (non-ASCII during composition)')
       return
     }
 
@@ -122,7 +134,12 @@ export function getOrCreate(
       terminalDataDisposable.dispose()
       dataListenerRemover()
     },
-    exitListenerRemover
+    exitListenerRemover,
+    inputHistory: {
+      undoStack: [],
+      redoStack: [],
+      currentLine: ''
+    }
   }
 
   // Store the registration function for use in attachToContainer
@@ -248,4 +265,36 @@ export function focus(id: string): void {
   if (!instance) return
 
   instance.terminal.focus()
+}
+
+/**
+ * カーソルがある行全体を選択
+ */
+export function selectCurrentLine(id: string): void {
+  const instance = registry.get(id)
+  if (!instance) return
+
+  const terminal = instance.terminal
+  const buffer = terminal.buffer.active
+  const cursorY = buffer.cursorY + buffer.viewportY
+
+  terminal.selectLines(cursorY, cursorY)
+}
+
+/**
+ * 選択テキストを取得
+ */
+export function getSelection(id: string): string {
+  const instance = registry.get(id)
+  if (!instance) return ''
+  return instance.terminal.getSelection()
+}
+
+/**
+ * 選択をクリア
+ */
+export function clearSelection(id: string): void {
+  const instance = registry.get(id)
+  if (!instance) return
+  instance.terminal.clearSelection()
 }

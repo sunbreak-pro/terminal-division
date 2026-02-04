@@ -10,6 +10,8 @@ import type {
 
 export type { SplitDirection, TerminalPane, SplitNode, LayoutNode }
 
+const MAX_TERMINALS = 6
+
 function isTerminalPane(node: LayoutNode): node is TerminalPane {
   return !('type' in node && node.type === 'split')
 }
@@ -43,11 +45,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   setActiveTerminal: (id) => set({ activeTerminalId: id }),
 
-  canSplit: () => get().terminalCount < 4,
+  canSplit: () => get().terminalCount < MAX_TERMINALS,
 
   splitTerminal: (terminalId, direction) => {
     const state = get()
-    if (state.terminalCount >= 4) return false
+    if (state.terminalCount >= MAX_TERMINALS) return false
 
     const targetNode = state.nodes.get(terminalId)
     if (!targetNode || !isTerminalPane(targetNode)) return false
