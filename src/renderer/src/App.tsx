@@ -115,9 +115,12 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          // 行末へ移動してから行頭まで削除
-          window.api.pty.write(activeTerminalId, "\x05"); // Ctrl+E: 行末へ
-          window.api.pty.write(activeTerminalId, "\x15"); // Ctrl+U: 行頭まで削除
+          // terminalManagerを経由して履歴に記録してからクリア
+          const result = terminalManager.clearLine(activeTerminalId);
+          if (result) {
+            window.api.pty.write(activeTerminalId, result.moveToEnd);
+            window.api.pty.write(activeTerminalId, result.clearCmd);
+          }
         }
         return;
       }
@@ -131,26 +134,35 @@ const App: React.FC = () => {
         }
         return;
       }
-      // Cmd + Z: Undo（readline の Ctrl+_ を送信）
+      // Cmd + Z: Undo（アプリ側で管理する履歴から復元）
       if (isMeta && !isShift && !isOption && e.key === "z") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          // Ctrl+_ (0x1f) は readline の undo コマンド
-          // zsh で動作しない場合: ~/.zshrc に `bindkey '^_' undo` を追加
-          window.api.pty.write(activeTerminalId, "\x1f");
+          const result = terminalManager.undo(activeTerminalId);
+          if (result) {
+            // 行をクリアして前の状態を再入力
+            window.api.pty.write(activeTerminalId, result.clearCmd);
+            if (result.newText) {
+              window.api.pty.write(activeTerminalId, result.newText);
+            }
+          }
         }
         return;
       }
 
-      // Cmd + Shift + Z: Redo（zsh の redo を送信）
+      // Cmd + Shift + Z: Redo（アプリ側で管理する履歴から復元）
       if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          // Ctrl+^ (0x1e) を redo にマッピング
-          // ~/.zshrc に `bindkey '^^' redo` を追加
-          window.api.pty.write(activeTerminalId, "\x1e");
+          const result = terminalManager.redo(activeTerminalId);
+          if (result) {
+            window.api.pty.write(activeTerminalId, result.clearCmd);
+            if (result.newText) {
+              window.api.pty.write(activeTerminalId, result.newText);
+            }
+          }
         }
         return;
       }

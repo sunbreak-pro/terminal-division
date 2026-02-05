@@ -24,6 +24,17 @@ export interface TerminalInstance {
 // Module-scope registry (independent of React lifecycle)
 const registry = new Map<string, TerminalInstance>()
 
+// Undo/Redo操作中フラグ（各ターミナルID毎）
+// これがtrueの間は、PTYからのエコーバックによる履歴の再記録をスキップする
+const undoRedoInProgress = new Map<string, boolean>()
+
+// Undo/Redoタイマー管理（連続操作時に古いタイマーをキャンセルするため）
+const undoRedoTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+// 送信済みテキスト追跡（PTYエコーバックによる重複記録を防ぐ）
+// Undo/Redoで送信したテキストを記録し、recordHistoryで同じテキストが来たらスキップ
+const pendingSentText = new Map<string, string>()
+
 export interface TerminalCallbacks {
   onData: (data: string) => void
   onExit: () => void
@@ -55,6 +66,52 @@ export function getOrCreate(
   // (xterm.js sends the same data via setTimeout(0) after compositionend)
   let lastCompositionData: string | null = null
 
+  // 入力履歴の参照（instanceが作成された後に設定）
+  let inputHistoryRef: InputHistoryState | null = null
+
+  // ヘルパー関数: 制御文字かどうか判定
+  const isControlChar = (char: string): boolean => {
+    return char.length === 1 && char.charCodeAt(0) < 32
+  }
+
+  // ヘルパー関数: 履歴を記録
+  const recordHistory = (newLine: string): void => {
+    if (!inputHistoryRef) return
+
+    // Undo/Redo操作中は履歴を記録しない（エコーバックによる汚染を防ぐ）
+    if (undoRedoInProgress.get(id)) {
+      console.log('[recordHistory] SKIPPED (undo/redo in progress)')
+      return
+    }
+
+    // 送信済みテキストと一致する場合はスキップ（Undo/Redoのエコーバック）
+    const pending = pendingSentText.get(id)
+    if (pending !== undefined && pending === newLine) {
+      console.log('[recordHistory] SKIPPED (matches pending sent text):', JSON.stringify(pending))
+      pendingSentText.delete(id)
+      return
+    }
+
+    console.log('[recordHistory] newLine:', JSON.stringify(newLine))
+    console.log(
+      '[recordHistory] currentLine before:',
+      JSON.stringify(inputHistoryRef.currentLine)
+    )
+    console.log('[recordHistory] undoStack before:', JSON.stringify(inputHistoryRef.undoStack))
+    // 新しい入力があったらredoスタックをクリア
+    inputHistoryRef.redoStack = []
+    // 現在の状態をundoスタックに保存
+    inputHistoryRef.undoStack.push(inputHistoryRef.currentLine)
+    // スタックサイズを制限
+    if (inputHistoryRef.undoStack.length > MAX_UNDO_STACK_SIZE) {
+      inputHistoryRef.undoStack.shift()
+    }
+    // 行内容を更新
+    inputHistoryRef.currentLine = newLine
+    console.log('[recordHistory] undoStack after:', JSON.stringify(inputHistoryRef.undoStack))
+    console.log('[recordHistory] currentLine after:', JSON.stringify(inputHistoryRef.currentLine))
+  }
+
   // Register terminal.onData listener ONCE during instance creation
   const terminalDataDisposable = terminal.onData((data) => {
     console.log(
@@ -81,6 +138,34 @@ export function getOrCreate(
       return
     }
     lastCompositionData = null
+
+    // 履歴管理
+    if (inputHistoryRef) {
+      // Enterキー（\r）で行確定 → 履歴をリセット
+      if (data === '\r' || data === '\n') {
+        inputHistoryRef.undoStack = []
+        inputHistoryRef.redoStack = []
+        inputHistoryRef.currentLine = ''
+      }
+      // Backspace処理
+      else if (data === '\x7f' || data === '\b') {
+        recordHistory(inputHistoryRef.currentLine.slice(0, -1))
+      }
+      // Ctrl+W (単語削除): 最後の単語を削除
+      else if (data === '\x17') {
+        const trimmed = inputHistoryRef.currentLine.replace(/\s*\S+\s*$/, '')
+        recordHistory(trimmed)
+      }
+      // Ctrl+U (行頭まで削除): 行をクリア
+      else if (data === '\x15') {
+        recordHistory('')
+      }
+      // 通常入力: 履歴を記録
+      else if (data.length > 0 && !isControlChar(data)) {
+        recordHistory(inputHistoryRef.currentLine + data)
+      }
+    }
+
     console.log('[onData] SENT')
     callbacks.onData(data)
   })
@@ -119,6 +204,12 @@ export function getOrCreate(
         if (e.data && e.data.length > 0) {
           lastCompositionData = e.data
           console.log('[compositionend] SENDING:', JSON.stringify(e.data))
+
+          // 日本語入力も履歴に記録する
+          if (inputHistoryRef) {
+            recordHistory(inputHistoryRef.currentLine + e.data)
+          }
+
           callbacks.onData(e.data)
         }
       })
@@ -145,6 +236,9 @@ export function getOrCreate(
   // Store the registration function for use in attachToContainer
   ;(instance as TerminalInstance & { _registerComposition?: () => void })._registerComposition =
     registerCompositionListeners
+
+  // inputHistoryRefを設定
+  inputHistoryRef = instance.inputHistory
 
   registry.set(id, instance)
   return instance
@@ -183,6 +277,16 @@ export function destroy(id: string): void {
   instance.terminal.dispose()
 
   registry.delete(id)
+  // Undo/Redo関連のクリーンアップ
+  undoRedoInProgress.delete(id)
+  // タイマーをキャンセルしてクリア
+  const existingTimer = undoRedoTimers.get(id)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+    undoRedoTimers.delete(id)
+  }
+  // 送信済みテキスト追跡をクリア
+  pendingSentText.delete(id)
 }
 
 /**
@@ -297,4 +401,176 @@ export function clearSelection(id: string): void {
   const instance = registry.get(id)
   if (!instance) return
   instance.terminal.clearSelection()
+}
+
+/**
+ * Undo操作を実行
+ * @returns 行をクリアして再入力するためのコマンド文字列、またはnull
+ */
+export function undo(id: string): { clearCmd: string; newText: string } | null {
+  const instance = registry.get(id)
+  if (!instance) return null
+
+  const { inputHistory } = instance
+  console.log('[undo] undoStack:', JSON.stringify(inputHistory.undoStack))
+  console.log('[undo] redoStack:', JSON.stringify(inputHistory.redoStack))
+  console.log('[undo] currentLine:', JSON.stringify(inputHistory.currentLine))
+
+  if (inputHistory.undoStack.length === 0) {
+    console.log('[undo] undoStack is empty, returning null')
+    return null
+  }
+
+  // Undo/Redo操作中フラグを設定（エコーバックによる履歴汚染を防ぐ）
+  undoRedoInProgress.set(id, true)
+  console.log('[undo] set undoRedoInProgress = true')
+
+  // 現在の状態をredoスタックに保存
+  inputHistory.redoStack.push(inputHistory.currentLine)
+
+  // undoスタックから前の状態を復元
+  const previousState = inputHistory.undoStack.pop()!
+  inputHistory.currentLine = previousState
+
+  // 送信するテキストを追跡（エコーバックによる重複記録を防ぐ）
+  pendingSentText.set(id, previousState)
+  console.log('[undo] set pendingSentText:', JSON.stringify(previousState))
+
+  console.log('[undo] returning newText:', JSON.stringify(previousState))
+  console.log('[undo] undoStack after:', JSON.stringify(inputHistory.undoStack))
+  console.log('[undo] redoStack after:', JSON.stringify(inputHistory.redoStack))
+
+  // 既存のタイマーをキャンセル（連続Undo操作時に古いタイマーが先にフラグをリセットするのを防ぐ）
+  const existingTimer = undoRedoTimers.get(id)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+    console.log('[undo] cancelled existing timer')
+  }
+
+  // 一定時間後にフラグをリセット（PTYからのエコーバックが処理された後）
+  // パッケージ版ではPTYエコーバックが遅い可能性があるため、300msに延長
+  const timer = setTimeout(() => {
+    undoRedoInProgress.set(id, false)
+    undoRedoTimers.delete(id)
+    console.log('[undo] set undoRedoInProgress = false (after 300ms)')
+  }, 300)
+  undoRedoTimers.set(id, timer)
+
+  return {
+    clearCmd: '\x15', // Ctrl+U: 行全体をクリア
+    newText: previousState
+  }
+}
+
+/**
+ * Redo操作を実行
+ */
+export function redo(id: string): { clearCmd: string; newText: string } | null {
+  const instance = registry.get(id)
+  if (!instance) return null
+
+  const { inputHistory } = instance
+  console.log('[redo] undoStack:', JSON.stringify(inputHistory.undoStack))
+  console.log('[redo] redoStack:', JSON.stringify(inputHistory.redoStack))
+  console.log('[redo] currentLine:', JSON.stringify(inputHistory.currentLine))
+
+  if (inputHistory.redoStack.length === 0) {
+    console.log('[redo] redoStack is empty, returning null')
+    return null
+  }
+
+  // Undo/Redo操作中フラグを設定（エコーバックによる履歴汚染を防ぐ）
+  undoRedoInProgress.set(id, true)
+  console.log('[redo] set undoRedoInProgress = true')
+
+  // 現在の状態をundoスタックに保存
+  inputHistory.undoStack.push(inputHistory.currentLine)
+
+  // redoスタックから復元
+  const nextState = inputHistory.redoStack.pop()!
+  inputHistory.currentLine = nextState
+
+  // 送信するテキストを追跡（エコーバックによる重複記録を防ぐ）
+  pendingSentText.set(id, nextState)
+  console.log('[redo] set pendingSentText:', JSON.stringify(nextState))
+
+  console.log('[redo] returning newText:', JSON.stringify(nextState))
+  console.log('[redo] undoStack after:', JSON.stringify(inputHistory.undoStack))
+  console.log('[redo] redoStack after:', JSON.stringify(inputHistory.redoStack))
+
+  // 既存のタイマーをキャンセル（連続Redo操作時に古いタイマーが先にフラグをリセットするのを防ぐ）
+  const existingTimer = undoRedoTimers.get(id)
+  if (existingTimer) {
+    clearTimeout(existingTimer)
+    console.log('[redo] cancelled existing timer')
+  }
+
+  // 一定時間後にフラグをリセット（PTYからのエコーバックが処理された後）
+  // パッケージ版ではPTYエコーバックが遅い可能性があるため、300msに延長
+  const timer = setTimeout(() => {
+    undoRedoInProgress.set(id, false)
+    undoRedoTimers.delete(id)
+    console.log('[redo] set undoRedoInProgress = false (after 300ms)')
+  }, 300)
+  undoRedoTimers.set(id, timer)
+
+  return {
+    clearCmd: '\x15',
+    newText: nextState
+  }
+}
+
+/**
+ * 行全体をクリア（Cmd+Backspace用）
+ * 履歴に記録してからPTYにクリアコマンドを返す
+ */
+export function clearLine(id: string): { moveToEnd: string; clearCmd: string } | null {
+  const instance = registry.get(id)
+  if (!instance) return null
+
+  const { inputHistory } = instance
+  console.log('[clearLine] currentLine:', JSON.stringify(inputHistory.currentLine))
+  console.log('[clearLine] undoStack before:', JSON.stringify(inputHistory.undoStack))
+
+  // 現在の行が空でない場合のみ履歴に記録
+  if (inputHistory.currentLine !== '') {
+    // redoスタックをクリア（新しい操作が行われたため）
+    inputHistory.redoStack = []
+    // 現在の状態をundoスタックに保存
+    inputHistory.undoStack.push(inputHistory.currentLine)
+    // スタックサイズを制限
+    if (inputHistory.undoStack.length > MAX_UNDO_STACK_SIZE) {
+      inputHistory.undoStack.shift()
+    }
+    // 行内容を空にする
+    inputHistory.currentLine = ''
+  }
+
+  console.log('[clearLine] undoStack after:', JSON.stringify(inputHistory.undoStack))
+  console.log('[clearLine] currentLine after:', JSON.stringify(inputHistory.currentLine))
+
+  return {
+    moveToEnd: '\x05', // Ctrl+E: 行末へ
+    clearCmd: '\x15' // Ctrl+U: 行頭まで削除
+  }
+}
+
+/**
+ * 行確定時に履歴をリセット（Enter押下時）
+ * 注意: 新しいオブジェクトを作成すると、getOrCreate内のinputHistoryRefの参照が切れるため、
+ * 既存オブジェクトのプロパティをリセットする
+ */
+export function resetInputHistory(id: string): void {
+  const instance = registry.get(id)
+  if (!instance) return
+
+  console.log('[resetInputHistory] before reset:', JSON.stringify(instance.inputHistory))
+
+  // 新しいオブジェクトを作成せず、既存オブジェクトの値をリセット
+  // これにより inputHistoryRef の参照が切れない
+  instance.inputHistory.undoStack = []
+  instance.inputHistory.redoStack = []
+  instance.inputHistory.currentLine = ''
+
+  console.log('[resetInputHistory] after reset:', JSON.stringify(instance.inputHistory))
 }

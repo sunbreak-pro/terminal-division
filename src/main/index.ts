@@ -23,6 +23,8 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    // デバッグ用: DevToolsを自動で開く（パッケージ版でもログを確認するため）
+    mainWindow.webContents.openDevTools()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
