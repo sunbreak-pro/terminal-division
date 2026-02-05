@@ -13,8 +13,8 @@
     "outDir": "./out/renderer",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/src/*"]
+      "@/*": ["src/renderer/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/preload/index.d.ts"]
+  "include": ["src/renderer/**/*", "src/preload/index.d.ts"]
 }

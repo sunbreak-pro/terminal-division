@@ -1,35 +1,66 @@
 # Claude Configuration
 
-このディレクトリは Claude Code との連携に関する設定やドキュメントを管理します。
+This directory manages configuration and documentation for Claude Code integration.
 
-## ディレクトリ構造
+## Directory Structure
 
-- `settings.local.json` - ローカル設定ファイル
-- `bug/` - バグ追跡関連
-- `plans/` - 機能計画・アイデア管理
-- `solution/` - 解決済みバグの解決策記録
+```
+.claude/
+├── CLAUDE.md           # This file - project instructions
+├── TODO.md             # Structured task management
+├── settings.local.json # Local settings (git-ignored)
+├── specs/              # Design specifications
+│   ├── README.md
+│   └── templates/      # Spec templates
+├── bugs/               # Bug tracking
+│   └── *.md           # Active bug reports
+└── solutions/          # Resolved bug documentation
+    └── *-fix.md       # Solution records
+```
 
-## plans/ ディレクトリについて
+## specs/ Directory
 
-`plans/` ディレクトリは、今後追加したい機能やアイデアを整理・記録するための場所です。
+Contains design specifications and architectural decisions.
 
-### 用途
-- 新機能の企画書・設計メモ
-- UI/UX 改善案
-- リファクタリング計画
-- 技術的な検討事項
+### Purpose
+- Feature specifications
+- Design decisions (ADR format)
+- Technical requirements
 
-### ファイル命名規則
-- `{カテゴリ}_plan.md` 形式を推奨（例: `UI_plan.md`, `feature_plan.md`）
+### Naming Convention
+- `{feature-name}-spec.md` for feature specs
+- `{topic}-decision.md` for design decisions
 
-## solution/ ディレクトリについて
+## bugs/ Directory
 
-`solution/` ディレクトリは、解決済みのバグや問題の解決策を記録するための場所です。
+Tracks active bugs and issues.
 
-### 用途
-- バグ修正の詳細な記録
-- 解決策の技術的な説明
-- 同様の問題が発生した際の参照用ドキュメント
+### Purpose
+- Document bug symptoms
+- Track reproduction steps
+- Record investigation notes
 
-### ファイル命名規則
-- `{問題の概要}-fix.md` 形式を推奨（例: `packaged-app-japanese-garbled-fix.md`）
+### Naming Convention
+- `{descriptive-name}.md`
+
+## solutions/ Directory
+
+Records solutions for resolved bugs.
+
+### Purpose
+- Document fix details
+- Explain root cause
+- Serve as reference for similar issues
+
+### Naming Convention
+- `{problem-description}-fix.md`
+
+## TODO.md
+
+Centralized task management with priority levels:
+- P0: Critical (blocking issues)
+- P1: High (important features/fixes)
+- P2: Medium (normal priority)
+- P3: Low (nice to have)
+
+Categories: feature | bugfix | refactor | docs | test | chore
