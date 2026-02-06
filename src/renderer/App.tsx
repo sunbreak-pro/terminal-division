@@ -8,7 +8,7 @@ import {
   useNodes,
   useTerminalActions,
 } from "./stores/terminalStore";
-import { theme } from "./styles/theme";
+import { useCurrentTheme, useThemeConfig } from "./stores/themeStore";
 import { getAllTerminalIds } from "./utils/layoutUtils";
 import * as terminalManager from "./services/terminalManager";
 
@@ -19,6 +19,10 @@ const App: React.FC = () => {
   const nodes = useNodes();
   const { setActiveTerminal, splitTerminal, closeTerminal } =
     useTerminalActions();
+
+  const currentTheme = useCurrentTheme();
+  const themeConfig = useThemeConfig();
+  const theme = { colors: currentTheme.colors, ...themeConfig };
 
   const canSplitNow = canSplit();
 

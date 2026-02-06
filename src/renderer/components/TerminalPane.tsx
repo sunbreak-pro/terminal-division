@@ -4,8 +4,9 @@ import {
   useActiveTerminalId,
   useTerminalActions,
 } from "../stores/terminalStore";
-import { theme, xtermTheme } from "../styles/theme";
+import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import * as terminalManager from "../services/terminalManager";
+import { rafDebounceWithDelay } from "../utils/rafDebounce";
 
 interface TerminalPaneProps {
   id: string;
@@ -17,6 +18,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(({ id }) => {
   const activeTerminalId = useActiveTerminalId();
   const { setActiveTerminal, closeTerminal } = useTerminalActions();
   const isActive = activeTerminalId === id;
+
+  const currentTheme = useCurrentTheme();
+  const themeConfig = useThemeConfig();
+  const theme = { colors: currentTheme.colors, ...themeConfig };
+  const xtermTheme = currentTheme.xterm;
 
   // Focus terminal when it becomes active
   useEffect(() => {
@@ -90,19 +96,20 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(({ id }) => {
       }, 0);
     }
 
-    // 4. Set up ResizeObserver with debounce
-    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+    // 4. Set up ResizeObserver with rAF-based debounce
+    // 50ms遅延 + requestAnimationFrameで滑らかなリサイズを実現
+    const { handler: debouncedFit, cancel: cancelFit } = rafDebounceWithDelay(
+      handleFit,
+      50
+    );
     const resizeObserver = new ResizeObserver(() => {
-      if (resizeTimeout) clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => {
-        handleFit();
-      }, 100);
+      debouncedFit();
     });
     resizeObserver.observe(containerRef.current);
 
     // Cleanup: only disconnect observer, do NOT dispose terminal or kill PTY
     return () => {
-      if (resizeTimeout) clearTimeout(resizeTimeout);
+      cancelFit();
       resizeObserver.disconnect();
       terminalManager.detachFromContainer(id);
     };
@@ -127,7 +134,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(({ id }) => {
         ? `3px solid ${theme.colors.activeTerminal}`
         : `2px solid ${theme.colors.border}`,
     }),
-    [isActive],
+    [isActive, theme.colors.border, theme.colors.activeTerminal, theme.borderRadius],
   );
 
   return (

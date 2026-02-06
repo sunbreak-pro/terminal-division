@@ -1,11 +1,17 @@
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState, useEffect } from 'react'
 import {
   useActiveTerminalId,
   useTerminalCount,
   useCanSplit,
   useTerminalActions
 } from '../stores/terminalStore'
-import { theme } from '../styles/theme'
+import {
+  useCurrentTheme,
+  useAvailableThemes,
+  useSetTheme,
+  useThemeConfig
+} from '../stores/themeStore'
+import * as terminalManager from '../services/terminalManager'
 import ShortcutsModal from './ShortcutsModal'
 
 const Header: React.FC = React.memo(() => {
@@ -14,6 +20,25 @@ const Header: React.FC = React.memo(() => {
   const canSplit = useCanSplit()
   const { splitTerminal, closeTerminal } = useTerminalActions()
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false)
+
+  // テーマ関連
+  const currentTheme = useCurrentTheme()
+  const availableThemes = useAvailableThemes()
+  const setTheme = useSetTheme()
+  const themeConfig = useThemeConfig()
+  const theme = { colors: currentTheme.colors, ...themeConfig }
+
+  // テーマ変更時に全ターミナルを更新
+  useEffect(() => {
+    terminalManager.updateAllThemes(currentTheme.xterm)
+  }, [currentTheme])
+
+  const handleThemeChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      setTheme(e.target.value)
+    },
+    [setTheme]
+  )
 
   const canSplitNow = canSplit()
   const canClose = terminalCount > 1
@@ -263,6 +288,35 @@ const Header: React.FC = React.memo(() => {
           </svg>
           ショートカット
         </button>
+
+        <select
+          value={currentTheme.id}
+          onChange={handleThemeChange}
+          title="テーマ選択"
+          style={{
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+            backgroundColor: 'transparent',
+            color: theme.colors.text,
+            border: `1px solid ${theme.colors.border}`,
+            borderRadius: theme.borderRadius,
+            cursor: 'pointer',
+            fontSize: '12px',
+            outline: 'none'
+          }}
+        >
+          {availableThemes.map((t) => (
+            <option
+              key={t.id}
+              value={t.id}
+              style={{
+                backgroundColor: theme.colors.headerBackground,
+                color: theme.colors.text
+              }}
+            >
+              {t.name}
+            </option>
+          ))}
+        </select>
 
         <button
           onClick={handleClose}

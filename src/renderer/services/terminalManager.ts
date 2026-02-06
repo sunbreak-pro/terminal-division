@@ -290,6 +290,8 @@ export function destroy(id: string): void {
   instance.terminal.dispose()
 
   registry.delete(id)
+  // サイズキャッシュのクリーンアップ
+  lastSizes.delete(id)
   // Undo/Redo関連のクリーンアップ
   undoRedoInProgress.delete(id)
   // タイマーをキャンセルしてクリア
@@ -356,8 +358,12 @@ export function resize(id: string, cols: number, rows: number): void {
   instance.terminal.resize(cols, rows)
 }
 
+// 前回のサイズを保存（不要なIPCを避けるため）
+const lastSizes = new Map<string, { cols: number; rows: number }>()
+
 /**
  * Fit terminal to its container
+ * @returns サイズが変更された場合は新しいサイズ、変更がない場合はnull
  */
 export function fit(id: string): { cols: number; rows: number } | null {
   const instance = registry.get(id)
@@ -365,10 +371,19 @@ export function fit(id: string): { cols: number; rows: number } | null {
 
   try {
     instance.fitAddon.fit()
-    return {
+    const newSize = {
       cols: instance.terminal.cols,
       rows: instance.terminal.rows
     }
+
+    // サイズが変わっていない場合はnullを返す（IPCを節約）
+    const lastSize = lastSizes.get(id)
+    if (lastSize && lastSize.cols === newSize.cols && lastSize.rows === newSize.rows) {
+      return null
+    }
+
+    lastSizes.set(id, newSize)
+    return newSize
   } catch {
     return null
   }
@@ -382,6 +397,25 @@ export function focus(id: string): void {
   if (!instance) return
 
   instance.terminal.focus()
+}
+
+/**
+ * ターミナルのテーマを更新
+ */
+export function updateTheme(id: string, xtermTheme: Record<string, string>): void {
+  const instance = registry.get(id)
+  if (!instance) return
+
+  instance.terminal.options.theme = xtermTheme
+}
+
+/**
+ * 全ターミナルのテーマを一括更新
+ */
+export function updateAllThemes(xtermTheme: Record<string, string>): void {
+  for (const [id] of registry) {
+    updateTheme(id, xtermTheme)
+  }
 }
 
 /**

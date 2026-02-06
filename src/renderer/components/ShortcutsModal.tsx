@@ -1,5 +1,5 @@
 import React, { useEffect, useCallback } from 'react'
-import { theme } from '../styles/theme'
+import { useCurrentTheme, useThemeConfig } from '../stores/themeStore'
 
 interface ShortcutsModalProps {
   isOpen: boolean
@@ -56,6 +56,10 @@ const shortcutCategories: ShortcutCategory[] = [
 ]
 
 const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose }) => {
+  const currentTheme = useCurrentTheme()
+  const themeConfig = useThemeConfig()
+  const theme = { colors: currentTheme.colors, ...themeConfig }
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

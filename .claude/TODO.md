@@ -20,7 +20,7 @@
 (No medium priority tasks)
 
 ### P3 - Low
-(No low priority tasks)
+- [ ] [test] Add component tests (Header, TerminalPane, SplitContainer)
 
 ---
 
@@ -28,6 +28,13 @@
 
 - [x] [refactor] Restructure .claude/ directory (2025-02-06)
 - [x] [refactor] Flatten src/renderer/src/ nesting (2025-02-06)
+- [x] [test] Set up Vitest test framework (2025-02-06)
+- [x] [test] Add unit tests for terminalStore (2025-02-06)
+- [x] [test] Add unit tests for terminalManager (2025-02-06)
+- [x] [test] Add unit tests for pty-manager (2025-02-06)
+- [x] [test] Add unit tests for themeStore (2025-02-06)
+- [x] [feature] Add custom theme support (Dark, Light, Dracula, One Dark) (2025-02-06)
+- [x] [perf] Improve terminal resize performance (rAF-based debounce, size caching) (2025-02-06)
 
 ---
 
@@ -35,6 +42,4 @@
 
 Ideas and tasks without assigned priority:
 
-- [ ] Add comprehensive test suite
-- [ ] Improve terminal resize performance
-- [ ] Add custom theme support
+(No backlog items)

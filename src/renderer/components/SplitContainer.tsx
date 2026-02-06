@@ -1,37 +1,38 @@
 import React, { useCallback, useMemo } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { useRootId, useNodes } from "../stores/terminalStore";
+import { useThemeConfig } from "../stores/themeStore";
 import type {
   SplitNode,
   TerminalPane as TerminalPaneType,
 } from "../types/layout";
 import TerminalPane from "./TerminalPane";
-import { theme } from "../styles/theme";
 
 const SplitContainer: React.FC = React.memo(() => {
   const rootId = useRootId();
   const nodes = useNodes();
+  const themeConfig = useThemeConfig();
 
   const separatorStyleHorizontal = useMemo(
     () => ({
-      width: theme.spacing.xs,
+      width: themeConfig.spacing.xs,
       cursor: "col-resize",
       touchAction: "none" as const,
       userSelect: "none" as const,
       transition: "background-color 0.15s ease",
     }),
-    [],
+    [themeConfig.spacing.xs],
   );
 
   const separatorStyleVertical = useMemo(
     () => ({
-      height: theme.spacing.xs,
+      height: themeConfig.spacing.xs,
       cursor: "row-resize",
       touchAction: "none" as const,
       userSelect: "none" as const,
       transition: "background-color 0.15s ease",
     }),
-    [],
+    [themeConfig.spacing.xs],
   );
 
   const renderNode = useCallback(
