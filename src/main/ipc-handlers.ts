@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, app, dialog } from 'electron'
+import { ipcMain, BrowserWindow, app, dialog, shell } from 'electron'
 import { ptyManager } from './pty-manager'
 
 // IPCハンドラー登録（アプリ起動時に一度だけ呼ぶ）
@@ -32,6 +32,15 @@ export function setupIpcHandlers(): void {
     }
 
     return result.filePaths[0]
+  })
+
+  // 外部URLを開く
+  ipcMain.handle('shell:openExternal', async (_, url: string) => {
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return false
+    }
+    await shell.openExternal(url)
+    return true
   })
 
   app.on('before-quit', () => {

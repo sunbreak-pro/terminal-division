@@ -1,66 +1,87 @@
-# Claude Configuration
+# CLAUDE.md
 
-This directory manages configuration and documentation for Claude Code integration.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Directory Structure
+## Project Overview
 
-```
-.claude/
-├── CLAUDE.md           # This file - project instructions
-├── TODO.md             # Structured task management
-├── settings.local.json # Local settings (git-ignored)
-├── specs/              # Design specifications
-│   ├── README.md
-│   └── templates/      # Spec templates
-├── bugs/               # Bug tracking
-│   └── *.md           # Active bug reports
-└── solutions/          # Resolved bug documentation
-    └── *-fix.md       # Solution records
+Terminal Division is a macOS terminal splitting application built with Electron + React + TypeScript. It provides iTerm2-style pane splitting with xterm.js terminals backed by node-pty.
+
+## Development Commands
+
+```bash
+npm run dev        # Start development mode (electron-vite dev, hot reload)
+npm run build      # Production build (electron-vite build)
+npm run preview    # Preview production build
 ```
 
-## specs/ Directory
+No test runner is configured.
 
-Contains design specifications and architectural decisions.
+## Architecture
 
-### Purpose
-- Feature specifications
-- Design decisions (ADR format)
-- Technical requirements
+### Three-Process Model (Electron)
 
-### Naming Convention
-- `{feature-name}-spec.md` for feature specs
-- `{topic}-decision.md` for design decisions
+- **Main process** (`src/main/`): Window lifecycle, PTY spawning, IPC handlers
+- **Preload** (`src/preload/`): Context bridge exposing `window.api.pty.*` to renderer
+- **Renderer** (`src/renderer/`): React UI with xterm.js terminals
 
-## bugs/ Directory
+### Layout System
 
-Tracks active bugs and issues.
+The layout is a **binary tree** stored in a Zustand store (`terminalStore.ts`):
+- `TerminalPane` = leaf node (a terminal)
+- `SplitNode` = internal node with `direction` (horizontal/vertical) and two children
+- All nodes stored in a flat `Map<string, LayoutNode>` with `parentId` references
+- `rootId` tracks the tree root; max 6 terminals (`MAX_TERMINALS`)
+- `react-resizable-panels` handles the visual split rendering in `SplitContainer.tsx`
 
-### Purpose
-- Document bug symptoms
-- Track reproduction steps
-- Record investigation notes
+### Terminal Lifecycle
 
-### Naming Convention
-- `{descriptive-name}.md`
+1. `terminalStore.splitTerminal()` creates the tree node
+2. `TerminalPane.tsx` mounts → calls `terminalManager.getOrCreate()` to create xterm.js instance + register listeners (once per terminal, independent of React lifecycle)
+3. `terminalManager.attachToContainer()` opens xterm in the DOM
+4. IPC `pty:create` spawns a `node-pty` process in main
+5. Data flows: xterm.onData → IPC `pty:write` → node-pty → IPC `pty:data` → xterm.write
 
-## solutions/ Directory
+### Undo/Redo System (`terminalManager.ts`)
 
-Records solutions for resolved bugs.
+Per-terminal input history with `undoStack`/`redoStack`/`currentLine`. Key complexity:
+- PTY echo-back prevention: `undoRedoInProgress` flag + `pendingSentText` tracking prevent the PTY's echo from being recorded as new input
+- 300ms debounced flag reset for packaged app latency
+- Timer cancellation on consecutive undo/redo operations
+- History resets on Enter (line commit)
 
-### Purpose
-- Document fix details
-- Explain root cause
-- Serve as reference for similar issues
+### IME Composition Handling (`terminalManager.ts`)
 
-### Naming Convention
-- `{problem-description}-fix.md`
+Critical for Japanese/CJK input:
+- `compositionstart`/`compositionend` events on xterm's textarea
+- Non-ASCII characters during composition are handled only via `compositionend` to prevent double-send
+- `lastCompositionData` deduplication against xterm.js's `setTimeout(0)` dispatch
 
-## TODO.md
+### Keyboard Shortcuts (`App.tsx`)
 
-Centralized task management with priority levels:
-- P0: Critical (blocking issues)
-- P1: High (important features/fixes)
-- P2: Medium (normal priority)
-- P3: Low (nice to have)
+Registered on `window` in capture phase (before xterm processes keys). Shortcuts send control sequences directly to PTY via `window.api.pty.write()`:
+- `Cmd+D` / `Cmd+Shift+D`: Split vertical/horizontal
+- `Cmd+W`: Close pane
+- `Cmd+Z` / `Cmd+Shift+Z`: Undo/redo input
+- `Cmd+Backspace`: Clear line (with history)
+- `Cmd+Option+Arrow`: Focus navigation between panes
+- `Option+Arrow`: Word navigation (`ESC+b`/`ESC+f`)
 
-Categories: feature | bugfix | refactor | docs | test | chore
+### PTY Manager (`pty-manager.ts`)
+
+- Spawns shell from `$SHELL` (fallback `/bin/zsh`) with Japanese locale (`LANG=ja_JP.UTF-8`)
+- Filters `npm_*` environment variables for nvm compatibility
+- Large pastes (>512 bytes) use chunked writing with bracket paste mode
+
+## Key Conventions
+
+- Code comments are in Japanese
+- Path alias: `@` → `src/renderer/` (configured in `electron.vite.config.ts`)
+- `node-pty` is marked as external in Vite config (native module)
+- `terminalManager` is a module-scoped registry (not React state) to survive re-renders
+
+## Task Tracking
+
+- `.claude/TODO.md`: Priority-based task list (P0-P3)
+- `.claude/bugs/`: Active bug reports
+- `.claude/solutions/`: Documented fixes for reference
+- `.claude/specs/`: Feature specs and design decisions

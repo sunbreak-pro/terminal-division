@@ -1,5 +1,6 @@
 import { Terminal, ITerminalOptions } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 
 // 入力履歴の状態管理
 interface InputHistoryState {
@@ -57,6 +58,18 @@ export function getOrCreate(
   const terminal = new Terminal(options)
   const fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
+
+  // WebLinksAddon: Cmd+クリック（Mac）/ Ctrl+クリック（Win/Linux）で外部ブラウザを開く
+  const webLinksAddon = new WebLinksAddon((event, url) => {
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+    const modifierPressed = isMac ? event.metaKey : event.ctrlKey
+
+    if (modifierPressed) {
+      event.preventDefault()
+      window.api.shell.openExternal(url)
+    }
+  })
+  terminal.loadAddon(webLinksAddon)
 
   // IME composition state tracking
   // When composing (e.g., typing Japanese), macOS IME may split long compositions
