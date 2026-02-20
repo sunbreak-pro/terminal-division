@@ -8,7 +8,11 @@ import {
   useNodes,
   useTerminalActions,
 } from "./stores/terminalStore";
-import { useCurrentTheme, useThemeConfig } from "./stores/themeStore";
+import {
+  useCurrentTheme,
+  useThemeConfig,
+  setupThemeSync,
+} from "./stores/themeStore";
 import { getAllTerminalIds } from "./utils/layoutUtils";
 import * as terminalManager from "./services/terminalManager";
 
@@ -119,12 +123,8 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          // terminalManagerを経由して履歴に記録してからクリア
-          const result = terminalManager.clearLine(activeTerminalId);
-          if (result) {
-            window.api.pty.write(activeTerminalId, result.moveToEnd);
-            window.api.pty.write(activeTerminalId, result.clearCmd);
-          }
+          window.api.pty.write(activeTerminalId, "\x05"); // Ctrl+E: 行末へ
+          window.api.pty.write(activeTerminalId, "\x15"); // Ctrl+U: 行頭まで削除
         }
         return;
       }
@@ -138,39 +138,6 @@ const App: React.FC = () => {
         }
         return;
       }
-      // Cmd + Z: Undo（アプリ側で管理する履歴から復元）
-      if (isMeta && !isShift && !isOption && e.key === "z") {
-        e.preventDefault();
-        e.stopPropagation();
-        if (activeTerminalId) {
-          const result = terminalManager.undo(activeTerminalId);
-          if (result) {
-            // 行をクリアして前の状態を再入力
-            window.api.pty.write(activeTerminalId, result.clearCmd);
-            if (result.newText) {
-              window.api.pty.write(activeTerminalId, result.newText);
-            }
-          }
-        }
-        return;
-      }
-
-      // Cmd + Shift + Z: Redo（アプリ側で管理する履歴から復元）
-      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        e.stopPropagation();
-        if (activeTerminalId) {
-          const result = terminalManager.redo(activeTerminalId);
-          if (result) {
-            window.api.pty.write(activeTerminalId, result.clearCmd);
-            if (result.newText) {
-              window.api.pty.write(activeTerminalId, result.newText);
-            }
-          }
-        }
-        return;
-      }
-
       // Cmd + ←: 行の先頭へ
       if (isMeta && !isShift && !isOption && e.key === "ArrowLeft") {
         e.preventDefault();
@@ -275,6 +242,11 @@ const App: React.FC = () => {
     terminalCount,
     moveFocus,
   ]);
+
+  // 他のウィンドウからのテーマ同期を受信
+  useEffect(() => {
+    return setupThemeSync();
+  }, []);
 
   return (
     <div

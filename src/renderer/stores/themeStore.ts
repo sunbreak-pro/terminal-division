@@ -56,6 +56,9 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
 
     storeThemeId(themeId)
     set({ currentThemeId: themeId })
+
+    // 他のウィンドウにテーマ変更を通知
+    window.api.theme.notifyChanged(themeId)
   }
 }))
 
@@ -71,3 +74,13 @@ export const useCurrentThemeId = (): string => useThemeStore((s) => s.currentThe
 export const useAvailableThemes = (): Theme[] => useThemeStore((s) => s.availableThemes)
 export const useSetTheme = (): ((themeId: string) => void) => useThemeStore((s) => s.setTheme)
 export const useThemeConfig = (): ThemeConfig => useThemeStore((s) => s.config)
+
+// 他のウィンドウからのテーマ同期を受信するリスナーを設定
+export function setupThemeSync(): () => void {
+  return window.api.theme.onSync((themeId: string) => {
+    if (themes[themeId]) {
+      storeThemeId(themeId)
+      useThemeStore.setState({ currentThemeId: themeId })
+    }
+  })
+}

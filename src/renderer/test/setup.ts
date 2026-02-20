@@ -16,13 +16,20 @@ const mockPtyApi = {
   write: vi.fn(),
   resize: vi.fn(),
   destroy: vi.fn(),
+  kill: vi.fn(),
   onData: vi.fn().mockReturnValue(() => {}),
   onExit: vi.fn().mockReturnValue(() => {})
 }
 
+// window.api.dialogモック
+const mockDialogApi = {
+  selectDirectory: vi.fn().mockResolvedValue(null)
+}
+
 Object.defineProperty(window, 'api', {
   value: {
-    pty: mockPtyApi
+    pty: mockPtyApi,
+    dialog: mockDialogApi
   },
   writable: true
 })

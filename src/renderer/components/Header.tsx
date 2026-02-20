@@ -1,168 +1,173 @@
-import React, { useCallback, useMemo, useState, useEffect } from 'react'
+import React, { useCallback, useMemo, useState, useEffect } from "react";
 import {
   useActiveTerminalId,
   useTerminalCount,
   useCanSplit,
-  useTerminalActions
-} from '../stores/terminalStore'
+  useTerminalActions,
+} from "../stores/terminalStore";
 import {
   useCurrentTheme,
   useAvailableThemes,
   useSetTheme,
-  useThemeConfig
-} from '../stores/themeStore'
-import * as terminalManager from '../services/terminalManager'
-import ShortcutsModal from './ShortcutsModal'
+  useThemeConfig,
+} from "../stores/themeStore";
+import * as terminalManager from "../services/terminalManager";
+import ShortcutsModal from "./ShortcutsModal";
 
 const Header: React.FC = React.memo(() => {
-  const activeTerminalId = useActiveTerminalId()
-  const terminalCount = useTerminalCount()
-  const canSplit = useCanSplit()
-  const { splitTerminal, closeTerminal } = useTerminalActions()
-  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false)
+  const activeTerminalId = useActiveTerminalId();
+  const terminalCount = useTerminalCount();
+  const canSplit = useCanSplit();
+  const { splitTerminal, closeTerminal } = useTerminalActions();
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
   // テーマ関連
-  const currentTheme = useCurrentTheme()
-  const availableThemes = useAvailableThemes()
-  const setTheme = useSetTheme()
-  const themeConfig = useThemeConfig()
-  const theme = { colors: currentTheme.colors, ...themeConfig }
+  const currentTheme = useCurrentTheme();
+  const availableThemes = useAvailableThemes();
+  const setTheme = useSetTheme();
+  const themeConfig = useThemeConfig();
+  const theme = { colors: currentTheme.colors, ...themeConfig };
 
   // テーマ変更時に全ターミナルを更新
   useEffect(() => {
-    terminalManager.updateAllThemes(currentTheme.xterm)
-  }, [currentTheme])
+    terminalManager.updateAllThemes(currentTheme.xterm);
+  }, [currentTheme]);
 
   const handleThemeChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      setTheme(e.target.value)
+      setTheme(e.target.value);
     },
-    [setTheme]
-  )
+    [setTheme],
+  );
 
-  const canSplitNow = canSplit()
-  const canClose = terminalCount > 1
+  const canSplitNow = canSplit();
+  const canClose = terminalCount > 1;
 
   const handleSplitVertical = useCallback((): void => {
     if (activeTerminalId && canSplitNow) {
-      splitTerminal(activeTerminalId, 'horizontal')
+      splitTerminal(activeTerminalId, "horizontal");
     }
-  }, [activeTerminalId, canSplitNow, splitTerminal])
+  }, [activeTerminalId, canSplitNow, splitTerminal]);
 
   const handleSplitHorizontal = useCallback((): void => {
     if (activeTerminalId && canSplitNow) {
-      splitTerminal(activeTerminalId, 'vertical')
+      splitTerminal(activeTerminalId, "vertical");
     }
-  }, [activeTerminalId, canSplitNow, splitTerminal])
+  }, [activeTerminalId, canSplitNow, splitTerminal]);
 
   const handleClose = useCallback((): void => {
     if (activeTerminalId && canClose) {
-      closeTerminal(activeTerminalId)
+      closeTerminal(activeTerminalId);
     }
-  }, [activeTerminalId, canClose, closeTerminal])
+  }, [activeTerminalId, canClose, closeTerminal]);
 
   const handleChangeDirectory = useCallback(async (): Promise<void> => {
-    if (!activeTerminalId) return
+    if (!activeTerminalId) return;
 
     try {
-      const selectedPath = await window.api.dialog.selectDirectory()
+      const selectedPath = await window.api.dialog.selectDirectory();
       if (selectedPath) {
-        const escapedPath = selectedPath.replace(/'/g, "'\\''")
-        window.api.pty.write(activeTerminalId, `cd '${escapedPath}'\n`)
+        const escapedPath = selectedPath.replace(/'/g, "'\\''");
+        window.api.pty.write(activeTerminalId, `cd '${escapedPath}'\n`);
       }
     } catch (error) {
-      console.error('Failed to change directory:', error)
+      console.error("Failed to change directory:", error);
     }
-  }, [activeTerminalId])
+  }, [activeTerminalId]);
 
   const buttonStyle = useMemo<React.CSSProperties>(
     () => ({
       padding: `${theme.spacing.xs} ${theme.spacing.md}`,
-      backgroundColor: 'transparent',
+      backgroundColor: "transparent",
       color: theme.colors.text,
       border: `1px solid ${theme.colors.border}`,
       borderRadius: theme.borderRadius,
-      cursor: 'pointer',
-      fontSize: '12px',
-      display: 'flex',
-      alignItems: 'center',
+      cursor: "pointer",
+      fontSize: "12px",
+      display: "flex",
+      alignItems: "center",
       gap: theme.spacing.xs,
-      transition: 'background-color 0.15s ease'
+      transition: "background-color 0.15s ease",
     }),
-    []
-  )
+    [],
+  );
 
   const disabledStyle = useMemo<React.CSSProperties>(
     () => ({
       ...buttonStyle,
       opacity: 0.5,
-      cursor: 'not-allowed'
+      cursor: "not-allowed",
     }),
-    [buttonStyle]
-  )
+    [buttonStyle],
+  );
 
   const closeButtonStyle = useMemo<React.CSSProperties>(
     () =>
-      canClose ? { ...buttonStyle, borderColor: theme.colors.danger } : disabledStyle,
-    [buttonStyle, disabledStyle, canClose]
-  )
+      canClose
+        ? { ...buttonStyle, borderColor: theme.colors.danger }
+        : disabledStyle,
+    [buttonStyle, disabledStyle, canClose],
+  );
 
   const handleSplitButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (canSplitNow) {
-        e.currentTarget.style.backgroundColor = theme.colors.buttonHover
+        e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
       }
     },
-    [canSplitNow]
-  )
+    [canSplitNow],
+  );
 
-  const handleButtonLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.backgroundColor = 'transparent'
-  }, [])
+  const handleButtonLeave = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.backgroundColor = "transparent";
+    },
+    [],
+  );
 
   const handleCloseButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (canClose) {
-        e.currentTarget.style.backgroundColor = theme.colors.danger
-        e.currentTarget.style.borderColor = theme.colors.danger
+        e.currentTarget.style.backgroundColor = theme.colors.danger;
+        e.currentTarget.style.borderColor = theme.colors.danger;
       }
     },
-    [canClose]
-  )
+    [canClose],
+  );
 
   const handleCloseButtonLeave = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.currentTarget.style.backgroundColor = 'transparent'
+      e.currentTarget.style.backgroundColor = "transparent";
       if (canClose) {
-        e.currentTarget.style.borderColor = theme.colors.danger
+        e.currentTarget.style.borderColor = theme.colors.danger;
       }
     },
-    [canClose]
-  )
+    [canClose],
+  );
 
   const handleDirectoryButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (activeTerminalId) {
-        e.currentTarget.style.backgroundColor = theme.colors.buttonHover
+        e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
       }
     },
-    [activeTerminalId]
-  )
+    [activeTerminalId],
+  );
 
   const handleOpenShortcuts = useCallback(() => {
-    setIsShortcutsModalOpen(true)
-  }, [])
+    setIsShortcutsModalOpen(true);
+  }, []);
 
   const handleCloseShortcuts = useCallback(() => {
-    setIsShortcutsModalOpen(false)
-  }, [])
+    setIsShortcutsModalOpen(false);
+  }, []);
 
   const handleShortcutsButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.currentTarget.style.backgroundColor = theme.colors.buttonHover
+      e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
     },
-    []
-  )
+    [],
+  );
 
   return (
     <header
@@ -171,18 +176,18 @@ const Header: React.FC = React.memo(() => {
         height: theme.headerHeight,
         backgroundColor: theme.colors.headerBackground,
         borderBottom: `1px solid ${theme.colors.border}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
         padding: `0 ${theme.spacing.lg}`,
-        paddingLeft: '80px'
+        paddingLeft: "80px",
       }}
     >
       <div
         style={{
           color: theme.colors.textSecondary,
-          fontSize: '13px',
-          fontWeight: 500
+          fontSize: "13px",
+          fontWeight: 500,
         }}
       >
         Terminal Division
@@ -191,8 +196,8 @@ const Header: React.FC = React.memo(() => {
       <div
         className="titlebar-no-drag"
         style={{
-          display: 'flex',
-          gap: theme.spacing.sm
+          display: "flex",
+          gap: theme.spacing.sm,
         }}
       >
         <button
@@ -295,13 +300,13 @@ const Header: React.FC = React.memo(() => {
           title="テーマ選択"
           style={{
             padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
-            backgroundColor: 'transparent',
+            backgroundColor: "transparent",
             color: theme.colors.text,
             border: `1px solid ${theme.colors.border}`,
             borderRadius: theme.borderRadius,
-            cursor: 'pointer',
-            fontSize: '12px',
-            outline: 'none'
+            cursor: "pointer",
+            fontSize: "12px",
+            outline: "none",
           }}
         >
           {availableThemes.map((t) => (
@@ -310,7 +315,7 @@ const Header: React.FC = React.memo(() => {
               value={t.id}
               style={{
                 backgroundColor: theme.colors.headerBackground,
-                color: theme.colors.text
+                color: theme.colors.text,
               }}
             >
               {t.name}
@@ -341,11 +346,14 @@ const Header: React.FC = React.memo(() => {
         </button>
       </div>
 
-      <ShortcutsModal isOpen={isShortcutsModalOpen} onClose={handleCloseShortcuts} />
+      <ShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={handleCloseShortcuts}
+      />
     </header>
-  )
-})
+  );
+});
 
-Header.displayName = 'Header'
+Header.displayName = "Header";
 
-export default Header
+export default Header;
