@@ -1,7 +1,17 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 
 // モック関数をvi.hoisted()で定義してホイスト問題を回避
-const { mockOnData, mockOnExit, mockWrite, mockResize, mockKill, mockSpawn, mockSend, mockIsDestroyed } = vi.hoisted(() => ({
+const {
+  mockOnData,
+  mockOnExit,
+  mockWrite,
+  mockResize,
+  mockKill,
+  mockSpawn,
+  mockSend,
+  mockIsDestroyed,
+  mockProcess,
+} = vi.hoisted(() => ({
   mockOnData: vi.fn(),
   mockOnExit: vi.fn(),
   mockWrite: vi.fn(),
@@ -9,228 +19,413 @@ const { mockOnData, mockOnExit, mockWrite, mockResize, mockKill, mockSpawn, mock
   mockKill: vi.fn(),
   mockSpawn: vi.fn(),
   mockSend: vi.fn(),
-  mockIsDestroyed: vi.fn().mockReturnValue(false)
-}))
+  mockIsDestroyed: vi.fn().mockReturnValue(false),
+  mockProcess: "zsh",
+}));
 
 // node-ptyモック
-vi.mock('node-pty', () => ({
+vi.mock("node-pty", () => ({
   spawn: mockSpawn.mockReturnValue({
     onData: mockOnData,
     onExit: mockOnExit,
     write: mockWrite,
     resize: mockResize,
-    kill: mockKill
-  })
-}))
+    kill: mockKill,
+    process: mockProcess,
+  }),
+}));
 
 // Electronモック
-vi.mock('electron', () => ({
-  BrowserWindow: vi.fn()
-}))
+vi.mock("electron", () => ({
+  BrowserWindow: vi.fn(),
+}));
 
 // osモック
-vi.mock('os', () => ({
-  homedir: vi.fn().mockReturnValue('/Users/test')
-}))
+vi.mock("os", () => ({
+  homedir: vi.fn().mockReturnValue("/Users/test"),
+}));
 
-// テスト対象をインポート
-import { ptyManager } from '../pty-manager'
+// shell-integrationモック
+vi.mock("../shell-integration", () => ({
+  getShellIntegrationEnv: vi.fn().mockReturnValue({}),
+  getShellArgs: vi.fn().mockReturnValue([]),
+  getMergedPath: vi.fn().mockReturnValue("/usr/bin:/usr/local/bin"),
+  cleanup: vi.fn(),
+}));
 
-describe('pty-manager', () => {
+// fsモック
+vi.mock("fs", () => ({
+  existsSync: vi.fn().mockReturnValue(true),
+}));
+
+import { ptyManager } from "../pty-manager";
+import { cleanup as cleanupShellIntegration } from "../shell-integration";
+
+// モックウィンドウの作成ヘルパー
+function createMockWindow(isDestroyed = false): {
+  webContents: { send: typeof mockSend };
+  isDestroyed: () => boolean;
+} {
+  return {
+    webContents: { send: mockSend },
+    isDestroyed: mockIsDestroyed.mockReturnValue(isDestroyed),
+  };
+}
+
+// 2つ目のウィンドウ用の別モック
+const mockSend2 = vi.fn();
+const mockIsDestroyed2 = vi.fn().mockReturnValue(false);
+
+function createMockWindow2(): {
+  webContents: { send: typeof mockSend2 };
+  isDestroyed: () => boolean;
+} {
+  return {
+    webContents: { send: mockSend2 },
+    isDestroyed: mockIsDestroyed2,
+  };
+}
+
+describe("PtyManager", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    // モックBrowserWindowを設定
-    const mockWindow = {
-      webContents: { send: mockSend },
-      isDestroyed: mockIsDestroyed
-    }
-    ptyManager.setMainWindow(mockWindow as unknown as Electron.BrowserWindow)
-  })
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    const mockWindow = createMockWindow();
+    ptyManager.registerWindow(
+      1,
+      mockWindow as unknown as Electron.BrowserWindow,
+    );
+  });
 
   afterEach(() => {
-    // 全PTYプロセスをクリーンアップ
-    ptyManager.killAll()
-  })
+    ptyManager.killAll();
+    vi.useRealTimers();
+  });
 
-  describe('createPty', () => {
-    it('should create a new PTY process', () => {
-      const result = ptyManager.createPty('test-pty-1')
+  describe("registerWindow / unregisterWindow", () => {
+    it("should allow PTY creation and data sending after registration", () => {
+      const result = ptyManager.createPty("reg-test", 1);
+      expect(result).toBe(true);
 
-      expect(result).toBe(true)
+      // onDataコールバック経由でデータ送信を確認
+      const onDataCallback = mockOnData.mock.calls[0][0];
+      onDataCallback("test output");
+
+      expect(mockSend).toHaveBeenCalledWith("pty:data", {
+        id: "reg-test",
+        data: "test output",
+      });
+    });
+
+    it("should not send to renderer after unregisterWindow", () => {
+      ptyManager.createPty("unreg-test", 1);
+      ptyManager.unregisterWindow(1);
+
+      mockSend.mockClear();
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("test");
+
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("createPty", () => {
+    it("should create a PTY with the specified windowId", () => {
+      const result = ptyManager.createPty("test-1", 1);
+
+      expect(result).toBe(true);
       expect(mockSpawn).toHaveBeenCalledWith(
-        expect.any(String), // shell
-        [],
+        expect.any(String),
+        expect.any(Array),
         expect.objectContaining({
-          encoding: 'utf8',
-          name: 'xterm-256color',
+          encoding: "utf8",
+          name: "xterm-256color",
           cols: 80,
           rows: 24,
-          cwd: '/Users/test'
-        })
-      )
-    })
+          cwd: "/Users/test",
+        }),
+      );
+    });
 
-    it('should return false for duplicate id', () => {
-      ptyManager.createPty('test-pty-2')
-      const result = ptyManager.createPty('test-pty-2')
+    it("should return false for duplicate id", () => {
+      ptyManager.createPty("dup-test", 1);
+      const result = ptyManager.createPty("dup-test", 1);
 
-      expect(result).toBe(false)
-    })
+      expect(result).toBe(false);
+    });
 
-    it('should set up onData listener', () => {
-      ptyManager.createPty('test-pty-3')
+    it("should send data to the correct windowId via onData", () => {
+      ptyManager.createPty("data-test", 1);
 
-      expect(mockOnData).toHaveBeenCalled()
+      const onDataCallback = mockOnData.mock.calls[0][0];
+      onDataCallback("test output");
 
-      // onDataコールバックをシミュレート
-      const onDataCallback = mockOnData.mock.calls[0][0]
-      onDataCallback('test output')
+      expect(mockSend).toHaveBeenCalledWith("pty:data", {
+        id: "data-test",
+        data: "test output",
+      });
+    });
 
-      expect(mockSend).toHaveBeenCalledWith('pty:data', {
-        id: 'test-pty-3',
-        data: 'test output'
-      })
-    })
+    it("should send exit to the correct windowId via onExit", () => {
+      ptyManager.createPty("exit-test", 1);
 
-    it('should set up onExit listener', () => {
-      ptyManager.createPty('test-pty-4')
+      const onExitCallback = mockOnExit.mock.calls[0][0];
+      onExitCallback({ exitCode: 0 });
 
-      expect(mockOnExit).toHaveBeenCalled()
+      expect(mockSend).toHaveBeenCalledWith("pty:exit", {
+        id: "exit-test",
+        exitCode: 0,
+      });
+    });
 
-      // onExitコールバックをシミュレート
-      const onExitCallback = mockOnExit.mock.calls[0][0]
-      onExitCallback({ exitCode: 0 })
+    it("should filter npm_ environment variables", () => {
+      process.env.npm_test_var = "should-be-filtered";
+      process.env.NORMAL_VAR = "should-exist";
 
-      expect(mockSend).toHaveBeenCalledWith('pty:exit', {
-        id: 'test-pty-4',
-        exitCode: 0
-      })
-    })
+      ptyManager.createPty("filter-test", 1);
 
-    it('should filter npm_ environment variables', () => {
-      // npm_config_prefix などがフィルタされることを確認
-      process.env.npm_test_var = 'should-be-filtered'
-      process.env.NORMAL_VAR = 'should-exist'
+      const spawnCall = mockSpawn.mock.calls[0];
+      const envArg = spawnCall[2].env;
 
-      ptyManager.createPty('test-pty-filter')
+      expect(envArg.npm_test_var).toBeUndefined();
+      expect(envArg.LANG).toBe("ja_JP.UTF-8");
 
-      const spawnCall = mockSpawn.mock.calls[0]
-      const envArg = spawnCall[2].env
+      delete process.env.npm_test_var;
+      delete process.env.NORMAL_VAR;
+    });
 
-      expect(envArg.npm_test_var).toBeUndefined()
-      expect(envArg.LANG).toBe('ja_JP.UTF-8')
+    it("should use initialCwd when specified", () => {
+      ptyManager.createPty("cwd-test", 1, "/custom/path");
 
-      delete process.env.npm_test_var
-      delete process.env.NORMAL_VAR
-    })
-  })
+      const spawnCall = mockSpawn.mock.calls[0];
+      expect(spawnCall[2].cwd).toBe("/custom/path");
+    });
 
-  describe('write', () => {
-    it('should write small data directly', () => {
-      ptyManager.createPty('test-write-1')
-      ptyManager.write('test-write-1', 'hello')
+    it("should send shellName to renderer", () => {
+      ptyManager.createPty("shell-test", 1);
 
-      expect(mockWrite).toHaveBeenCalledWith('hello')
-    })
+      expect(mockSend).toHaveBeenCalledWith("pty:shellName", {
+        id: "shell-test",
+        shellName: expect.any(String),
+      });
+    });
 
-    it('should do nothing for non-existent id', () => {
-      mockWrite.mockClear()
-      ptyManager.write('non-existent', 'data')
+    it("should set up processName polling interval", () => {
+      ptyManager.createPty("poll-test", 1);
 
-      // write should not be called
-      expect(mockWrite).not.toHaveBeenCalled()
-    })
+      // setIntervalが設定されていることをタイマーの存在で確認
+      // killするとclearIntervalが呼ばれるので、kill前後の挙動で検証
+      ptyManager.kill("poll-test");
+      // kill後に再作成できる = 正常にクリーンアップされた
+      const result = ptyManager.createPty("poll-test", 1);
+      expect(result).toBe(true);
+    });
+  });
 
-    it('should use chunked write for large data', async () => {
-      ptyManager.createPty('test-write-large')
+  describe("write", () => {
+    it("should write small data directly", () => {
+      ptyManager.createPty("write-small", 1);
+      ptyManager.write("write-small", "hello");
 
-      // 512バイト以上のデータ
-      const largeData = 'x'.repeat(600)
-      ptyManager.write('test-write-large', largeData)
+      expect(mockWrite).toHaveBeenCalledWith("hello");
+    });
+
+    it("should do nothing for non-existent id", () => {
+      mockWrite.mockClear();
+      ptyManager.write("non-existent", "data");
+
+      expect(mockWrite).not.toHaveBeenCalled();
+    });
+
+    it("should use chunked write with bracket paste for large data", () => {
+      ptyManager.createPty("write-large", 1);
+
+      const largeData = "x".repeat(600);
+      ptyManager.write("write-large", largeData);
 
       // ブラケットペースト開始が書き込まれる
-      expect(mockWrite).toHaveBeenCalledWith('\x1b[200~')
-    })
-  })
+      expect(mockWrite).toHaveBeenCalledWith("\x1b[200~");
+    });
+  });
 
-  describe('resize', () => {
-    it('should resize PTY', () => {
-      ptyManager.createPty('test-resize')
-      ptyManager.resize('test-resize', 120, 40)
+  describe("resize", () => {
+    it("should resize PTY", () => {
+      ptyManager.createPty("resize-test", 1);
+      ptyManager.resize("resize-test", 120, 40);
 
-      expect(mockResize).toHaveBeenCalledWith(120, 40)
-    })
+      expect(mockResize).toHaveBeenCalledWith(120, 40);
+    });
 
-    it('should do nothing for non-existent id', () => {
-      mockResize.mockClear()
-      ptyManager.resize('non-existent', 100, 30)
+    it("should do nothing for non-existent id", () => {
+      mockResize.mockClear();
+      ptyManager.resize("non-existent", 100, 30);
 
-      expect(mockResize).not.toHaveBeenCalled()
-    })
-  })
+      expect(mockResize).not.toHaveBeenCalled();
+    });
+  });
 
-  describe('kill', () => {
-    it('should kill PTY process', () => {
-      ptyManager.createPty('test-kill')
-      ptyManager.kill('test-kill')
+  describe("kill", () => {
+    it("should kill PTY process", () => {
+      ptyManager.createPty("kill-test", 1);
+      ptyManager.kill("kill-test");
 
-      expect(mockKill).toHaveBeenCalled()
-    })
+      expect(mockKill).toHaveBeenCalled();
+    });
 
-    it('should remove PTY from processes map', () => {
-      ptyManager.createPty('test-kill-2')
-      ptyManager.kill('test-kill-2')
+    it("should remove PTY from processes map", () => {
+      ptyManager.createPty("kill-reuse", 1);
+      ptyManager.kill("kill-reuse");
 
       // 同じIDで再作成できるはず
-      const result = ptyManager.createPty('test-kill-2')
-      expect(result).toBe(true)
-    })
+      const result = ptyManager.createPty("kill-reuse", 1);
+      expect(result).toBe(true);
+    });
 
-    it('should do nothing for non-existent id', () => {
-      mockKill.mockClear()
-      ptyManager.kill('non-existent')
+    it("should clear processNameInterval", () => {
+      ptyManager.createPty("kill-interval", 1);
+      // kill前のclearIntervalが呼ばれることを間接的に検証
+      ptyManager.kill("kill-interval");
 
-      expect(mockKill).not.toHaveBeenCalled()
-    })
-  })
+      // 再作成可能 = クリーンアップ成功
+      expect(ptyManager.createPty("kill-interval", 1)).toBe(true);
+    });
 
-  describe('killAll', () => {
-    it('should kill all PTY processes', () => {
-      ptyManager.createPty('test-all-1')
-      ptyManager.createPty('test-all-2')
-      ptyManager.createPty('test-all-3')
+    it("should do nothing for non-existent id", () => {
+      mockKill.mockClear();
+      ptyManager.kill("non-existent");
 
-      mockKill.mockClear()
-      ptyManager.killAll()
+      expect(mockKill).not.toHaveBeenCalled();
+    });
+  });
 
-      expect(mockKill).toHaveBeenCalledTimes(3)
-    })
-  })
+  describe("killAllForWindow", () => {
+    it("should kill only PTYs for the specified window", () => {
+      const mockWindow2 = createMockWindow2();
+      ptyManager.registerWindow(
+        2,
+        mockWindow2 as unknown as Electron.BrowserWindow,
+      );
 
-  describe('sendToRenderer', () => {
-    it('should not send if window is destroyed', () => {
-      mockIsDestroyed.mockReturnValue(true)
-      mockSend.mockClear()
-      ptyManager.createPty('test-destroyed')
+      ptyManager.createPty("win1-pty", 1);
+      ptyManager.createPty("win2-pty", 2);
 
-      // onDataコールバックをシミュレート
-      const onDataCallback = mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0]
-      onDataCallback('test')
+      mockKill.mockClear();
+      ptyManager.killAllForWindow(1);
 
-      // mockSendは呼ばれないはず
-      expect(mockSend).not.toHaveBeenCalled()
-      mockIsDestroyed.mockReturnValue(false)
-    })
+      // window 1のPTYだけがkillされる
+      expect(mockKill).toHaveBeenCalledTimes(1);
 
-    it('should not send if window is null', () => {
-      ptyManager.setMainWindow(null as unknown as Electron.BrowserWindow)
-      mockSend.mockClear()
-      ptyManager.createPty('test-null-window')
+      // window 2のPTYは生き残る（重複IDでの作成がfalseになるはず）
+      expect(ptyManager.createPty("win2-pty", 2)).toBe(false);
+      // window 1のPTYは再作成できる
+      expect(ptyManager.createPty("win1-pty", 1)).toBe(true);
 
-      const onDataCallback = mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0]
-      onDataCallback('test')
+      ptyManager.unregisterWindow(2);
+    });
+  });
 
-      expect(mockSend).not.toHaveBeenCalled()
-    })
-  })
-})
+  describe("killAll", () => {
+    it("should kill all PTY processes", () => {
+      ptyManager.createPty("all-1", 1);
+      ptyManager.createPty("all-2", 1);
+      ptyManager.createPty("all-3", 1);
+
+      mockKill.mockClear();
+      ptyManager.killAll();
+
+      expect(mockKill).toHaveBeenCalledTimes(3);
+    });
+
+    it("should call shellIntegration.cleanup", () => {
+      ptyManager.killAll();
+
+      expect(cleanupShellIntegration).toHaveBeenCalled();
+    });
+  });
+
+  describe("broadcastToAll", () => {
+    it("should send to all registered windows", () => {
+      const mockWindow2 = createMockWindow2();
+      ptyManager.registerWindow(
+        2,
+        mockWindow2 as unknown as Electron.BrowserWindow,
+      );
+
+      mockSend.mockClear();
+      mockSend2.mockClear();
+
+      ptyManager.broadcastToAll("theme:sync", "dark");
+
+      expect(mockSend).toHaveBeenCalledWith("theme:sync", "dark");
+      expect(mockSend2).toHaveBeenCalledWith("theme:sync", "dark");
+
+      ptyManager.unregisterWindow(2);
+    });
+
+    it("should exclude the specified windowId", () => {
+      const mockWindow2 = createMockWindow2();
+      ptyManager.registerWindow(
+        2,
+        mockWindow2 as unknown as Electron.BrowserWindow,
+      );
+
+      mockSend.mockClear();
+      mockSend2.mockClear();
+
+      ptyManager.broadcastToAll("theme:sync", "dark", 1);
+
+      // window 1は除外される
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(mockSend2).toHaveBeenCalledWith("theme:sync", "dark");
+
+      ptyManager.unregisterWindow(2);
+    });
+
+    it("should not send to destroyed windows", () => {
+      mockIsDestroyed.mockReturnValue(true);
+      mockSend.mockClear();
+
+      ptyManager.broadcastToAll("theme:sync", "dark");
+
+      expect(mockSend).not.toHaveBeenCalled();
+      mockIsDestroyed.mockReturnValue(false);
+    });
+  });
+
+  describe("sendToRenderer (via onData)", () => {
+    it("should not send if window is destroyed", () => {
+      ptyManager.createPty("destroyed-test", 1);
+
+      mockIsDestroyed.mockReturnValue(true);
+      mockSend.mockClear();
+
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("test");
+
+      expect(mockSend).not.toHaveBeenCalled();
+      mockIsDestroyed.mockReturnValue(false);
+    });
+
+    it("should not send if window is not registered", () => {
+      ptyManager.createPty("unreg-send", 1);
+      ptyManager.unregisterWindow(1);
+
+      mockSend.mockClear();
+
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("test");
+
+      expect(mockSend).not.toHaveBeenCalled();
+
+      // 再登録してクリーンアップできるように
+      const mockWindow = createMockWindow();
+      ptyManager.registerWindow(
+        1,
+        mockWindow as unknown as Electron.BrowserWindow,
+      );
+    });
+  });
+});

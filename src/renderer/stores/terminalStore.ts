@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import * as terminalManager from "../services/terminalManager";
+import { isTerminalPane } from "../utils/layoutUtils";
 import type {
   SplitDirection,
   TerminalPane,
@@ -12,10 +13,6 @@ export type { SplitDirection, TerminalPane, SplitNode, LayoutNode };
 
 const MAX_TERMINALS = 6;
 
-function isTerminalPane(node: LayoutNode): node is TerminalPane {
-  return !("type" in node && node.type === "split");
-}
-
 export interface TerminalStore {
   nodes: Map<string, LayoutNode>;
   rootId: string;
@@ -25,7 +22,6 @@ export interface TerminalStore {
   setActiveTerminal: (id: string | null) => void;
   splitTerminal: (terminalId: string, direction: SplitDirection) => boolean;
   closeTerminal: (terminalId: string) => void;
-  getNode: (id: string) => LayoutNode | undefined;
   canSplit: () => boolean;
 }
 
@@ -175,8 +171,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       });
     }
   },
-
-  getNode: (id) => get().nodes.get(id),
 }));
 
 // Selector hooks (prevent unnecessary re-renders)
@@ -193,13 +187,12 @@ export const useCanSplit = (): (() => boolean) =>
 // Action selectors (stable function references with shallow comparison)
 export const useTerminalActions = (): Pick<
   TerminalStore,
-  "setActiveTerminal" | "splitTerminal" | "closeTerminal" | "getNode"
+  "setActiveTerminal" | "splitTerminal" | "closeTerminal"
 > =>
   useTerminalStore(
     useShallow((s) => ({
       setActiveTerminal: s.setActiveTerminal,
       splitTerminal: s.splitTerminal,
       closeTerminal: s.closeTerminal,
-      getNode: s.getNode,
     })),
   );

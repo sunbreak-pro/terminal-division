@@ -156,7 +156,9 @@ class PtyManager {
     }
 
     // 大きなデータはチャンク分割して送信
-    this.writeChunked(proc.pty, data);
+    this.writeChunked(proc.pty, data).catch((error) => {
+      console.error(`Failed to write chunked data to PTY ${id}:`, error);
+    });
   }
 
   /**

@@ -162,18 +162,34 @@ export function getShellArgs(shell: string): string[] {
   return [];
 }
 
-// --- VSCode方式: ログインシェルからPATHを解決 ---
+// --- 多層フォールバックPATH解決 ---
 
 // 解決済みPATHのキャッシュ
 let resolvedPath: string | null = null;
 
 /**
- * アプリ起動時にログインシェルを一度だけ起動してPATHを取得する
- * TERM=dumb、npm関連/ZDOTDIR除外のクリーン環境で実行
+ * Finder起動時に未設定の可能性がある必須環境変数を保証する
  */
-export function resolveLoginShellPath(): void {
-  const shell = process.env.SHELL || "/bin/zsh";
+function ensureEssentialEnvVars(): void {
+  if (!process.env.HOME) process.env.HOME = os.homedir();
+  if (!process.env.USER) process.env.USER = os.userInfo().username;
+  if (!process.env.SHELL) process.env.SHELL = "/bin/zsh";
+  if (!process.env.LANG) process.env.LANG = "ja_JP.UTF-8";
+}
 
+/**
+ * PATHが有効かどうかを検証する
+ * /usr/binを含み、3つ以上のエントリがあり、長さが4096未満であること
+ */
+function validatePath(p: string): boolean {
+  return p.includes("/usr/bin") && p.split(":").length >= 3 && p.length < 4096;
+}
+
+/**
+ * Strategy 1: 非インタラクティブログインシェルからPATHを取得
+ * -ilc → -lc に変更し、printf使用、stdin:ignore でブロック防止
+ */
+function resolvePathFromLoginShell(shell: string): string | null {
   // npm_*とZDOTDIRを除外したクリーン環境を作成
   const cleanEnv = Object.fromEntries(
     Object.entries(process.env).filter(
@@ -184,10 +200,11 @@ export function resolveLoginShellPath(): void {
   try {
     const result = spawnSync(
       shell,
-      ["-ilc", "echo __TD_PATH_MARKER$PATH__TD_PATH_MARKER"],
+      ["-lc", 'printf "__TD_PATH_MARKER%s__TD_PATH_MARKER" "$PATH"'],
       {
         encoding: "utf8",
-        timeout: 10000,
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...cleanEnv,
           TERM: "dumb",
@@ -195,25 +212,186 @@ export function resolveLoginShellPath(): void {
       },
     );
 
-    const output = result.stdout || "";
-    // マーカーでシェル起動時のノイズを除去してPATHだけ抽出
-    const match = output.match(/__TD_PATH_MARKER(.+?)__TD_PATH_MARKER/);
-    if (match) {
-      resolvedPath = match[1];
-      console.log("Resolved login shell PATH successfully");
-    } else {
-      console.warn("Failed to extract PATH from login shell output");
+    if (result.error) {
+      console.warn("Strategy 1 (login shell) error:", result.error.message);
+      return null;
     }
+
+    if (result.status !== 0) {
+      console.warn(
+        `Strategy 1 (login shell) failed: exitCode=${result.status}, signal=${result.signal}, stderr=${(result.stderr || "").slice(0, 200)}`,
+      );
+      return null;
+    }
+
+    const output = result.stdout || "";
+    const match = output.match(/__TD_PATH_MARKER(.+?)__TD_PATH_MARKER/);
+    if (match && validatePath(match[1])) {
+      return match[1];
+    }
+
+    console.warn(
+      "Strategy 1 (login shell): PATH extraction or validation failed",
+    );
+    return null;
   } catch (error) {
-    console.warn("Failed to resolve login shell PATH:", error);
+    console.warn("Strategy 1 (login shell) exception:", error);
+    return null;
   }
 }
 
 /**
- * キャッシュ済みの解決済みPATHを返す
+ * Strategy 2: macOS path_helper からシステムPATHを取得
+ * /etc/paths + /etc/paths.d/* のパスを返す。シェルに依存しない。
  */
-export function getResolvedPath(): string | null {
-  return resolvedPath;
+function resolvePathFromPathHelper(): string | null {
+  try {
+    const result = spawnSync("/usr/libexec/path_helper", ["-s"], {
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    if (result.error || result.status !== 0) {
+      console.warn(
+        "Strategy 2 (path_helper) failed:",
+        result.error?.message || `exitCode=${result.status}`,
+      );
+      return null;
+    }
+
+    // 出力形式: PATH="..."; export PATH;
+    const output = result.stdout || "";
+    const match = output.match(/PATH="([^"]+)"/);
+    if (match) {
+      return match[1];
+    }
+
+    console.warn("Strategy 2 (path_helper): failed to parse output");
+    return null;
+  } catch (error) {
+    console.warn("Strategy 2 (path_helper) exception:", error);
+    return null;
+  }
+}
+
+/**
+ * Strategy 3: Well-known paths をファイルシステムで直接プローブ
+ * シェル起動不要。既知のツールチェインパスの存在を確認する。
+ */
+function resolvePathFromWellKnownPaths(): string[] {
+  const home = process.env.HOME || os.homedir();
+  const found: string[] = [];
+
+  // 固定パス候補
+  const candidates = [
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    path.join(home, ".volta/bin"),
+    path.join(home, ".asdf/shims"),
+    path.join(home, ".cargo/bin"),
+    path.join(home, ".local/bin"),
+    path.join(home, "go/bin"),
+    path.join(home, ".deno/bin"),
+    path.join(home, ".bun/bin"),
+  ];
+
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+        found.push(p);
+      }
+    } catch {
+      // アクセス不可は無視
+    }
+  }
+
+  // nvm: ~/.nvm/versions/node/*/bin から最新バージョンを自動検出
+  const nvmVersionsDir = path.join(home, ".nvm/versions/node");
+  try {
+    if (fs.existsSync(nvmVersionsDir)) {
+      const versions = fs
+        .readdirSync(nvmVersionsDir)
+        .filter((v) => v.startsWith("v"))
+        .sort((a, b) => {
+          // セマンティックバージョン比較（降順 = 最新が先頭）
+          const pa = a.slice(1).split(".").map(Number);
+          const pb = b.slice(1).split(".").map(Number);
+          for (let i = 0; i < 3; i++) {
+            if ((pa[i] || 0) !== (pb[i] || 0))
+              return (pb[i] || 0) - (pa[i] || 0);
+          }
+          return 0;
+        });
+
+      if (versions.length > 0) {
+        const latestBin = path.join(nvmVersionsDir, versions[0], "bin");
+        if (fs.existsSync(latestBin)) {
+          found.push(latestBin);
+        }
+      }
+    }
+  } catch {
+    // nvm検出失敗は無視
+  }
+
+  return found;
+}
+
+/**
+ * アプリ起動時に多層フォールバックでPATHを解決する
+ *
+ * 1. 必須環境変数を保証
+ * 2. Strategy 1: 非インタラクティブログインシェル → 成功&検証OK → return
+ * 3. Strategy 2: macOS path_helper でシステムPATHを取得
+ * 4. Strategy 3: Well-known paths をファイルシステムでプローブ
+ * 5. 2+3をマージして resolvedPath に設定
+ * 6. 全失敗時: process.env.PATHをフォールバック
+ */
+export function resolveLoginShellPath(): void {
+  ensureEssentialEnvVars();
+
+  const shell = process.env.SHELL || "/bin/zsh";
+
+  // Strategy 1: ログインシェルから取得（最も正確）
+  const loginShellPath = resolvePathFromLoginShell(shell);
+  if (loginShellPath) {
+    resolvedPath = loginShellPath;
+    console.log("Resolved PATH via Strategy 1 (login shell)");
+    console.log("Final resolved PATH:", resolvedPath);
+    return;
+  }
+
+  // Strategy 1失敗 → Strategy 2 + 3 をマージ
+  console.log("Strategy 1 failed, falling back to Strategy 2 + 3");
+
+  const pathHelperPath = resolvePathFromPathHelper();
+  const wellKnownPaths = resolvePathFromWellKnownPaths();
+
+  // path_helperのPATHをベースに、well-known pathsを追加
+  const basePath =
+    pathHelperPath || process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin";
+  const baseDirs = basePath.split(":");
+  const baseSet = new Set(baseDirs);
+
+  // well-known pathsから、まだ含まれていないものだけ追加
+  const extraDirs = wellKnownPaths.filter((p) => !baseSet.has(p));
+  const merged = [...extraDirs, ...baseDirs].join(":");
+
+  if (merged && merged !== process.env.PATH) {
+    resolvedPath = merged;
+    console.log(
+      `Resolved PATH via fallback (path_helper: ${pathHelperPath ? "yes" : "no"}, well-known: ${wellKnownPaths.length} paths)`,
+    );
+  } else {
+    console.warn(
+      "All PATH resolution strategies failed. Using process.env.PATH as fallback.",
+    );
+  }
+
+  console.log("Final resolved PATH:", resolvedPath || process.env.PATH);
 }
 
 /**

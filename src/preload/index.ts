@@ -1,8 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-export type PtyDataCallback = (data: { id: string; data: string }) => void;
-export type PtyExitCallback = (data: { id: string; exitCode: number }) => void;
-
 function createIpcListener<T>(channel: string) {
   return (callback: (data: T) => void): (() => void) => {
     const handler = (_: Electron.IpcRendererEvent, data: T): void =>
