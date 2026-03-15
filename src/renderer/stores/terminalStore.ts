@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import * as terminalManager from "../services/terminalManager";
 import { isTerminalPane } from "../utils/layoutUtils";
+import { useTerminalMetaStore } from "./terminalMetaStore";
 import type {
   SplitDirection,
   TerminalPane,
@@ -53,6 +54,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNodes = new Map(state.nodes);
     const newTerminalId = generateId();
     const newSplitId = generateId();
+
+    // 元ペインのCWDを新ペインに事前設定（initMetaの上書き防止と連携）
+    const metaStore = useTerminalMetaStore.getState();
+    const sourceCwd = metaStore.metas.get(terminalId)?.cwd;
+    if (sourceCwd) {
+      metaStore.initMeta(newTerminalId);
+      metaStore.setCwd(newTerminalId, sourceCwd);
+    }
 
     const newTerminal: TerminalPane = {
       id: newTerminalId,

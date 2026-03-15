@@ -14,7 +14,7 @@ export function getWindowCount(): number {
   return windows.size;
 }
 
-export function createWindow(): BrowserWindow | null {
+export function createWindow(initialCwd?: string): BrowserWindow | null {
   if (!canCreateWindow()) {
     return null;
   }
@@ -73,6 +73,13 @@ export function createWindow(): BrowserWindow | null {
     win.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {
     win.loadFile(join(__dirname, "../renderer/index.html"));
+  }
+
+  // Dockメニューからの起動時、初期CWDをレンダラーに送信
+  if (initialCwd) {
+    win.webContents.on("did-finish-load", () => {
+      win.webContents.send("window:initialCwd", initialCwd);
+    });
   }
 
   return win;

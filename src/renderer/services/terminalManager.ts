@@ -177,6 +177,7 @@ export function getOrCreate(
         if (match) {
           const cwdPath = decodeURIComponent(match[1]);
           useTerminalMetaStore.getState().setCwd(id, cwdPath);
+          window.api.recentDirs.add(cwdPath);
         }
       } catch (e) {
         console.warn("[OSC 7] handler error:", e);

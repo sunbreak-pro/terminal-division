@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow, app, dialog, shell } from "electron";
 import { ptyManager } from "./pty-manager";
 import { createWindow, canCreateWindow } from "./window-manager";
+import { recentDirectoryManager } from "./recent-directories";
 
 // IPCハンドラー登録（アプリ起動時に一度だけ呼ぶ）
 export function setupIpcHandlers(): void {
@@ -26,10 +27,15 @@ export function setupIpcHandlers(): void {
   });
 
   // 新しいウィンドウを作成
-  ipcMain.handle("window:create", () => {
+  ipcMain.handle("window:create", (_, initialCwd?: string) => {
     if (!canCreateWindow()) return false;
-    const win = createWindow();
+    const win = createWindow(initialCwd);
     return win !== null;
+  });
+
+  // 最近のディレクトリに追加
+  ipcMain.on("recentDirs:add", (_, dirPath: string) => {
+    recentDirectoryManager.addDirectory(dirPath);
   });
 
   // テーマ変更を他のウィンドウに同期

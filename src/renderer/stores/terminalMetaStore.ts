@@ -30,6 +30,8 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
 
     initMeta: (id) => {
       const metas = new Map(get().metas);
+      // 既にメタが存在する場合は上書きしない（分割時のCWD事前設定を保持するため）
+      if (metas.has(id)) return;
       metas.set(id, { cwd: null, processName: null, shellName: null });
       set({ metas });
     },

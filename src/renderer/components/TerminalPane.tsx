@@ -85,9 +85,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
           instance.fitAddon.fit();
           const { cols, rows } = instance.terminal;
 
-          // セッション復元時のCWDをメタストアから取得
+          // CWD優先順位: メタストア（分割時設定） > windowInitialCwd（Dockメニュー） > undefined
           const initialCwd =
-            useTerminalMetaStore.getState().metas.get(id)?.cwd ?? undefined;
+            useTerminalMetaStore.getState().metas.get(id)?.cwd ??
+            window.api.window.getInitialCwd() ??
+            undefined;
 
           window.api.pty
             .create(id, initialCwd)

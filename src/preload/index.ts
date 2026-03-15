@@ -9,6 +9,12 @@ function createIpcListener<T>(channel: string) {
   };
 }
 
+// Dockメニューからの初期CWDをバッファ（Reactマウント前に受信する可能性があるため）
+let initialCwdBuffer: string | null = null;
+ipcRenderer.on("window:initialCwd", (_, cwd: string) => {
+  initialCwdBuffer = cwd;
+});
+
 const api = {
   pty: {
     create: (id: string, initialCwd?: string): Promise<boolean> =>
@@ -28,7 +34,16 @@ const api = {
     ),
   },
   window: {
-    create: (): Promise<boolean> => ipcRenderer.invoke("window:create"),
+    create: (initialCwd?: string): Promise<boolean> =>
+      ipcRenderer.invoke("window:create", initialCwd),
+    getInitialCwd: (): string | null => {
+      const cwd = initialCwdBuffer;
+      initialCwdBuffer = null; // 一度消費したらクリア
+      return cwd;
+    },
+  },
+  recentDirs: {
+    add: (dirPath: string): void => ipcRenderer.send("recentDirs:add", dirPath),
   },
   theme: {
     notifyChanged: (themeId: string): void =>
