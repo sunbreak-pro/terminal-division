@@ -66,6 +66,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
           onExit: () => {
             closeTerminal(id);
           },
+          onFocus: () => {
+            setActiveTerminal(id);
+          },
         },
       );
 
@@ -120,13 +123,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       return () => {
         cancelFit();
         resizeObserver.disconnect();
-        terminalManager.detachFromContainer(id);
       };
     }, [id, closeTerminal]);
 
-    const handleClick = useCallback((): void => {
+    const handleMouseDown = useCallback((): void => {
       setActiveTerminal(id);
-      terminalManager.focus(id);
     }, [id, setActiveTerminal]);
 
     // Memoize container style
@@ -154,7 +155,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
     return (
       <div
         className="terminal-container"
-        onClick={handleClick}
+        onMouseDown={handleMouseDown}
         style={containerStyle}
       >
         <TerminalSubHeader id={id} paneNumber={paneNumber} />

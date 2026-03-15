@@ -359,13 +359,13 @@ export function resolveLoginShellPath(): void {
   const loginShellPath = resolvePathFromLoginShell(shell);
   if (loginShellPath) {
     resolvedPath = loginShellPath;
-    console.log("Resolved PATH via Strategy 1 (login shell)");
-    console.log("Final resolved PATH:", resolvedPath);
+    console.debug("Resolved PATH via Strategy 1 (login shell)");
+    console.debug("Final resolved PATH:", resolvedPath);
     return;
   }
 
   // Strategy 1失敗 → Strategy 2 + 3 をマージ
-  console.log("Strategy 1 failed, falling back to Strategy 2 + 3");
+  console.debug("Strategy 1 failed, falling back to Strategy 2 + 3");
 
   const pathHelperPath = resolvePathFromPathHelper();
   const wellKnownPaths = resolvePathFromWellKnownPaths();
@@ -382,7 +382,7 @@ export function resolveLoginShellPath(): void {
 
   if (merged && merged !== process.env.PATH) {
     resolvedPath = merged;
-    console.log(
+    console.debug(
       `Resolved PATH via fallback (path_helper: ${pathHelperPath ? "yes" : "no"}, well-known: ${wellKnownPaths.length} paths)`,
     );
   } else {
@@ -391,7 +391,7 @@ export function resolveLoginShellPath(): void {
     );
   }
 
-  console.log("Final resolved PATH:", resolvedPath || process.env.PATH);
+  console.debug("Final resolved PATH:", resolvedPath || process.env.PATH);
 }
 
 /**

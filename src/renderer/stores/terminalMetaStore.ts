@@ -15,48 +15,36 @@ interface TerminalMetaStore {
   removeMeta: (id: string) => void;
 }
 
-export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => ({
-  metas: new Map(),
-
-  initMeta: (id) => {
-    const metas = new Map(get().metas);
-    metas.set(id, { cwd: null, processName: null, shellName: null });
-    set({ metas });
-  },
-
-  setCwd: (id, cwd) => {
+export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
+  const updateMeta = (id: string, updates: Partial<TerminalMeta>): void => {
     const metas = new Map(get().metas);
     const existing = metas.get(id);
     if (existing) {
-      metas.set(id, { ...existing, cwd });
+      metas.set(id, { ...existing, ...updates });
       set({ metas });
     }
-  },
+  };
 
-  setProcessName: (id, processName) => {
-    const metas = new Map(get().metas);
-    const existing = metas.get(id);
-    if (existing) {
-      metas.set(id, { ...existing, processName });
+  return {
+    metas: new Map(),
+
+    initMeta: (id) => {
+      const metas = new Map(get().metas);
+      metas.set(id, { cwd: null, processName: null, shellName: null });
       set({ metas });
-    }
-  },
+    },
 
-  setShellName: (id, shellName) => {
-    const metas = new Map(get().metas);
-    const existing = metas.get(id);
-    if (existing) {
-      metas.set(id, { ...existing, shellName });
+    setCwd: (id, cwd) => updateMeta(id, { cwd }),
+    setProcessName: (id, processName) => updateMeta(id, { processName }),
+    setShellName: (id, shellName) => updateMeta(id, { shellName }),
+
+    removeMeta: (id) => {
+      const metas = new Map(get().metas);
+      metas.delete(id);
       set({ metas });
-    }
-  },
-
-  removeMeta: (id) => {
-    const metas = new Map(get().metas);
-    metas.delete(id);
-    set({ metas });
-  },
-}));
+    },
+  };
+});
 
 // セレクター: 特定IDのメタデータのみ購読（不要な再レンダリングを防ぐ）
 export function useTerminalMeta(id: string): TerminalMeta | undefined {
