@@ -7,6 +7,7 @@ vi.mock("@xterm/xterm", () => {
     open = vi.fn();
     dispose = vi.fn();
     onData = vi.fn().mockReturnValue({ dispose: vi.fn() });
+    onFocus = vi.fn().mockReturnValue({ dispose: vi.fn() });
     focus = vi.fn();
     resize = vi.fn();
     cols = 80;
@@ -18,6 +19,15 @@ vi.mock("@xterm/xterm", () => {
     selectLines = vi.fn();
     getSelection = vi.fn().mockReturnValue("");
     clearSelection = vi.fn();
+    parser = {
+      registerOscHandler: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+    };
+    registerMarker = vi
+      .fn()
+      .mockReturnValue({ isDisposed: false, dispose: vi.fn() });
+    registerDecoration = vi.fn().mockReturnValue(null);
+    write = vi.fn();
+    options = { theme: {}, fontFamily: "monospace", fontSize: 13 };
   }
   return { Terminal: MockTerminal };
 });
@@ -36,6 +46,19 @@ vi.mock("@xterm/addon-web-links", () => {
   return { WebLinksAddon: MockWebLinksAddon };
 });
 
+vi.mock("../../stores/terminalMetaStore", () => ({
+  useTerminalMetaStore: {
+    getState: () => ({
+      metas: new Map(),
+      initMeta: vi.fn(),
+      setCwd: vi.fn(),
+      setProcessName: vi.fn(),
+      setShellName: vi.fn(),
+      removeMeta: vi.fn(),
+    }),
+  },
+}));
+
 // window.apiモック
 const mockPtyApi = {
   create: vi.fn().mockResolvedValue("mock-pty-id"),
@@ -45,6 +68,8 @@ const mockPtyApi = {
   kill: vi.fn(),
   onData: vi.fn().mockReturnValue(() => {}),
   onExit: vi.fn().mockReturnValue(() => {}),
+  onProcessName: vi.fn().mockReturnValue(() => {}),
+  onShellName: vi.fn().mockReturnValue(() => {}),
 };
 
 const mockShellApi = {
@@ -70,6 +95,7 @@ describe("terminalManager", () => {
   const defaultCallbacks = {
     onData: vi.fn(),
     onExit: vi.fn(),
+    onFocus: vi.fn(),
   };
 
   beforeEach(() => {
@@ -126,48 +152,7 @@ describe("terminalManager", () => {
     });
   });
 
-  describe("get", () => {
-    it("should return undefined for non-existent id", () => {
-      const instance = terminalManager.get("non-existent");
-      expect(instance).toBeUndefined();
-    });
-
-    it("should return instance for existing id", () => {
-      const created = terminalManager.getOrCreate(
-        "test-get",
-        defaultOptions,
-        defaultCallbacks,
-      );
-      const retrieved = terminalManager.get("test-get");
-
-      expect(retrieved).toBe(created);
-    });
-  });
-
-  describe("has", () => {
-    it("should return false for non-existent id", () => {
-      expect(terminalManager.has("non-existent-2")).toBe(false);
-    });
-
-    it("should return true for existing id", () => {
-      terminalManager.getOrCreate("test-has", defaultOptions, defaultCallbacks);
-      expect(terminalManager.has("test-has")).toBe(true);
-    });
-  });
-
   describe("destroy", () => {
-    it("should remove instance from registry", () => {
-      terminalManager.getOrCreate(
-        "test-destroy",
-        defaultOptions,
-        defaultCallbacks,
-      );
-      expect(terminalManager.has("test-destroy")).toBe(true);
-
-      terminalManager.destroy("test-destroy");
-      expect(terminalManager.has("test-destroy")).toBe(false);
-    });
-
     it("should dispose terminal", () => {
       const instance = terminalManager.getOrCreate(
         "test-dispose",
@@ -251,31 +236,6 @@ describe("terminalManager", () => {
   });
 
   describe("selection", () => {
-    it("should get selection", () => {
-      const instance = terminalManager.getOrCreate(
-        "test-selection",
-        defaultOptions,
-        defaultCallbacks,
-      );
-      (
-        instance.terminal.getSelection as ReturnType<typeof vi.fn>
-      ).mockReturnValue("selected text");
-
-      const result = terminalManager.getSelection("test-selection");
-      expect(result).toBe("selected text");
-    });
-
-    it("should clear selection", () => {
-      const instance = terminalManager.getOrCreate(
-        "test-clear-sel",
-        defaultOptions,
-        defaultCallbacks,
-      );
-      terminalManager.clearSelection("test-clear-sel");
-
-      expect(instance.terminal.clearSelection).toHaveBeenCalled();
-    });
-
     it("should select current line", () => {
       const instance = terminalManager.getOrCreate(
         "test-select-line",

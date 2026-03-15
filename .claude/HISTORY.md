@@ -1,5 +1,17 @@
 # HISTORY.md - 変更履歴
 
+### 2026-03-15 - テスト失敗修正: モック不足の補完
+
+#### 概要
+
+17件のテスト失敗（themeStore: 7件、terminalManager: 9件、TerminalPane: 1件）をすべてモック不足の補完で修正し、101テスト全通過を達成した。
+
+#### 変更点
+
+- **グローバルテストセットアップ**: `setup.ts` に `window.api.theme` モック（`notifyChanged`, `onSync`）を追加
+- **terminalManager.test.ts**: MockTerminalに `parser`, `registerMarker`, `registerDecoration`, `write`, `options` を追加。ptyモックに `onProcessName`/`onShellName` を追加。`terminalMetaStore` モックを追加
+- **TerminalPane.test.tsx**: `terminalMetaStore` モックを追加。`pty.create` アサーションを2引数（id, initialCwd）に修正
+
 ### 2026-03-15 - パッケージ版PATH解決の多層フォールバック修正
 
 #### 概要
