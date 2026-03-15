@@ -1,5 +1,18 @@
 # HISTORY.md - 変更履歴
 
+### 2026-03-15 - code-plan-editor と Plan mode の統合
+
+#### 概要
+
+code-plan-editor スキルに Pre-Plan（Workflow 0）と Post-Plan（Workflow 1.5）を追加し、Plan mode との統合フローを構築した。テンプレート外部化、ルールファイル作成、SKILL_INDEX 更新を実施。
+
+#### 変更点
+
+- **plan-template.md（新規）**: 計画書テンプレート定義 + 記入ガイド + Plan mode 出力 → テンプレート変換マッピング表を `references/` に作成
+- **plan-mode-quality.md（新規）**: `~/.claude/rules/` に Plan mode 出力フォーマット指示とワークフローチェイン案内を作成（36行）
+- **SKILL.md（拡張）**: Workflow 0（既存計画スキャン、MEMORY.md確認、テンプレート注入）と Workflow 1.5（Plan mode出力検出、テンプレート変換、保存、task-tracker連携提案）を追加。Rulesセクションも拡張
+- **SKILL_INDEX.md（更新）**: code-plan-editor の説明を Plan mode 統合に反映
+
 ### 2026-03-15 - カスタムアイコンへの置き換え
 
 #### 概要
