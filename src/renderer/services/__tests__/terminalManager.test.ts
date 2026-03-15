@@ -7,7 +7,6 @@ vi.mock("@xterm/xterm", () => {
     open = vi.fn();
     dispose = vi.fn();
     onData = vi.fn().mockReturnValue({ dispose: vi.fn() });
-    onFocus = vi.fn().mockReturnValue({ dispose: vi.fn() });
     focus = vi.fn();
     resize = vi.fn();
     cols = 80;

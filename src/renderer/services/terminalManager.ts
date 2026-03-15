@@ -26,6 +26,7 @@ const promptDotStates = new Map<string, PromptDotState>();
 export interface TerminalCallbacks {
   onData: (data: string) => void;
   onExit: () => void;
+  onFocus: () => void;
 }
 
 /**
@@ -68,32 +69,20 @@ export function getOrCreate(
 
   // Register terminal.onData listener ONCE during instance creation
   const terminalDataDisposable = terminal.onData((data) => {
-    console.log(
-      "[onData] isComposing:",
-      isComposing,
-      "lastCompositionData:",
-      lastCompositionData ? JSON.stringify(lastCompositionData) : null,
-      "data:",
-      JSON.stringify(data),
-    );
-
     // Non-ASCII characters during IME composition are handled by compositionend only.
     // Skip them here to prevent double-send or corruption during long IME compositions.
     // But allow non-ASCII when NOT composing (e.g., paste operations).
     if (isComposing && /[^\x00-\x7F]/.test(data)) {
-      console.log("[onData] SKIPPED (non-ASCII during composition)");
       return;
     }
 
     // Skip if this data was already sent via compositionend (prevent double-send)
     if (lastCompositionData !== null && data === lastCompositionData) {
       lastCompositionData = null;
-      console.log("[onData] SKIPPED (duplicate of compositionend)");
       return;
     }
     lastCompositionData = null;
 
-    console.log("[onData] SENT");
     callbacks.onData(data);
   });
 
@@ -213,28 +202,26 @@ export function getOrCreate(
   // メタデータ初期化
   useTerminalMetaStore.getState().initMeta(id);
 
-  // Function to register composition event listeners on the textarea
-  const registerCompositionListeners = (): void => {
+  // textareaのネイティブイベントリスナー登録（フォーカス同期 + IME composition）
+  // terminal.open()後に呼ぶ必要がある（textareaはopen後に生成されるため）
+  const registerTerminalListeners = (): void => {
     const textarea = terminal.element?.querySelector("textarea");
     if (textarea) {
+      // フォーカスリスナー（activeTerminalId同期用）
+      textarea.addEventListener("focus", () => {
+        callbacks.onFocus();
+      });
       textarea.addEventListener("compositionstart", () => {
-        console.log("[compositionstart]");
         isComposing = true;
         lastCompositionData = null;
       });
-      textarea.addEventListener("compositionupdate", (e: CompositionEvent) => {
-        console.log("[compositionupdate] data:", JSON.stringify(e.data));
-      });
       textarea.addEventListener("compositionend", (e: CompositionEvent) => {
-        console.log("[compositionend] data:", JSON.stringify(e.data));
         isComposing = false;
         // Send the confirmed text directly from compositionend event
         // This avoids relying on xterm.js's setTimeout(0) which can race with
         // the next compositionstart when macOS IME splits long compositions
         if (e.data && e.data.length > 0) {
           lastCompositionData = e.data;
-          console.log("[compositionend] SENDING:", JSON.stringify(e.data));
-
           callbacks.onData(e.data);
         }
       });
@@ -260,24 +247,10 @@ export function getOrCreate(
   // Store the registration function for use in attachToContainer
   (
     instance as TerminalInstance & { _registerComposition?: () => void }
-  )._registerComposition = registerCompositionListeners;
+  )._registerComposition = registerTerminalListeners;
 
   registry.set(id, instance);
   return instance;
-}
-
-/**
- * Get an existing terminal instance
- */
-export function get(id: string): TerminalInstance | undefined {
-  return registry.get(id);
-}
-
-/**
- * Check if a terminal instance exists
- */
-export function has(id: string): boolean {
-  return registry.has(id);
 }
 
 /**
@@ -348,17 +321,6 @@ export function attachToContainer(id: string, container: HTMLElement): void {
 }
 
 /**
- * Detach terminal from its current container (does NOT dispose)
- */
-export function detachFromContainer(id: string): void {
-  const instance = registry.get(id);
-  if (!instance) return;
-
-  // We don't remove from DOM here - just disconnect observers etc.
-  // The terminal element stays where it is until reattached or destroyed
-}
-
-/**
  * Resize terminal
  */
 export function resize(id: string, cols: number, rows: number): void {
@@ -416,10 +378,7 @@ export function focus(id: string): void {
 /**
  * ターミナルのテーマを更新
  */
-export function updateTheme(
-  id: string,
-  xtermTheme: Record<string, string>,
-): void {
+function updateTheme(id: string, xtermTheme: Record<string, string>): void {
   const instance = registry.get(id);
   if (!instance) return;
 
@@ -447,22 +406,4 @@ export function selectCurrentLine(id: string): void {
   const cursorY = buffer.cursorY + buffer.viewportY;
 
   terminal.selectLines(cursorY, cursorY);
-}
-
-/**
- * 選択テキストを取得
- */
-export function getSelection(id: string): string {
-  const instance = registry.get(id);
-  if (!instance) return "";
-  return instance.terminal.getSelection();
-}
-
-/**
- * 選択をクリア
- */
-export function clearSelection(id: string): void {
-  const instance = registry.get(id);
-  if (!instance) return;
-  instance.terminal.clearSelection();
 }
