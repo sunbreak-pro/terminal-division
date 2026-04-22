@@ -138,6 +138,10 @@ export function getOrCreate(
 
             if (decoration) {
               decoration.onRender((element) => {
+                // xtermはマーカーがビューポート外のとき display:"none" を設定して onRender を発火する。
+                // ここで無条件に display を上書きすると、スクロールアウトした過去プロンプトのドットが
+                // 左端(x=0, top=0付近)に貼り付いたまま残る。display:"none" は必ず尊重する。
+                if (element.style.display === "none") return;
                 element.style.backgroundColor = bg;
                 element.style.color = color;
                 element.textContent = "●";
@@ -374,6 +378,17 @@ export function focus(id: string): void {
   if (!instance) return;
 
   instance.terminal.focus();
+}
+
+/**
+ * ターミナルのスクロールを最下部へ移動
+ * ペイン切替時に呼び、ユーザーが常にプロンプト行を視認できるようにする
+ */
+export function scrollToBottom(id: string): void {
+  const instance = registry.get(id);
+  if (!instance) return;
+
+  instance.terminal.scrollToBottom();
 }
 
 /**

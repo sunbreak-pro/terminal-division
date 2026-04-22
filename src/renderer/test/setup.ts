@@ -32,11 +32,35 @@ const mockThemeApi = {
   onSync: vi.fn().mockReturnValue(() => {}),
 };
 
+// window.api.windowモック
+const mockWindowApi = {
+  getInitialCwd: vi.fn().mockReturnValue(null),
+};
+
+// window.api.systemモック
+const mockSystemApi = {
+  getHomeDir: vi.fn().mockReturnValue("/Users/test"),
+};
+
+// window.api.recentDirsモック
+const mockRecentDirsApi = {
+  add: vi.fn(),
+};
+
+// window.api.shellモック
+const mockShellApi = {
+  openExternal: vi.fn(),
+};
+
 Object.defineProperty(window, "api", {
   value: {
     pty: mockPtyApi,
     dialog: mockDialogApi,
     theme: mockThemeApi,
+    window: mockWindowApi,
+    system: mockSystemApi,
+    recentDirs: mockRecentDirsApi,
+    shell: mockShellApi,
   },
   writable: true,
 });

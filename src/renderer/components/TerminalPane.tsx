@@ -29,9 +29,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
     const xtermTheme = currentTheme.xterm;
 
     // Focus terminal when it becomes active
+    // ペインが非アクティブ→アクティブに切り替わった瞬間のみ最下部へスクロールする。
+    // （既にアクティブな状態で useEffect が再実行されることはないので、
+    //  ユーザーがスクロールして見ている途中に勝手にジャンプすることはない）
     useEffect(() => {
       if (isActive) {
         terminalManager.focus(id);
+        terminalManager.scrollToBottom(id);
       }
     }, [isActive, id]);
 

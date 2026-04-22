@@ -6,12 +6,14 @@ import TerminalPane from "../TerminalPane";
 const mockGetOrCreate = vi.fn();
 const mockAttachToContainer = vi.fn();
 const mockFocus = vi.fn();
+const mockScrollToBottom = vi.fn();
 const mockFit = vi.fn();
 
 vi.mock("../../services/terminalManager", () => ({
   getOrCreate: (...args: unknown[]) => mockGetOrCreate(...args),
   attachToContainer: (...args: unknown[]) => mockAttachToContainer(...args),
   focus: (...args: unknown[]) => mockFocus(...args),
+  scrollToBottom: (...args: unknown[]) => mockScrollToBottom(...args),
   fit: (...args: unknown[]) => mockFit(...args),
 }));
 
@@ -111,7 +113,7 @@ describe("TerminalPane", () => {
   });
 
   it("calls getOrCreate on mount", () => {
-    render(<TerminalPane id="terminal-1" />);
+    render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     expect(mockGetOrCreate).toHaveBeenCalledWith(
       "terminal-1",
@@ -129,7 +131,7 @@ describe("TerminalPane", () => {
   });
 
   it("attaches to container on mount", () => {
-    render(<TerminalPane id="terminal-1" />);
+    render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     expect(mockAttachToContainer).toHaveBeenCalledWith(
       "terminal-1",
@@ -141,7 +143,7 @@ describe("TerminalPane", () => {
     // このターミナルがアクティブ状態で描画
     vi.mocked(terminalStore.useActiveTerminalId).mockReturnValue("terminal-1");
 
-    render(<TerminalPane id="terminal-1" />);
+    render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     // isActive === true のため、useEffectでfocusが呼ばれる
     expect(mockFocus).toHaveBeenCalledWith("terminal-1");
@@ -150,7 +152,9 @@ describe("TerminalPane", () => {
   it("sets active on mousedown", () => {
     vi.mocked(terminalStore.useActiveTerminalId).mockReturnValue("terminal-2");
 
-    const { container } = render(<TerminalPane id="terminal-1" />);
+    const { container } = render(
+      <TerminalPane id="terminal-1" paneNumber={1} />,
+    );
 
     const terminalContainer = container.querySelector(".terminal-container")!;
     fireEvent.mouseDown(terminalContainer);
@@ -161,9 +165,13 @@ describe("TerminalPane", () => {
   it("applies active border style when active", () => {
     vi.mocked(terminalStore.useActiveTerminalId).mockReturnValue("terminal-1");
 
-    const { container } = render(<TerminalPane id="terminal-1" />);
+    const { container } = render(
+      <TerminalPane id="terminal-1" paneNumber={1} />,
+    );
 
-    const terminalContainer = container.querySelector(".terminal-container");
+    const terminalContainer = container.querySelector<HTMLElement>(
+      ".terminal-container",
+    );
     // アクティブ時は3pxボーダー (rgb(255, 140, 0) = #ff8c00)
     expect(terminalContainer?.style.border).toContain("3px");
     expect(terminalContainer?.style.border).toMatch(/rgb\(255,\s*140,\s*0\)/);
@@ -172,16 +180,20 @@ describe("TerminalPane", () => {
   it("applies inactive border style when not active", () => {
     vi.mocked(terminalStore.useActiveTerminalId).mockReturnValue("terminal-2");
 
-    const { container } = render(<TerminalPane id="terminal-1" />);
+    const { container } = render(
+      <TerminalPane id="terminal-1" paneNumber={1} />,
+    );
 
-    const terminalContainer = container.querySelector(".terminal-container");
+    const terminalContainer = container.querySelector<HTMLElement>(
+      ".terminal-container",
+    );
     // 非アクティブ時は2pxボーダー (rgb(81, 80, 80) = #515050)
     expect(terminalContainer?.style.border).toContain("2px");
     expect(terminalContainer?.style.border).toMatch(/rgb\(81,\s*80,\s*80\)/);
   });
 
   it("cleanup on unmount", () => {
-    const { unmount } = render(<TerminalPane id="terminal-1" />);
+    const { unmount } = render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     unmount();
 
@@ -191,7 +203,7 @@ describe("TerminalPane", () => {
   it("creates PTY on first mount", () => {
     mockTerminalInstance.ptyCreated = false;
 
-    render(<TerminalPane id="terminal-1" />);
+    render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     // setTimeout内の処理を実行
     vi.runAllTimers();
@@ -207,7 +219,7 @@ describe("TerminalPane", () => {
     };
     mockGetOrCreate.mockReturnValue(instanceWithPty);
 
-    render(<TerminalPane id="terminal-1" />);
+    render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     // setTimeout内の処理を実行
     vi.runAllTimers();

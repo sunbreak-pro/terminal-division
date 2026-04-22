@@ -1,5 +1,20 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-23 - ペイン切替時の最下部フォーカス + 画面外ドットの sticky 化修正
+
+#### 概要
+
+長時間のコマンド実行後にペイン切替すると上部/中間にフォーカスが残りプロンプトが見えない問題と、コマンド完了ドット（緑/赤）がスクロールアウトすると左端に貼り付く問題を修正した。根本原因は、xterm.js の decoration 描画ロジックが画面外マーカーに `display:"none"` をセットしてから `onRender` を発火する挙動に対し、OSC 7770 ハンドラの onRender コールバックが無条件で `display:"flex"` に上書きしていたこと。過去コマンドの orphan decoration が最終可視時の top 値のまま左端(x=0)に積層し、パネルが大きく見えたり内容が二重に見える副作用も誘発していた。
+
+#### 変更点
+
+- **terminalManager.ts**: OSC 7770 D ハンドラの `decoration.onRender` で `element.style.display === "none"` の場合に早期 return。xterm が画面外マーカーを hide する挙動を尊重する
+- **terminalManager.ts**: `scrollToBottom(id)` を新設。registry 欠落時は no-op
+- **TerminalPane.tsx**: `[isActive, id]` useEffect で active になった瞬間に `focus()` に加えて `scrollToBottom()` を呼び出し。active のまま再実行されることはないため、スクロール閲覧中に意図しないジャンプは起きない
+- **terminalManager.test.ts**: `scrollToBottom` の unit test 追加 + Bug 3 回帰テスト（registerOscHandler の calls から OSC 7770 ハンドラを捕捉し、画面内 "block" / 画面外 "none" 両ケースで onRender の振る舞いを検証）を追加
+- **TerminalPane.test.tsx**: mock に `scrollToBottom` を追加、既存の `paneNumber` 必須プロパティ型エラーを一括修正、`querySelector<HTMLElement>` で `.style` アクセス型を明示
+- **test/setup.ts**: `window.api` モックに `window.getInitialCwd` / `system.getHomeDir` / `recentDirs.add` / `shell.openExternal` を補完し、既存テストの未モック欠損を解消
+
 ### 2026-04-22 - .claude/ 構造を project-setter 準拠に大規模再編
 
 #### 概要
@@ -58,15 +73,4 @@ code-plan-editor スキルに Pre-Plan（Workflow 0）と Post-Plan（Workflow 1
 
 - **resources/icon.icns**: `terminal-division-icon.png`（1024x1024 RGBA PNG）から各サイズ（16〜1024）を生成し、icns形式に変換して配置
 
-### 2026-03-15 - 画面真っ暗バグの修正（onFocus APIエラー）
-
-#### 概要
-
-`npm run dev` でアプリ起動時にウィンドウが完全に黒一色になるバグを修正。前回のフォーカス同期修正で追加した `terminal.onFocus()` が `@xterm/xterm@5.5.0` に存在しないAPIであり、`getOrCreate()` 内で例外が発生してReactコンポーネントがクラッシュしていた。
-
-#### 変更点
-
-- **terminalManager.ts**: `terminal.onFocus()` を削除し、`textarea.addEventListener('focus', ...)` に変更。`registerCompositionListeners` → `registerTerminalListeners` にリネームしてフォーカスリスナーを統合
-- **terminalManager.test.ts**: MockTerminal から存在しない `onFocus` モックを削除
-
-> 2026-04-22 ローリングアーカイブ: これ以前の 4 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-23 ローリングアーカイブ: これ以前の 5 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

@@ -8,6 +8,7 @@ vi.mock("@xterm/xterm", () => {
     dispose = vi.fn();
     onData = vi.fn().mockReturnValue({ dispose: vi.fn() });
     focus = vi.fn();
+    scrollToBottom = vi.fn();
     resize = vi.fn();
     cols = 80;
     rows = 24;
@@ -231,6 +232,83 @@ describe("terminalManager", () => {
       terminalManager.focus("test-focus");
 
       expect(instance.terminal.focus).toHaveBeenCalled();
+    });
+  });
+
+  describe("scrollToBottom", () => {
+    it("should call terminal.scrollToBottom", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-scroll",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      terminalManager.scrollToBottom("test-scroll");
+
+      expect(instance.terminal.scrollToBottom).toHaveBeenCalled();
+    });
+
+    it("should do nothing for non-existent id", () => {
+      expect(() =>
+        terminalManager.scrollToBottom("non-existent-scroll"),
+      ).not.toThrow();
+    });
+  });
+
+  // Bug 3 回帰テスト: スクロールアウトしたプロンプトドットが左端に貼り付く現象の防止
+  describe("OSC 7770 decoration onRender", () => {
+    it("should skip styling when xterm has hidden the element (display:none)", () => {
+      // decoration の onRender コールバックを捕捉する
+      let capturedOnRender: ((el: HTMLElement) => void) | null = null;
+      const decorationMock = {
+        onRender: vi.fn((cb: (el: HTMLElement) => void) => {
+          capturedOnRender = cb;
+        }),
+        dispose: vi.fn(),
+      };
+
+      const instance = terminalManager.getOrCreate(
+        "test-osc-deco",
+        defaultOptions,
+        defaultCallbacks,
+      );
+
+      // registerDecoration をこのテスト専用に差し替え
+      (
+        instance.terminal as unknown as {
+          registerDecoration: (opts: unknown) => unknown;
+        }
+      ).registerDecoration = vi.fn().mockReturnValue(decorationMock);
+
+      // getOrCreate 内で registerOscHandler(7770, handler) が既に呼ばれている。
+      // vi.fn() の calls から直接 OSC 7770 ハンドラを取得する
+      const registerOscHandlerMock = instance.terminal.parser
+        .registerOscHandler as unknown as ReturnType<typeof vi.fn>;
+      const osc7770Call = registerOscHandlerMock.mock.calls.find(
+        (call) => call[0] === 7770,
+      );
+      expect(osc7770Call).toBeDefined();
+      const oscHandler = osc7770Call![1] as (data: string) => boolean;
+
+      // OSC "A" → マーカー作成、OSC "D;0" → 緑ドットデコレーション作成
+      oscHandler("A");
+      oscHandler("D;0");
+
+      // onRender コールバックが登録済み
+      expect(capturedOnRender).not.toBeNull();
+
+      // 画面内ケース: display:"block" → flex に上書きされる
+      const visibleEl = document.createElement("div");
+      visibleEl.style.display = "block";
+      capturedOnRender!(visibleEl);
+      expect(visibleEl.style.display).toBe("flex");
+      expect(visibleEl.textContent).toBe("●");
+
+      // 画面外ケース: display:"none" → 早期 return、display は "none" のまま
+      const hiddenEl = document.createElement("div");
+      hiddenEl.style.display = "none";
+      capturedOnRender!(hiddenEl);
+      expect(hiddenEl.style.display).toBe("none");
+      expect(hiddenEl.textContent).toBe(""); // スタイル適用されず textContent も未設定
     });
   });
 

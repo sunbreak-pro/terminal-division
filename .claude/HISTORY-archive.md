@@ -2,6 +2,17 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-03-15 - 画面真っ暗バグの修正（onFocus APIエラー）
+
+#### 概要
+
+`npm run dev` でアプリ起動時にウィンドウが完全に黒一色になるバグを修正。前回のフォーカス同期修正で追加した `terminal.onFocus()` が `@xterm/xterm@5.5.0` に存在しないAPIであり、`getOrCreate()` 内で例外が発生してReactコンポーネントがクラッシュしていた。
+
+#### 変更点
+
+- **terminalManager.ts**: `terminal.onFocus()` を削除し、`textarea.addEventListener('focus', ...)` に変更。`registerCompositionListeners` → `registerTerminalListeners` にリネームしてフォーカスリスナーを統合
+- **terminalManager.test.ts**: MockTerminal から存在しない `onFocus` モックを削除
+
 ### 2026-03-15 - フォーカス同期バグ修正
 
 #### 概要
