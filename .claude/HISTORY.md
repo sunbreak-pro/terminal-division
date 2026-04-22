@@ -1,5 +1,23 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-22 - .claude/ 構造を project-setter 準拠に大規模再編
+
+#### 概要
+
+`.claude/` ディレクトリを archive の project-setter スキルに準拠した Software 標準構造に再編した。`bugs/` + `solutions/` を Root Cause + 再発防止知見中心の `docs/known-issues/` に統合し、ADR ベースの `specs/` を廃止して `docs/vision/` + `docs/requirements/` に分離。CLAUDE.md を 9 章構成（Meta / Vision / Platform / Architecture / Data Model / AI / Coding Standards / Workflows / Feature Tier / Document System）に書き直した。
+
+#### 変更点
+
+- **CLAUDE.md（全面書き換え）**: 88 → 294 行、400 行制限内。9 章構成に再編し、旧 `## Task Tracking` 等の古い節を廃止。コーディング規約・デバッグ要点・Feature Tier Map を追加
+- **docs/vision/（新規）**: `README.md`、`core.md`（Value Proposition / Target User / Non-Goals）、`coding-principles.md`（設計原則 9 章 — registry モジュールスコープ / IPC 最小公開 / 二分木レイアウト / エコーバック多層防御 / IME textarea 直結 / PATH 多層フォールバック / bracket paste / 言語規約 / 小さく保つ）
+- **docs/requirements/（新規）**: `README.md`、Tier 1（5 機能）、Tier 2（4 機能）、Tier 3（5 候補）を Acceptance Criteria 付きで整理
+- **docs/known-issues/（新規）**: `INDEX.md`、`_TEMPLATE.md`、`001-packaged-app-japanese-garbled.md`（旧 bugs + solutions 統合）、`002-cmd-backspace-undo-history.md`（旧 solutions 移行）
+- **docs/code-explanation/（新設）**: 既存 `docs/01-05.md`（Electron 基礎 / アーキテクチャ / データフロー / レイアウト / 高度機能）を `git mv` で移動し `README.md` を追加
+- **archive/（新規）**: `README.md` のみ。完了済みプランの保管場所として機能定義
+- **skills/（新規）**: task-tracker / session-verifier / code-plan-editor / git-workflow / debug-strategy / code-review / efficient-codebase-nav / code-refactoring の 8 スキルを `~/dev/Claude/skill-lib/global/` からシンボリックリンク
+- **削除**: `.claude/bugs/`（2 ファイル）、`.claude/solutions/`（3 ファイル）、`.claude/specs/`（3 ファイル = templates の ADR・feature-spec 含む）を `git rm -r`
+- **MEMORY.md / settings.local.json**: 既存維持
+
 ### 2026-03-15 - Dockメニュー最近ディレクトリ表示 + 分割時CWD継承
 
 #### 概要
@@ -51,59 +69,4 @@ code-plan-editor スキルに Pre-Plan（Workflow 0）と Post-Plan（Workflow 1
 - **terminalManager.ts**: `terminal.onFocus()` を削除し、`textarea.addEventListener('focus', ...)` に変更。`registerCompositionListeners` → `registerTerminalListeners` にリネームしてフォーカスリスナーを統合
 - **terminalManager.test.ts**: MockTerminal から存在しない `onFocus` モックを削除
 
-### 2026-03-15 - フォーカス同期バグ修正
-
-#### 概要
-
-ペイン内部をクリックしてもオレンジ枠線（activeTerminalId）が追従しないバグを修正。xterm.jsの`onFocus`イベントでストアを同期し、`onClick`を`onMouseDown`に変更して微小ドラッグ時の未発火問題も解消した。
-
-#### 変更点
-
-- **terminalManager.ts**: `TerminalCallbacks`に`onFocus`コールバックを追加し、`terminal.onFocus()`リスナーを登録
-- **TerminalPane.tsx**: `onFocus`コールバックで`setActiveTerminal`を呼ぶよう変更、`onClick`→`onMouseDown`に変更、ハンドラから`terminalManager.focus()`呼び出しを削除
-- **テスト更新**: `terminalManager.test.ts`と`TerminalPane.test.tsx`を新しいインターフェースに合わせて更新
-
-### 2026-03-15 - テスト失敗修正: モック不足の補完
-
-#### 概要
-
-17件のテスト失敗（themeStore: 7件、terminalManager: 9件、TerminalPane: 1件）をすべてモック不足の補完で修正し、101テスト全通過を達成した。
-
-#### 変更点
-
-- **グローバルテストセットアップ**: `setup.ts` に `window.api.theme` モック（`notifyChanged`, `onSync`）を追加
-- **terminalManager.test.ts**: MockTerminalに `parser`, `registerMarker`, `registerDecoration`, `write`, `options` を追加。ptyモックに `onProcessName`/`onShellName` を追加。`terminalMetaStore` モックを追加
-- **TerminalPane.test.tsx**: `terminalMetaStore` モックを追加。`pty.create` アサーションを2引数（id, initialCwd）に修正
-
-### 2026-03-15 - パッケージ版PATH解決の多層フォールバック修正
-
-#### 概要
-
-パッケージ化されたElectronアプリをFinderから起動した際に `npm`, `brew`, `claude` 等のコマンドが見つからなくなる問題を、多層フォールバックPATH解決で修正した。
-
-#### 変更点
-
-- **必須環境変数保証**: `ensureEssentialEnvVars()` で HOME/USER/SHELL/LANG が未設定時に補完
-- **Strategy 1改善**: `-ilc` → `-lc` (非インタラクティブ化)、`echo` → `printf`、`stdin: "ignore"`、timeout 5秒、stderr分離、診断ログ強化
-- **Strategy 2追加**: `/usr/libexec/path_helper -s` でシステムPATH取得（シェル非依存）
-- **Strategy 3追加**: Homebrew/nvm/Volta/asdf/cargo/deno/bun等のwell-known pathsをファイルシステムでプローブ（nvmは最新バージョン自動検出）
-- **PATH検証**: `validatePath()` で取得PATHの妥当性チェック（/usr/bin含有、3エントリ以上、4096文字未満）
-- **統合ロジック**: Strategy 1成功→即return、失敗→Strategy 2+3マージ、全失敗→process.env.PATHフォールバック
-
-### 2026-03-15 - 未使用コード削除 + コード品質修正 + テスト修正リファクタリング
-
-#### 概要
-
-コードベース全体から未使用コード・不要なexport・重複関数を削除し、コード品質の改善とテストのAPI不一致を修正した。
-
-#### 変更点
-
-- **未使用ファイル削除**: `throttle.ts` を削除
-- **未使用関数削除**: `rafDebounce`, `getResolvedPath()`, `getAllWindows()` を削除
-- **未使用型削除**: `PtyDataCallback`, `PtyExitCallback` を `preload/index.ts` から削除
-- **後方互換export削除**: `theme.ts` の `theme`, `xtermTheme` export を削除
-- **未使用セレクタ削除**: `useCurrentThemeId` を `themeStore.ts` から削除
-- **未使用アクション削除**: `getNode` を `terminalStore.ts` から削除（interface, 実装, selector, テスト, モック全て）
-- **重複関数統合**: `isTerminalPane` を `layoutUtils.ts` に統合し、`terminalStore.ts` からはimportに変更
-- **コード品質修正**: `pty-manager.ts` の `writeChunked` fire-and-forgetに `.catch()` 追加
-- **テスト書き直し**: `pty-manager.test.ts` を現在のマルチウィンドウAPIに合わせて全面書き直し（27テスト全通過）
+> 2026-04-22 ローリングアーカイブ: これ以前の 4 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

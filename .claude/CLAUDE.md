@@ -1,87 +1,294 @@
-# CLAUDE.md
+# CLAUDE.md — Terminal Division
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+> 本プロジェクトの設計判断・実装規約の SSOT（Single Source of Truth）。400 行以下を目標に保つ。
+> 抽象構想・設計原則は `.claude/docs/vision/` に分離。Claude Code は起動時に本ファイルを auto-load する。
 
-## Project Overview
+---
 
-Terminal Division is a macOS terminal splitting application built with Electron + React + TypeScript. It provides iTerm2-style pane splitting with xterm.js terminals backed by node-pty.
+## 0. Meta
 
-## Development Commands
+### 役割と更新ルール
 
-```bash
-npm run dev        # Start development mode (electron-vite dev, hot reload)
-npm run build      # Production build (electron-vite build)
-npm run preview    # Preview production build
+- **役割**: 現状の実装規約・アーキテクチャの唯一の参照点（400 行以下目標）
+- **抽象構想・設計原則**: `.claude/docs/vision/` 参照（本ファイルに持ち込まない、ADR は作らない）
+- **実装変更を伴う変更**: コードと同一 PR で本ファイル更新
+- **新機能追加**: §8 Feature Tier Map に追記 + `.claude/docs/requirements/` に詳細記入
+
+### 関連ドキュメント
+
+| パス                                       | 用途                                                        |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| `.claude/MEMORY.md`                        | タスクトラッカー（進行中 / 直近完了 / 予定）                |
+| `.claude/HISTORY.md`                       | 変更履歴（セッション単位）                                  |
+| `.claude/docs/vision/core.md`              | Core Identity / Target User / Value Proposition / Non-Goals |
+| `.claude/docs/vision/coding-principles.md` | 設計原則（旧 ADR 役割）                                     |
+| `.claude/docs/requirements/`               | Tier 1-3 機能要件定義                                       |
+| `.claude/docs/known-issues/INDEX.md`       | 未解決 Issue + Root Cause                                   |
+| `.claude/docs/code-explanation/`           | 機能別コード解説（学習教材）                                |
+| `.claude/archive/`                         | 完了済みプラン                                              |
+| `.claude/YYYY-MM-DD-<slug>.md`             | アクティブな実装プラン（完了後 archive/ へ移動）            |
+
+---
+
+## 1. Vision（要約）
+
+> 詳細は [`docs/vision/core.md`](./docs/vision/core.md)
+
+- **1-line**: macOS ネイティブで使える軽量な iTerm2 ライクなターミナル分割アプリ
+- **Primary user**: macOS で複数プロセスを並走させたい開発者（ビルド監視 / ログ tail / 対話シェル）
+- **Value**: 直感的な iTerm2 スタイル分割、日本語 IME 完全対応、入力行 Undo/Redo、CWD 継承 + Dock 統合、パッケージ版でも壊れないシェル環境
+- **Non-Goals**: tmux 代替、クロスプラットフォーム第一級サポート、プラグイン API、複雑なプロファイル、7 ペイン以上
+
+---
+
+## 2. Platform / Tech Stack
+
+| カテゴリ         | 技術                            | バージョン   |
+| ---------------- | ------------------------------- | ------------ |
+| Runtime          | Electron                        | 33.x         |
+| Build            | electron-vite（Vite 5）         | 2.x          |
+| UI               | React + TypeScript              | 18.x / 5.7.x |
+| Terminal 描画    | @xterm/xterm                    | 5.5.x        |
+| Terminal Backend | node-pty（native）              | 1.x          |
+| State            | Zustand                         | 5.x          |
+| Layout           | react-resizable-panels          | 4.x          |
+| Test             | Vitest + @testing-library/react | 4.x / 16.x   |
+| Distribution     | electron-builder                | 25.x         |
+
+対応 OS: macOS（一級）。ビルドは Windows も通るが UI / IME / ロケールは macOS 中心に最適化。
+
+---
+
+## 3. Architecture
+
+### 3.1 3 プロセスモデル
+
+- **Main** (`src/main/`): ウィンドウライフサイクル、PTY 管理、IPC ハンドラ、Dock メニュー、最近のディレクトリ永続化
+- **Preload** (`src/preload/`): `contextBridge` で `window.api.*` を Renderer に公開
+- **Renderer** (`src/renderer/`): React UI、xterm.js、Zustand ストア、ショートカットキー
+
+セキュリティ: `contextIsolation: true` / `nodeIntegration: false`。全ネイティブ機能は `window.api` 経由のみ。詳細は `docs/code-explanation/02-electron-basics.md`。
+
+### 3.2 レイアウトシステム（二分木）
+
+- `TerminalPane`（葉）: 1 ターミナル = 1 xterm.js インスタンス
+- `SplitNode`（内部）: `direction` ∈ {`horizontal`, `vertical`} と `children: [string, string]`
+- 全ノードは `Map<string, LayoutNode>` にフラット格納、`parentId` / `children` で親子参照
+- `rootId` でルートを追跡、`MAX_TERMINALS = 6`
+- 再帰レンダリング: `SplitContainer.tsx` の `renderNode()`、`react-resizable-panels` の Group/Panel/Separator
+
+詳細: `docs/code-explanation/04-layout-and-state.md`。
+
+### 3.3 Terminal ライフサイクル
+
+1. `terminalStore.splitTerminal()` → 二分木更新 + 新ノード作成
+2. `TerminalPane.tsx` mount → `terminalManager.getOrCreate(id)` で xterm.js インスタンス + リスナーを 1 度だけ登録
+3. `terminalManager.attachToContainer()` で DOM に `terminal.open()`、IME composition リスナーを初回登録
+4. IPC `pty:create` で Main 側の `node-pty` プロセス起動
+5. データフロー: `xterm.onData` → IPC `pty:write` → node-pty → IPC `pty:data` → `xterm.write`
+
+詳細: `docs/code-explanation/03-data-flow.md`。
+
+### 3.4 PTY Manager
+
+- `$SHELL` 起動、未設定時は `/bin/zsh`
+- 日本語ロケール固定: `LANG=ja_JP.UTF-8` / `LC_ALL=ja_JP.UTF-8` / `encoding: 'utf8'`
+- nvm 互換: `npm_*` 環境変数を除去
+- 大量ペースト（>512B）: bracket paste（`\x1b[200~` / `\x1b[201~`）+ 1024B チャンク + 10ms 間隔
+
+### 3.5 Undo/Redo（terminalManager）
+
+- 行単位の `InputHistoryState`（`undoStack` / `redoStack` / `currentLine`）、最大 100 履歴
+- エコーバック 3 層防御: `undoRedoInProgress` フラグ + `pendingSentText` 文字列一致 + 300ms タイマー
+- 連続 Undo/Redo でタイマーを `clearTimeout` してリセット
+- Enter で履歴クリア、Cmd+Backspace は `clearLine()` 経由で履歴記録を伴う
+
+詳細・罠の背景: `docs/vision/coding-principles.md` §4、`docs/known-issues/002-cmd-backspace-undo-history.md`。
+
+### 3.6 IME Composition
+
+- xterm.js 内部 `<textarea>` に `compositionstart` / `compositionend` を直接フック
+- コンポジション中の非 ASCII 文字は `onData` でスキップ（ASCII 制御文字は通す）
+- `compositionend` 送信後、xterm.js の `setTimeout(0)` 再 dispatch を `lastCompositionData` で dedup
+
+詳細: `docs/code-explanation/05-advanced-features.md`。
+
+### 3.7 ショートカット
+
+`App.tsx` で `window` の `keydown` を **capture phase** で監視し、xterm.js 到達前に処理。IME 中（`isComposing || keyCode === 229`）は無効化。一覧は §8 / `docs/requirements/tier-2-supporting.md` / `ShortcutsModal.tsx`。
+
+### 3.8 Dock / Window Manager
+
+- OSC 7 で CWD を追跡 → `RecentDirectoryManager` が JSON 永続化（最大 10、ホーム除外、重複除去、存在チェック）
+- Dock メニューは「新しいウィンドウ」+ 最近のディレクトリ（`~` 短縮）で動的構築
+- `window-manager.ts` の `initialCwd` 経由で Dock 起動ウィンドウに CWD を伝搬
+
+---
+
+## 4. Data Model
+
+### 4.1 レイアウトノード
+
+```typescript
+// src/renderer/src/types/layout.ts
+interface TerminalPane {
+  id: string;
+  parentId: string | null;
+}
+interface SplitNode {
+  id: string;
+  type: "split";
+  direction: "horizontal" | "vertical";
+  children: string[]; // 常に 2 要素
+  parentId: string | null;
+}
 ```
 
-No test runner is configured.
+型ガード: `isTerminalPane(node)` = `!('type' in node && node.type === 'split')`。`layoutUtils.ts` に統合。
 
-## Architecture
+### 4.2 Zustand ストア
 
-### Three-Process Model (Electron)
+| Store               | 役割                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `terminalStore`     | `nodes` / `rootId` / `activeTerminalId` / `terminalCount` / split / close / canSplit |
+| `terminalMetaStore` | ペイン別メタデータ（分割時 CWD 継承等）。`initMeta` は既存チェック付き（上書き防止） |
+| `themeStore`        | テーマ ID と同期通知                                                                 |
 
-- **Main process** (`src/main/`): Window lifecycle, PTY spawning, IPC handlers
-- **Preload** (`src/preload/`): Context bridge exposing `window.api.pty.*` to renderer
-- **Renderer** (`src/renderer/`): React UI with xterm.js terminals
+### 4.3 永続化
 
-### Layout System
+- `RecentDirectoryManager`: JSON（app userData 配下）で最大 10 件のディレクトリ履歴を保持
+- レイアウト自体は永続化しない（T3-4 で検討中）
 
-The layout is a **binary tree** stored in a Zustand store (`terminalStore.ts`):
-- `TerminalPane` = leaf node (a terminal)
-- `SplitNode` = internal node with `direction` (horizontal/vertical) and two children
-- All nodes stored in a flat `Map<string, LayoutNode>` with `parentId` references
-- `rootId` tracks the tree root; max 6 terminals (`MAX_TERMINALS`)
-- `react-resizable-panels` handles the visual split rendering in `SplitContainer.tsx`
+---
 
-### Terminal Lifecycle
+## 5. AI Integration
 
-1. `terminalStore.splitTerminal()` creates the tree node
-2. `TerminalPane.tsx` mounts → calls `terminalManager.getOrCreate()` to create xterm.js instance + register listeners (once per terminal, independent of React lifecycle)
-3. `terminalManager.attachToContainer()` opens xterm in the DOM
-4. IPC `pty:create` spawns a `node-pty` process in main
-5. Data flows: xterm.onData → IPC `pty:write` → node-pty → IPC `pty:data` → xterm.write
+本アプリに AI 機能は含まれない。プロジェクト運用（CLAUDE.md、skills、plans、MEMORY/HISTORY）のみ Claude Code を使う。
 
-### Undo/Redo System (`terminalManager.ts`)
+---
 
-Per-terminal input history with `undoStack`/`redoStack`/`currentLine`. Key complexity:
-- PTY echo-back prevention: `undoRedoInProgress` flag + `pendingSentText` tracking prevent the PTY's echo from being recorded as new input
-- 300ms debounced flag reset for packaged app latency
-- Timer cancellation on consecutive undo/redo operations
-- History resets on Enter (line commit)
+## 6. Coding Standards
 
-### IME Composition Handling (`terminalManager.ts`)
+### 6.1 命名規則
 
-Critical for Japanese/CJK input:
-- `compositionstart`/`compositionend` events on xterm's textarea
-- Non-ASCII characters during composition are handled only via `compositionend` to prevent double-send
-- `lastCompositionData` deduplication against xterm.js's `setTimeout(0)` dispatch
+- TypeScript: `strict` モード、公開 API に明示的な返り値型
+- React: 関数コンポーネント + hooks（class 禁止）
+- Export: named export を優先（default export 禁止、ルート `main.tsx` のみ例外）
+- ファイル名: コンポーネントは `PascalCase.tsx`、その他は `camelCase.ts`
+- IPC チャネル名: `domain:action`（例: `pty:create`, `recentDirs:add`）
 
-### Keyboard Shortcuts (`App.tsx`)
+### 6.2 言語
 
-Registered on `window` in capture phase (before xterm processes keys). Shortcuts send control sequences directly to PTY via `window.api.pty.write()`:
-- `Cmd+D` / `Cmd+Shift+D`: Split vertical/horizontal
-- `Cmd+W`: Close pane
-- `Cmd+Z` / `Cmd+Shift+Z`: Undo/redo input
-- `Cmd+Backspace`: Clear line (with history)
-- `Cmd+Option+Arrow`: Focus navigation between panes
-- `Option+Arrow`: Word navigation (`ESC+b`/`ESC+f`)
+- コメント: 日本語
+- 識別子 / コミットメッセージ / ブランチ名 / PR タイトル: 英語
+- ユーザー向け文字列（UI / エラー）: 日本語
 
-### PTY Manager (`pty-manager.ts`)
+### 6.3 パターン
 
-- Spawns shell from `$SHELL` (fallback `/bin/zsh`) with Japanese locale (`LANG=ja_JP.UTF-8`)
-- Filters `npm_*` environment variables for nvm compatibility
-- Large pastes (>512 bytes) use chunked writing with bracket paste mode
+設計原則の「なぜ」は `docs/vision/coding-principles.md`。実装規約として守るべきこと:
 
-## Key Conventions
+- **xterm.js インスタンス管理**: `terminalManager.ts` のモジュールスコープ `registry` に配置し、React ライフサイクルから独立させる
+- **`destroy()` は Zustand の `closeTerminal()` からのみ呼ぶ**（`useEffect` クリーンアップで呼ばない）
+- **PTY 直接書き込みで履歴に影響するものは `terminalManager` 経由**（Cmd+Backspace の教訓。Known Issue 002）
+- **パスエイリアス**: `@` → `src/renderer/` (`electron.vite.config.ts:19-21`)
+- **native モジュール外部化**: `node-pty` を Vite の `external` に指定
+- **ショートカットの capture phase 登録**: `window.addEventListener("keydown", handleKeyDown, true)`
+- **外部 URL オープン**: `http://` / `https://` のみ許可（`ipc-handlers.ts` の `shell:openExternal`）
 
-- Code comments are in Japanese
-- Path alias: `@` → `src/renderer/` (configured in `electron.vite.config.ts`)
-- `node-pty` is marked as external in Vite config (native module)
-- `terminalManager` is a module-scoped registry (not React state) to survive re-renders
+---
 
-## Task Tracking
+## 7. Development Workflows
 
-- `.claude/TODO.md`: Priority-based task list (P0-P3)
-- `.claude/bugs/`: Active bug reports
-- `.claude/solutions/`: Documented fixes for reference
-- `.claude/specs/`: Feature specs and design decisions
+### 7.1 開発コマンド
+
+```bash
+npm run dev            # electron-vite dev（ホットリロード）
+npm run build          # プロダクションビルド
+npm run preview        # ビルド結果プレビュー
+npm test               # Vitest（単体テスト）
+npm run test:ui        # Vitest UI
+npm run test:coverage  # カバレッジ
+npx electron-builder --mac --dir   # macOS パッケージ（dir）
+npx electron-builder --mac         # macOS DMG
+```
+
+`postinstall` で `electron-builder install-app-deps` が自動実行され、`node-pty` の native モジュールが Electron 用に再ビルドされる。
+
+### 7.2 コミット規約
+
+```
+<type>: <subject>
+```
+
+type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
+
+### 7.3 デバッグ要点
+
+- 類似バグ遭遇時はまず [`docs/known-issues/INDEX.md`](./docs/known-issues/INDEX.md) を確認・キーワード grep
+- パッケージ版でのみ発生するバグは `LSEnvironment` / PATH 解決 / PTY encoding を疑う（Known Issue 001）
+- Undo / IME / ショートカット関連は `terminalManager.ts` のログ（`[recordHistory]` / `[onData]` / `[undo]`）を有効化
+- React の二重マウントで PTY が二重生成されそうな場合は `ptyCreated` フラグと `setTimeout(0)` の順序を確認
+- OSC 7 の CWD 追跡が動いていなければシェル側の `PROMPT_COMMAND` / `precmd` を確認
+
+### 7.4 品質ゲート
+
+- PR 前に `npm test` と `npm run build` を通す
+- 新規 PTY 直接書き込みを追加する際は「履歴管理が必要か」をレビューチェック項目に含める
+
+---
+
+## 8. Feature Tier Map
+
+> 詳細は [`docs/requirements/`](./docs/requirements/README.md) 参照
+
+### Tier 1: コア（Value Proposition を直接支える）
+
+- **T1-1**: iTerm2 スタイルのペイン分割（二分木、最大 6、ドラッグリサイズ、Cmd+W 兄弟昇格、Cmd+Option+Arrow フォーカス）
+- **T1-2**: xterm.js + node-pty によるネイティブシェル（PATH 多層フォールバック、日本語ロケール、bracket paste）
+- **T1-3**: 日本語 IME 入力の完全サポート（compositionstart/end 直接フック、dedup、`LSEnvironment`）
+- **T1-4**: 入力行 Undo/Redo（最大 100、エコーバック 3 層防御、Cmd+Backspace 履歴連動）
+- **T1-5**: CWD 継承と Dock 統合（分割時継承、OSC 7 追跡、最近のディレクトリ）
+
+### Tier 2: 補助（あると価値が大幅増）
+
+- **T2-1**: ショートカットキー体系（capture phase、IME ガード）
+- **T2-2**: フォーカス視覚フィードバック（オレンジ枠線、textarea focus 同期）
+- **T2-3**: 外部リンクとディレクトリ移動（WebLinks、ネイティブダイアログ）
+- **T2-4**: 単一テーマとスタイル
+
+### Tier 3: 実験 / 凍結候補
+
+- **T3-1**: タブ機能（未定）
+- **T3-2**: プロファイル / テーマ管理（凍結）
+- **T3-3**: シェル統合（OSC 133、候補）
+- **T3-4**: セッション永続化（候補）
+- **T3-5**: テスト環境整備強化（随時追加）
+
+---
+
+## 9. Document System
+
+### Vision → 実装プラン → 統合 フロー
+
+1. **Vision**（抽象・設計原則）: `docs/vision/` に記述。ADR は作らず vision/ に一元化
+2. **実装プラン**（具体）: `.claude/YYYY-MM-DD-<slug>.md` 作成 → Vision から相互リンク
+3. **完了**: プランを `archive/` に移動、実装規約は本ファイルに統合、背景・判断理由は `vision/coding-principles.md` に残す
+4. **MEMORY.md / HISTORY.md**: セッション単位で task-tracker 経由同期
+
+### なぜ ADR を使わないか
+
+- ADR は「時点の判断」を記録するため、時間経過で古い情報を参照してしまうリスクがある
+- `vision/` は「現在から未来に向けた設計原則」として継続更新されるため、常に最新の意思決定を反映
+- 過去の却下案・判断理由は `vision/coding-principles.md` の更新フローに従って残す
+
+### Known Issue ライフサイクル
+
+`docs/known-issues/` は **壊れている／壊れていた箇所の Root Cause と再発防止知見** を置く場所（MEMORY.md / HISTORY.md では拾えないもの）。
+
+1. **発見時**: `NNN-<slug>.md` を `_TEMPLATE.md` ベースで作成、Status=Active、`INDEX.md` 更新
+2. **解決時**: Status=Fixed、Resolved 日付 / 修正箇所 / Lessons Learned 追記、`INDEX.md` の Active → Fixed 移動
+3. **Monitoring**: 将来の落とし穴になりうる構造的問題は Monitoring で保持
+
+### skills/
+
+プロジェクト固有のスキルと、グローバルスキルへのシンボリックリンクを `.claude/skills/` 配下に配置。実体は `~/dev/Claude/skill-lib/` で一元管理（グローバル運用ルール参照）。
