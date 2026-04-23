@@ -14,8 +14,7 @@ Tier 1 のコア体験を補強する機能。実装済みだが中核ではな�
 
 - [x] `Cmd+D` / `Cmd+Shift+D`: 縦/横分割
 - [x] `Cmd+W`: ペインクローズ
-- [x] `Cmd+Z` / `Cmd+Shift+Z`: Undo / Redo
-- [x] `Cmd+Backspace`: 行削除（履歴記録付き）
+- [x] `Cmd+Backspace`: カーソル位置から行頭まで削除
 - [x] `Cmd+K`: カーソル以降削除
 - [x] `Cmd+←` / `Cmd+→`: 行頭 / 行末
 - [x] `Cmd+Shift+Arrow` / `Cmd+Shift+A`: 行選択

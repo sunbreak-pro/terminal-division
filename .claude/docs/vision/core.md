@@ -21,9 +21,8 @@ Electron + React + TypeScript + xterm.js + node-pty で構築され、ブラウ�
 
 1. **直感的な iTerm2 スタイル分割**: `Cmd+D` / `Cmd+Shift+D` で即座に縦横分割、最大 6 ペイン、`react-resizable-panels` によるドラッグリサイズ
 2. **日本語 IME の完全サポート**: xterm.js の textarea に compositionstart/end を直結し、中間状態の誤送信と二重送信を防止
-3. **入力行 Undo/Redo**: ターミナル入力の行単位 Undo/Redo（`Cmd+Z` / `Cmd+Shift+Z`）。PTY エコーバックを 3 層防御で除外
-4. **CWD 継承とネイティブ Dock 統合**: 分割時に元ペインの CWD を新ペインに継承、Dock メニューで最近のディレクトリから新ウィンドウを開ける
-5. **パッケージ版でも壊れないシェル環境**: `$SHELL` 起動 + 多層フォールバック PATH 解決（path_helper / well-known paths / nvm 自動検出）
+3. **CWD 継承とネイティブ Dock 統合**: 分割時に元ペインの CWD を新ペインに継承、Dock メニューで最近のディレクトリから新ウィンドウを開ける
+4. **パッケージ版でも壊れないシェル環境**: `$SHELL` 起動 + 多層フォールバック PATH 解決（path_helper / well-known paths / nvm 自動検出）
 
 ## Non-Goals
 

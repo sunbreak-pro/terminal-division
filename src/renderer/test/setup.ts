@@ -24,6 +24,7 @@ const mockPtyApi = {
 // window.api.dialogモック
 const mockDialogApi = {
   selectDirectory: vi.fn().mockResolvedValue(null),
+  selectFiles: vi.fn().mockResolvedValue(null),
 };
 
 // window.api.themeモック

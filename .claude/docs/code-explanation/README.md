@@ -12,7 +12,7 @@ Terminal Division のコードベースを学習・理解するための教材�
 | 02  | [02-electron-basics.md](./02-electron-basics.md)             | Electron 基礎（前提知識なしで読める）                     |
 | 03  | [03-data-flow.md](./03-data-flow.md)                         | ターミナル作成/入力/リサイズ/破棄の全データフロー（重点） |
 | 04  | [04-layout-and-state.md](./04-layout-and-state.md)           | 二分木レイアウトと Zustand ストアの内部実装（重点）       |
-| 05  | [05-advanced-features.md](./05-advanced-features.md)         | Undo/Redo・IME・ショートカットの実装詳細                  |
+| 05  | [05-advanced-features.md](./05-advanced-features.md)         | IME・ショートカットの実装詳細                             |
 
 ## 立ち位置
 

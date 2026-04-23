@@ -12,16 +12,16 @@ Terminal Divisionは、macOS向けのターミナル分割アプリケーショ�
 
 ### 技術スタック
 
-| カテゴリ | 技術 | バージョン |
-|---------|------|-----------|
-| フレームワーク | Electron | 33.x |
-| ビルドツール | electron-vite (Vite) | 2.x |
-| フロントエンド | React + TypeScript | React 18.x / TS 5.x |
-| ターミナル描画 | xterm.js | 5.5.x |
-| ターミナルバックエンド | node-pty | 1.x |
-| 状態管理 | Zustand | 5.x |
-| レイアウト | react-resizable-panels | 4.x |
-| プラグイン | @vitejs/plugin-react | 4.x |
+| カテゴリ               | 技術                   | バージョン          |
+| ---------------------- | ---------------------- | ------------------- |
+| フレームワーク         | Electron               | 33.x                |
+| ビルドツール           | electron-vite (Vite)   | 2.x                 |
+| フロントエンド         | React + TypeScript     | React 18.x / TS 5.x |
+| ターミナル描画         | xterm.js               | 5.5.x               |
+| ターミナルバックエンド | node-pty               | 1.x                 |
+| 状態管理               | Zustand                | 5.x                 |
+| レイアウト             | react-resizable-panels | 4.x                 |
+| プラグイン             | @vitejs/plugin-react   | 4.x                 |
 
 ---
 
@@ -107,16 +107,16 @@ flowchart LR
 
 ## 主要ライブラリと役割
 
-| ライブラリ | 役割 | 使用プロセス | 使用箇所 |
-|-----------|------|-------------|---------|
-| **xterm.js** | ターミナルのUIレンダリング。VT100エスケープシーケンスの解析・描画 | Renderer | `terminalManager.ts` |
-| **@xterm/addon-fit** | ターミナルをコンテナサイズに自動フィット | Renderer | `terminalManager.ts` |
-| **@xterm/addon-web-links** | ターミナル内URLをクリック可能にする | Renderer | `terminalManager.ts` |
-| **node-pty** | 擬似端末（PTY）の生成。実際のシェルプロセスとのI/O | Main | `pty-manager.ts` |
-| **Zustand** | 軽量な状態管理。レイアウトの二分木データを保持 | Renderer | `terminalStore.ts` |
-| **react-resizable-panels** | ドラッグ可能なパネル分割UI | Renderer | `SplitContainer.tsx` |
-| **electron-vite** | Electronアプリ用のViteベースビルドツール | ビルド | `electron.vite.config.ts` |
-| **@electron-toolkit/utils** | Electron開発ユーティリティ（ショートカット監視等） | Main | `index.ts` |
+| ライブラリ                  | 役割                                                              | 使用プロセス | 使用箇所                  |
+| --------------------------- | ----------------------------------------------------------------- | ------------ | ------------------------- |
+| **xterm.js**                | ターミナルのUIレンダリング。VT100エスケープシーケンスの解析・描画 | Renderer     | `terminalManager.ts`      |
+| **@xterm/addon-fit**        | ターミナルをコンテナサイズに自動フィット                          | Renderer     | `terminalManager.ts`      |
+| **@xterm/addon-web-links**  | ターミナル内URLをクリック可能にする                               | Renderer     | `terminalManager.ts`      |
+| **node-pty**                | 擬似端末（PTY）の生成。実際のシェルプロセスとのI/O                | Main         | `pty-manager.ts`          |
+| **Zustand**                 | 軽量な状態管理。レイアウトの二分木データを保持                    | Renderer     | `terminalStore.ts`        |
+| **react-resizable-panels**  | ドラッグ可能なパネル分割UI                                        | Renderer     | `SplitContainer.tsx`      |
+| **electron-vite**           | Electronアプリ用のViteベースビルドツール                          | ビルド       | `electron.vite.config.ts` |
+| **@electron-toolkit/utils** | Electron開発ユーティリティ（ショートカット監視等）                | Main         | `index.ts`                |
 
 > **Note:** `node-pty`はネイティブモジュール（C++バインディング）のため、`electron.vite.config.ts:10`で`external`指定されています。Viteのバンドルから除外し、Electronのネイティブモジュールローダーで読み込みます。
 
@@ -151,6 +151,7 @@ sequenceDiagram
 ```
 
 **ポイント:**
+
 - ステップ1-6が「入力パス」（Renderer → Main → シェル）
 - ステップ7-12が「出力パス」（シェル → Main → Renderer）
 - シェルのエコーバック（入力した文字がそのまま返ってくる）により、入力文字が画面に表示される
@@ -206,7 +207,8 @@ flowchart TD
 ```
 
 **依存関係の特徴:**
-- `terminalManager.ts`は最も多くの責務を持つファイル（xterm.js管理、IME処理、Undo/Redo、IPC通信）
+
+- `terminalManager.ts`は最も多くの責務を持つファイル（xterm.js管理、IME処理、IPC通信）
 - `terminalStore.ts`は`terminalManager.ts`に依存（closeTerminal時のクリーンアップ）
 - `layout.ts`は型定義のみで、他のファイルに依存しない純粋な型モジュール
 - Main / Preload / Renderer間の直接import関係はなく、全てIPC通信で接続される
@@ -224,9 +226,11 @@ npm run preview    # ビルド結果のプレビュー
 ### パスエイリアス
 
 `electron.vite.config.ts:19-21`で設定:
+
 ```
 @ → src/renderer/
 ```
+
 Rendererプロセスのファイルを`@/components/TerminalPane`のように参照できます。
 
 ---
@@ -235,4 +239,4 @@ Rendererプロセスのファイルを`@/components/TerminalPane`のように参
 
 - [04-layout-and-state.md](./04-layout-and-state.md) — レイアウト二分木と状態管理の詳細（**重点**）
 - [03-data-flow.md](./03-data-flow.md) — ターミナルの作成から破棄までのデータフロー（**重点**）
-- [05-advanced-features.md](./05-advanced-features.md) — Undo/Redo、IME、ショートカットの実装詳細
+- [05-advanced-features.md](./05-advanced-features.md) — IME、ショートカットの実装詳細

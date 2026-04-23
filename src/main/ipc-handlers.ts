@@ -64,6 +64,29 @@ export function setupIpcHandlers(): void {
     return result.filePaths[0];
   });
 
+  // ファイル選択ダイアログ（複数選択可、ターミナルへパス挿入用）
+  ipcMain.handle("dialog:selectFiles", async (event) => {
+    const parentWin = BrowserWindow.fromWebContents(event.sender);
+    const dialogOptions = {
+      properties: [
+        "openFile" as const,
+        "multiSelections" as const,
+        "treatPackageAsDirectory" as const,
+      ],
+      title: "ファイルを選択",
+      buttonLabel: "挿入",
+    };
+    const result = parentWin
+      ? await dialog.showOpenDialog(parentWin, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths;
+  });
+
   // 外部URLを開く
   ipcMain.handle("shell:openExternal", async (_, url: string) => {
     if (!url.startsWith("http://") && !url.startsWith("https://")) {

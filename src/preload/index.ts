@@ -53,6 +53,8 @@ const api = {
   dialog: {
     selectDirectory: (): Promise<string | null> =>
       ipcRenderer.invoke("dialog:selectDirectory"),
+    selectFiles: (): Promise<string[] | null> =>
+      ipcRenderer.invoke("dialog:selectFiles"),
   },
   shell: {
     openExternal: (url: string): Promise<boolean> =>

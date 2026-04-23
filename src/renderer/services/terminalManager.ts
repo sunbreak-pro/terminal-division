@@ -3,6 +3,15 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 
+// 行単位 Undo/Redo 履歴の最大保持数
+const MAX_UNDO_STACK_SIZE = 100;
+
+export interface InputHistoryState {
+  undoStack: string[];
+  redoStack: string[];
+  currentLine: string;
+}
+
 export interface TerminalInstance {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -10,6 +19,56 @@ export interface TerminalInstance {
   compositionRegistered: boolean;
   dataListenerRemover: (() => void) | null;
   exitListenerRemover: (() => void) | null;
+  inputHistory: InputHistoryState;
+}
+
+// xterm.js の ALT screen（vim / less / fzf 等の TUI）中は履歴を変えない
+function isAltScreen(terminal: Terminal): boolean {
+  return terminal.buffer.active.type === "alternate";
+}
+
+function pushHistoryState(history: InputHistoryState, newLine: string): void {
+  if (history.currentLine === newLine) return;
+  history.redoStack = [];
+  history.undoStack.push(history.currentLine);
+  if (history.undoStack.length > MAX_UNDO_STACK_SIZE) {
+    history.undoStack.shift();
+  }
+  history.currentLine = newLine;
+}
+
+// キー入力 / ショートカット送信を履歴に反映する
+// 正確なカーソル位置を追跡していないため、Ctrl+K / Option+D 等の
+// カーソル依存操作は履歴変更を行わない（fail-soft）
+function applyHistoryDelta(history: InputHistoryState, data: string): void {
+  if (data === "\r" || data === "\n") {
+    history.undoStack = [];
+    history.redoStack = [];
+    history.currentLine = "";
+    return;
+  }
+  if (data === "\x7f" || data === "\b") {
+    pushHistoryState(history, history.currentLine.slice(0, -1));
+    return;
+  }
+  if (data === "\x15") {
+    pushHistoryState(history, "");
+    return;
+  }
+  if (data === "\x17") {
+    pushHistoryState(history, history.currentLine.replace(/\s*\S+\s*$/, ""));
+    return;
+  }
+  if (data === "\x0b" || data === "\x1bd") {
+    return;
+  }
+  if (data.length === 1 && data.charCodeAt(0) < 32) {
+    return;
+  }
+  if (data.length > 1 && data.charCodeAt(0) === 0x1b) {
+    return;
+  }
+  pushHistoryState(history, history.currentLine + data);
 }
 
 // Module-scope registry (independent of React lifecycle)
@@ -67,6 +126,12 @@ export function getOrCreate(
   // (xterm.js sends the same data via setTimeout(0) after compositionend)
   let lastCompositionData: string | null = null;
 
+  const inputHistory: InputHistoryState = {
+    undoStack: [],
+    redoStack: [],
+    currentLine: "",
+  };
+
   // Register terminal.onData listener ONCE during instance creation
   const terminalDataDisposable = terminal.onData((data) => {
     // Non-ASCII characters during IME composition are handled by compositionend only.
@@ -83,6 +148,9 @@ export function getOrCreate(
     }
     lastCompositionData = null;
 
+    if (!isAltScreen(terminal)) {
+      applyHistoryDelta(inputHistory, data);
+    }
     callbacks.onData(data);
   });
 
@@ -227,6 +295,9 @@ export function getOrCreate(
         // the next compositionstart when macOS IME splits long compositions
         if (e.data && e.data.length > 0) {
           lastCompositionData = e.data;
+          if (!isAltScreen(terminal)) {
+            applyHistoryDelta(inputHistory, e.data);
+          }
           callbacks.onData(e.data);
         }
       });
@@ -247,6 +318,7 @@ export function getOrCreate(
       dataListenerRemover();
     },
     exitListenerRemover,
+    inputHistory,
   };
 
   // Store the registration function for use in attachToContainer
@@ -422,4 +494,66 @@ export function selectCurrentLine(id: string): void {
   const cursorY = buffer.cursorY + buffer.viewportY;
 
   terminal.selectLines(cursorY, cursorY);
+}
+
+/**
+ * 履歴記録を伴う PTY 書き込み。ショートカットから制御シーケンスを送る場合に使う。
+ * （通常のキー入力は terminal.onData 経由で自動的に履歴に入る）
+ */
+export function writeWithHistory(id: string, payload: string): void {
+  const instance = registry.get(id);
+  if (!instance) return;
+  if (!isAltScreen(instance.terminal)) {
+    applyHistoryDelta(instance.inputHistory, payload);
+  }
+  window.api.pty.write(id, payload);
+}
+
+/**
+ * Undo: 直前の行状態を PTY に再入力する
+ * ALT screen（TUI）中は no-op
+ */
+export function undo(id: string): boolean {
+  const instance = registry.get(id);
+  if (!instance) return false;
+  if (isAltScreen(instance.terminal)) return false;
+
+  const history = instance.inputHistory;
+  if (history.undoStack.length === 0) return false;
+
+  const previous = history.undoStack.pop() as string;
+  history.redoStack.push(history.currentLine);
+  history.currentLine = previous;
+
+  // 現在行をクリア（Ctrl+E で行末 → Ctrl+U で行頭まで削除）して前状態を打ち直す
+  window.api.pty.write(id, "\x05\x15");
+  if (previous.length > 0) {
+    window.api.pty.write(id, previous);
+  }
+  return true;
+}
+
+/**
+ * Redo: Undo で戻した状態を復元する
+ */
+export function redo(id: string): boolean {
+  const instance = registry.get(id);
+  if (!instance) return false;
+  if (isAltScreen(instance.terminal)) return false;
+
+  const history = instance.inputHistory;
+  if (history.redoStack.length === 0) return false;
+
+  const next = history.redoStack.pop() as string;
+  history.undoStack.push(history.currentLine);
+  if (history.undoStack.length > MAX_UNDO_STACK_SIZE) {
+    history.undoStack.shift();
+  }
+  history.currentLine = next;
+
+  window.api.pty.write(id, "\x05\x15");
+  if (next.length > 0) {
+    window.api.pty.write(id, next);
+  }
+  return true;
 }

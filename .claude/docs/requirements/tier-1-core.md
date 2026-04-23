@@ -89,36 +89,7 @@ xterm.js 標準では壊れる日本語（CJK）入力を完全に動かす。
 
 ---
 
-## T1-4: 入力行 Undo / Redo
-
-### Purpose
-
-ターミナル入力を行単位で Undo / Redo できる（ブラウザの `Cmd+Z` 感覚）。
-
-### Boundary
-
-- **含む**: `Cmd+Z` / `Cmd+Shift+Z`、最大 100 履歴、PTY エコーバック除外、Cmd+Backspace / Ctrl+W / Ctrl+U / Backspace / Enter の履歴連動
-- **含まない**: コマンドヒストリ（シェルの `history`）、複数行の Undo
-
-### Acceptance Criteria
-
-- [x] 文字単位ではなく「行状態」を undoStack に push
-- [x] `MAX_UNDO_STACK_SIZE = 100` 超過時は最古を破棄
-- [x] エコーバック除外 3 層（`undoRedoInProgress` / `pendingSentText` / 300ms タイマー）
-- [x] 連続 Undo/Redo でタイマーが clearTimeout されリセットされる
-- [x] Enter 確定時に履歴がクリアされる
-- [x] Cmd+Backspace は `terminalManager.clearLine()` 経由で履歴記録を伴う
-- [x] パッケージ版でもエコーバック遅延に耐える
-
-### Dependencies
-
-- `terminalManager.ts`（InputHistoryState / undo / redo / clearLine）
-- `App.tsx`（ショートカット）
-- Known Issue: [002](../known-issues/002-cmd-backspace-undo-history.md)
-
----
-
-## T1-5: CWD 継承と Dock 統合
+## T1-4: CWD 継承と Dock 統合
 
 ### Purpose
 

@@ -1,6 +1,7 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { useTerminalMeta } from "../stores/terminalMetaStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
+import { promptAndInsertFiles } from "../utils/insertFiles";
 
 interface TerminalSubHeaderProps {
   id: string;
@@ -48,6 +49,30 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       if (!process || process === shell) return shell;
       return `${shell}: ${process}`;
     }, [meta?.shellName, meta?.processName]);
+
+    const handleInsertFile = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        void promptAndInsertFiles(id);
+      },
+      [id],
+    );
+
+    const handleInsertButtonEnter = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
+        e.currentTarget.style.color = theme.colors.text;
+      },
+      [theme.colors.buttonHover, theme.colors.text],
+    );
+
+    const handleInsertButtonLeave = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.currentTarget.style.backgroundColor = "transparent";
+        e.currentTarget.style.color = theme.colors.textSecondary;
+      },
+      [theme.colors.textSecondary],
+    );
 
     return (
       <div
@@ -98,6 +123,45 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         >
           {processDisplay}
         </span>
+        <button
+          type="button"
+          onClick={handleInsertFile}
+          onMouseEnter={handleInsertButtonEnter}
+          onMouseLeave={handleInsertButtonLeave}
+          title="ファイルを挿入 (Cmd+O)"
+          aria-label="ファイルを挿入"
+          style={{
+            marginLeft: "auto",
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "18px",
+            height: "18px",
+            padding: 0,
+            backgroundColor: "transparent",
+            color: theme.colors.textSecondary,
+            border: `1px solid ${theme.colors.border}`,
+            borderRadius: "4px",
+            cursor: "pointer",
+            fontSize: "14px",
+            lineHeight: 1,
+            transition: "background-color 0.15s ease, color 0.15s ease",
+          }}
+        >
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
       </div>
     );
   },

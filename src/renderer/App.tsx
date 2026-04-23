@@ -14,6 +14,7 @@ import {
   setupThemeSync,
 } from "./stores/themeStore";
 import { getAllTerminalIds } from "./utils/layoutUtils";
+import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
 
 const App: React.FC = () => {
@@ -118,12 +119,42 @@ const App: React.FC = () => {
         return;
       }
 
+      // Cmd + O: ファイルを選択してパスを挿入
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeTerminalId) {
+          void promptAndInsertFiles(activeTerminalId);
+        }
+        return;
+      }
+
+      // Cmd + Z: Undo（行単位）
+      if (isMeta && !isShift && !isOption && e.key === "z") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeTerminalId) {
+          terminalManager.undo(activeTerminalId);
+        }
+        return;
+      }
+
+      // Cmd + Shift + Z: Redo
+      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeTerminalId) {
+          terminalManager.redo(activeTerminalId);
+        }
+        return;
+      }
+
       // Cmd + Delete: カーソル位置から行頭まで削除
       if (isMeta && !isShift && !isOption && e.key === "Backspace") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          window.api.pty.write(activeTerminalId, "\x15"); // Ctrl+U: backward-kill-line
+          terminalManager.writeWithHistory(activeTerminalId, "\x15"); // Ctrl+U: backward-kill-line
         }
         return;
       }
@@ -133,7 +164,7 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          window.api.pty.write(activeTerminalId, "\x0b"); // Ctrl+K
+          terminalManager.writeWithHistory(activeTerminalId, "\x0b"); // Ctrl+K
         }
         return;
       }
@@ -162,7 +193,7 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          window.api.pty.write(activeTerminalId, "\n");
+          terminalManager.writeWithHistory(activeTerminalId, "\n");
         }
         return;
       }
@@ -172,7 +203,7 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          window.api.pty.write(activeTerminalId, "\x17"); // Ctrl+W
+          terminalManager.writeWithHistory(activeTerminalId, "\x17"); // Ctrl+W
         }
         return;
       }
@@ -202,7 +233,7 @@ const App: React.FC = () => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          window.api.pty.write(activeTerminalId, "\x1bd"); // ESC+d
+          terminalManager.writeWithHistory(activeTerminalId, "\x1bd"); // ESC+d
         }
         return;
       }

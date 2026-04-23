@@ -14,7 +14,11 @@ vi.mock("@xterm/xterm", () => {
     rows = 24;
     element = null;
     buffer = {
-      active: { cursorY: 0, viewportY: 0 },
+      active: {
+        cursorY: 0,
+        viewportY: 0,
+        type: "normal" as "normal" | "alternate",
+      },
     };
     selectLines = vi.fn();
     getSelection = vi.fn().mockReturnValue("");
@@ -322,6 +326,219 @@ describe("terminalManager", () => {
       terminalManager.selectCurrentLine("test-select-line");
 
       expect(instance.terminal.selectLines).toHaveBeenCalledWith(0, 0);
+    });
+  });
+
+  describe("undo / redo", () => {
+    // terminal.onData(fn) に渡したコールバックを取り出して、ユーザーのキー入力をシミュレートする
+    const getOnDataCallback = (
+      instance: ReturnType<typeof terminalManager.getOrCreate>,
+    ): ((data: string) => void) => {
+      const mock = instance.terminal.onData as unknown as {
+        mock: { calls: Array<[(data: string) => void]> };
+      };
+      const callback = mock.mock.calls[0]?.[0];
+      if (!callback) throw new Error("onData callback not registered");
+      return callback;
+    };
+
+    const setAltScreen = (
+      instance: ReturnType<typeof terminalManager.getOrCreate>,
+      alt: boolean,
+    ): void => {
+      (instance.terminal.buffer.active as { type: string }).type = alt
+        ? "alternate"
+        : "normal";
+    };
+
+    it("records normal typing and restores via undo/redo", () => {
+      const id = "test-undo-typing";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("h");
+      onData("e");
+      onData("l");
+
+      expect(instance.inputHistory.currentLine).toBe("hel");
+      expect(instance.inputHistory.undoStack).toEqual(["", "h", "he"]);
+
+      expect(terminalManager.undo(id)).toBe(true);
+      expect(instance.inputHistory.currentLine).toBe("he");
+      expect(instance.inputHistory.redoStack).toEqual(["hel"]);
+
+      expect(terminalManager.redo(id)).toBe(true);
+      expect(instance.inputHistory.currentLine).toBe("hel");
+      expect(instance.inputHistory.redoStack).toEqual([]);
+    });
+
+    it("returns false when undo/redo stacks are empty", () => {
+      const id = "test-undo-empty";
+      terminalManager.getOrCreate(id, defaultOptions, defaultCallbacks);
+
+      expect(terminalManager.undo(id)).toBe(false);
+      expect(terminalManager.redo(id)).toBe(false);
+    });
+
+    it("treats Backspace as a history step", () => {
+      const id = "test-undo-backspace";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("a");
+      onData("b");
+      onData("\x7f"); // Backspace
+
+      expect(instance.inputHistory.currentLine).toBe("a");
+      expect(terminalManager.undo(id)).toBe(true);
+      expect(instance.inputHistory.currentLine).toBe("ab");
+    });
+
+    it("treats Ctrl+U (\\x15) as clear-line and undo restores full line", () => {
+      const id = "test-undo-ctrlu";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("h");
+      onData("e");
+      onData("l");
+      onData("l");
+      onData("o");
+      expect(instance.inputHistory.currentLine).toBe("hello");
+
+      // Cmd+Backspace 相当の history-aware write
+      terminalManager.writeWithHistory(id, "\x15");
+      expect(instance.inputHistory.currentLine).toBe("");
+
+      expect(terminalManager.undo(id)).toBe(true);
+      expect(instance.inputHistory.currentLine).toBe("hello");
+    });
+
+    it("clears history on Enter", () => {
+      const id = "test-undo-enter";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("a");
+      onData("b");
+      onData("\r");
+
+      expect(instance.inputHistory.undoStack).toEqual([]);
+      expect(instance.inputHistory.redoStack).toEqual([]);
+      expect(instance.inputHistory.currentLine).toBe("");
+      expect(terminalManager.undo(id)).toBe(false);
+    });
+
+    it("caps the undo stack at MAX_UNDO_STACK_SIZE", () => {
+      const id = "test-undo-cap";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      for (let i = 0; i < 150; i++) onData("x");
+
+      expect(instance.inputHistory.undoStack.length).toBe(100);
+      // 最古のエントリは破棄されている
+      expect(instance.inputHistory.undoStack[0]).not.toBe("");
+    });
+
+    it("clears redoStack when new input arrives after undo", () => {
+      const id = "test-undo-redo-invalidate";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("a");
+      onData("b");
+      terminalManager.undo(id);
+      expect(instance.inputHistory.redoStack.length).toBe(1);
+
+      onData("c");
+      expect(instance.inputHistory.redoStack).toEqual([]);
+    });
+
+    it("is a no-op on alternate screen (TUI)", () => {
+      const id = "test-undo-altscreen";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("a");
+      onData("b");
+      setAltScreen(instance, true);
+
+      // ALT screen 中は onData の履歴記録が止まる
+      onData("c");
+      expect(instance.inputHistory.currentLine).toBe("ab");
+
+      // undo も発火しない
+      expect(terminalManager.undo(id)).toBe(false);
+
+      // 戻れば再び動く
+      setAltScreen(instance, false);
+      expect(terminalManager.undo(id)).toBe(true);
+    });
+
+    it("sends Ctrl+E + Ctrl+U + previous line via pty.write on undo", () => {
+      const id = "test-undo-pty-write";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("h");
+      onData("i");
+      mockPtyApi.write.mockClear();
+
+      terminalManager.undo(id);
+
+      expect(mockPtyApi.write).toHaveBeenNthCalledWith(1, id, "\x05\x15");
+      expect(mockPtyApi.write).toHaveBeenNthCalledWith(2, id, "h");
+    });
+
+    it("writeWithHistory records control sequences sent by shortcuts", () => {
+      const id = "test-write-with-history";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onData = getOnDataCallback(instance);
+
+      onData("f");
+      onData("o");
+      onData("o");
+
+      terminalManager.writeWithHistory(id, "\x17"); // Ctrl+W: delete word backward
+      expect(instance.inputHistory.currentLine).toBe("");
+      expect(mockPtyApi.write).toHaveBeenLastCalledWith(id, "\x17");
     });
   });
 });

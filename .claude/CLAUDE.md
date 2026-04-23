@@ -36,7 +36,7 @@
 
 - **1-line**: macOS ネイティブで使える軽量な iTerm2 ライクなターミナル分割アプリ
 - **Primary user**: macOS で複数プロセスを並走させたい開発者（ビルド監視 / ログ tail / 対話シェル）
-- **Value**: 直感的な iTerm2 スタイル分割、日本語 IME 完全対応、入力行 Undo/Redo、CWD 継承 + Dock 統合、パッケージ版でも壊れないシェル環境
+- **Value**: 直感的な iTerm2 スタイル分割、日本語 IME 完全対応、CWD 継承 + Dock 統合、パッケージ版でも壊れないシェル環境
 - **Non-Goals**: tmux 代替、クロスプラットフォーム第一級サポート、プラグイン API、複雑なプロファイル、7 ペイン以上
 
 ---
@@ -96,16 +96,7 @@
 - nvm 互換: `npm_*` 環境変数を除去
 - 大量ペースト（>512B）: bracket paste（`\x1b[200~` / `\x1b[201~`）+ 1024B チャンク + 10ms 間隔
 
-### 3.5 Undo/Redo（terminalManager）
-
-- 行単位の `InputHistoryState`（`undoStack` / `redoStack` / `currentLine`）、最大 100 履歴
-- エコーバック 3 層防御: `undoRedoInProgress` フラグ + `pendingSentText` 文字列一致 + 300ms タイマー
-- 連続 Undo/Redo でタイマーを `clearTimeout` してリセット
-- Enter で履歴クリア、Cmd+Backspace は `clearLine()` 経由で履歴記録を伴う
-
-詳細・罠の背景: `docs/vision/coding-principles.md` §4、`docs/known-issues/002-cmd-backspace-undo-history.md`。
-
-### 3.6 IME Composition
+### 3.5 IME Composition
 
 - xterm.js 内部 `<textarea>` に `compositionstart` / `compositionend` を直接フック
 - コンポジション中の非 ASCII 文字は `onData` でスキップ（ASCII 制御文字は通す）
@@ -113,11 +104,11 @@
 
 詳細: `docs/code-explanation/05-advanced-features.md`。
 
-### 3.7 ショートカット
+### 3.6 ショートカット
 
 `App.tsx` で `window` の `keydown` を **capture phase** で監視し、xterm.js 到達前に処理。IME 中（`isComposing || keyCode === 229`）は無効化。一覧は §8 / `docs/requirements/tier-2-supporting.md` / `ShortcutsModal.tsx`。
 
-### 3.8 Dock / Window Manager
+### 3.7 Dock / Window Manager
 
 - OSC 7 で CWD を追跡 → `RecentDirectoryManager` が JSON 永続化（最大 10、ホーム除外、重複除去、存在チェック）
 - Dock メニューは「新しいウィンドウ」+ 最近のディレクトリ（`~` 短縮）で動的構築
@@ -226,7 +217,7 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 
 - 類似バグ遭遇時はまず [`docs/known-issues/INDEX.md`](./docs/known-issues/INDEX.md) を確認・キーワード grep
 - パッケージ版でのみ発生するバグは `LSEnvironment` / PATH 解決 / PTY encoding を疑う（Known Issue 001）
-- Undo / IME / ショートカット関連は `terminalManager.ts` のログ（`[recordHistory]` / `[onData]` / `[undo]`）を有効化
+- IME / ショートカット関連は `terminalManager.ts` の `[onData]` / composition ログを有効化
 - React の二重マウントで PTY が二重生成されそうな場合は `ptyCreated` フラグと `setTimeout(0)` の順序を確認
 - OSC 7 の CWD 追跡が動いていなければシェル側の `PROMPT_COMMAND` / `precmd` を確認
 
@@ -246,8 +237,7 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 - **T1-1**: iTerm2 スタイルのペイン分割（二分木、最大 6、ドラッグリサイズ、Cmd+W 兄弟昇格、Cmd+Option+Arrow フォーカス）
 - **T1-2**: xterm.js + node-pty によるネイティブシェル（PATH 多層フォールバック、日本語ロケール、bracket paste）
 - **T1-3**: 日本語 IME 入力の完全サポート（compositionstart/end 直接フック、dedup、`LSEnvironment`）
-- **T1-4**: 入力行 Undo/Redo（最大 100、エコーバック 3 層防御、Cmd+Backspace 履歴連動）
-- **T1-5**: CWD 継承と Dock 統合（分割時継承、OSC 7 追跡、最近のディレクトリ）
+- **T1-4**: CWD 継承と Dock 統合（分割時継承、OSC 7 追跡、最近のディレクトリ）
 
 ### Tier 2: 補助（あると価値が大幅増）
 
