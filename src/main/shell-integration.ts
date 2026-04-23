@@ -2,6 +2,7 @@ import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { spawnSync } from "child_process";
+import { app } from "electron";
 
 // 統合用一時ディレクトリ（遅延初期化、シングルトン）
 let integrationDir: string | null = null;
@@ -100,12 +101,13 @@ PROMPT_COMMAND="__td_prompt_command"
 }
 
 function getOrCreateIntegrationDir(): string {
-  if (integrationDir) return integrationDir;
+  // ディレクトリが存在するかチェック（macOSのtmpクリーンアップ対策）
+  if (integrationDir && fs.existsSync(integrationDir)) {
+    return integrationDir;
+  }
+  integrationDir = null;
 
-  integrationDir = path.join(
-    os.tmpdir(),
-    `terminal-division-shell-${process.pid}`,
-  );
+  integrationDir = path.join(app.getPath("userData"), "shell-integration");
   fs.mkdirSync(integrationDir, { recursive: true });
 
   const origZdotdir = process.env.ZDOTDIR || os.homedir();

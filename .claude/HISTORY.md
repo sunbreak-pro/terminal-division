@@ -1,5 +1,17 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-23 - Shell integration を userData 配下へ永続化 + Electron バイナリ復旧
+
+#### 概要
+
+シェル統合用一時ファイル（`.zshenv` / `.zshrc` / `.bashrc`）の配置先を `os.tmpdir()/terminal-division-shell-<pid>` から `app.getPath("userData")/shell-integration` に変更し、macOS の tmp クリーンアップによる消失で OSC 7770（プロンプトドット）や OSC 7（CWD 追跡）が動かなくなる問題を解消。併せて `npm run dev` 起動時に Electron バイナリ欠落で `ENOENT` 終了する環境問題を `node node_modules/electron/install.js` の再実行で復旧した。
+
+#### 変更点
+
+- **shell-integration.ts**: 統合ディレクトリを `app.getPath("userData")/shell-integration` に変更し、Electron app モジュールを import
+- **shell-integration.ts**: `getOrCreateIntegrationDir` に `fs.existsSync(integrationDir)` チェックを追加。macOS が裏でディレクトリを削除した場合も整合的に再生成する
+- **環境復旧**: `node_modules/electron/dist/Electron.app` が削除されていたため install.js を再実行してバイナリを再ダウンロード（コード変更なし、環境修復のみ）
+
 ### 2026-04-23 - ペイン切替時の最下部フォーカス + 画面外ドットの sticky 化修正
 
 #### 概要
@@ -63,14 +75,4 @@ code-plan-editor スキルに Pre-Plan（Workflow 0）と Post-Plan（Workflow 1
 - **SKILL.md（拡張）**: Workflow 0（既存計画スキャン、MEMORY.md確認、テンプレート注入）と Workflow 1.5（Plan mode出力検出、テンプレート変換、保存、task-tracker連携提案）を追加。Rulesセクションも拡張
 - **SKILL_INDEX.md（更新）**: code-plan-editor の説明を Plan mode 統合に反映
 
-### 2026-03-15 - カスタムアイコンへの置き換え
-
-#### 概要
-
-アプリアイコンを `terminal-division-icon.png` からImageMagick + iconutilで `.icns` に変換し、`resources/icon.icns` として配置した。`electron-builder.yml` は既に同パスを参照済みのため設定変更不要。
-
-#### 変更点
-
-- **resources/icon.icns**: `terminal-division-icon.png`（1024x1024 RGBA PNG）から各サイズ（16〜1024）を生成し、icns形式に変換して配置
-
-> 2026-04-23 ローリングアーカイブ: これ以前の 5 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-23 ローリングアーカイブ: これ以前の 6 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

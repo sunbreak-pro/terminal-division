@@ -2,6 +2,16 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-03-15 - カスタムアイコンへの置き換え
+
+#### 概要
+
+アプリアイコンを `terminal-division-icon.png` からImageMagick + iconutilで `.icns` に変換し、`resources/icon.icns` として配置した。`electron-builder.yml` は既に同パスを参照済みのため設定変更不要。
+
+#### 変更点
+
+- **resources/icon.icns**: `terminal-division-icon.png`（1024x1024 RGBA PNG）から各サイズ（16〜1024）を生成し、icns形式に変換して配置
+
 ### 2026-03-15 - 画面真っ暗バグの修正（onFocus APIエラー）
 
 #### 概要
