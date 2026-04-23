@@ -118,13 +118,12 @@ const App: React.FC = () => {
         return;
       }
 
-      // Cmd + Delete: 行全体を削除（Ctrl+E で行末へ、Ctrl+U で行頭まで削除）
+      // Cmd + Delete: カーソル位置から行頭まで削除
       if (isMeta && !isShift && !isOption && e.key === "Backspace") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          window.api.pty.write(activeTerminalId, "\x05"); // Ctrl+E: 行末へ
-          window.api.pty.write(activeTerminalId, "\x15"); // Ctrl+U: 行頭まで削除
+          window.api.pty.write(activeTerminalId, "\x15"); // Ctrl+U: backward-kill-line
         }
         return;
       }
