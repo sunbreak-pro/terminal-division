@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useSidebarStore } from "./sidebarStore";
 
 export interface FileNode {
   name: string;
@@ -27,6 +28,8 @@ interface FileTreeStore {
 
   loadDir: (path: string) => Promise<void>;
   invalidateDir: (path: string) => void;
+  // 指定ルート配下で展開中（= sidebarStore.expandedPaths に含まれる）の全ディレクトリ + ルート自身を再ロード
+  refreshAllExpanded: (rootPath: string) => Promise<void>;
   getDirState: (path: string) => DirState;
 
   acquireWatch: (path: string) => void;
@@ -67,6 +70,19 @@ export const useFileTreeStore = create<FileTreeStore>((set, get) => {
         // 既存エントリを保ったまま再ロードを発火する側に任せる
         void get().loadDir(path);
       }
+    },
+
+    refreshAllExpanded: async (rootPath) => {
+      const expanded = useSidebarStore.getState().expandedPaths;
+      // ルート + 当該ルート配下で展開中のパス。重複は Set で吸収
+      const targets = new Set<string>([rootPath]);
+      for (const p of expanded) {
+        if (p === rootPath || p.startsWith(rootPath + "/")) {
+          targets.add(p);
+        }
+      }
+      // 並列で読み直す。loadDir 内部で個別 setDirState するため Promise.all で OK
+      await Promise.all([...targets].map((p) => get().loadDir(p)));
     },
 
     getDirState: (path) => get().dirs.get(path) ?? IDLE_STATE,

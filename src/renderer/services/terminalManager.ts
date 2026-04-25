@@ -1,7 +1,9 @@
 import { Terminal, ITerminalOptions, IMarker, IDecoration } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { SearchAddon, ISearchOptions } from "@xterm/addon-search";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
+import { usePathHistoryStore } from "../stores/pathHistoryStore";
 
 // 行単位 Undo/Redo 履歴の最大保持数
 const MAX_UNDO_STACK_SIZE = 100;
@@ -15,6 +17,7 @@ export interface InputHistoryState {
 export interface TerminalInstance {
   terminal: Terminal;
   fitAddon: FitAddon;
+  searchAddon: SearchAddon;
   ptyCreated: boolean;
   compositionRegistered: boolean;
   // PTY 起動直後はシェルがまだ canonical mode で readline (zle) が起動していないため、
@@ -112,6 +115,10 @@ export function getOrCreate(
   const fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
 
+  // SearchAddon: Cmd+F のオーバーレイから利用
+  const searchAddon = new SearchAddon();
+  terminal.loadAddon(searchAddon);
+
   // WebLinksAddon: Cmd+クリック（Mac）/ Ctrl+クリック（Win/Linux）で外部ブラウザを開く
   const webLinksAddon = new WebLinksAddon((event, url) => {
     const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
@@ -164,6 +171,10 @@ export function getOrCreate(
   const dataListenerRemover = window.api.pty.onData((event) => {
     if (event.id === id) {
       terminal.write(event.data);
+      // パス履歴抽出は ALT screen 中はスキップ（vim/less の表示文字列を拾わない）
+      if (!isAltScreen(terminal)) {
+        feedPathHistory(id, event.data);
+      }
     }
   });
 
@@ -318,6 +329,7 @@ export function getOrCreate(
   const instance: TerminalInstance = {
     terminal,
     fitAddon,
+    searchAddon,
     ptyCreated: false,
     compositionRegistered: false,
     shellReady: false,
@@ -362,10 +374,14 @@ export function destroy(id: string): void {
 
   // メタデータのクリーンアップ
   useTerminalMetaStore.getState().removeMeta(id);
+  // パス履歴ストアのクリーンアップ
+  usePathHistoryStore.getState().removePane(id);
 
   registry.delete(id);
   // サイズキャッシュのクリーンアップ
   lastSizes.delete(id);
+  // パス履歴バッファのクリーンアップ
+  pathBuffers.delete(id);
   // プロンプトドット状態のクリーンアップ
   const dotState = promptDotStates.get(id);
   if (dotState) {
@@ -557,6 +573,110 @@ export function undo(id: string): boolean {
     window.api.pty.write(id, previous);
   }
   return true;
+}
+
+/**
+ * SearchAddon: 検索ナビゲーション
+ * - findNext / findPrevious は SearchAddon の検索ハイライトを移動
+ * - clearSearchDecorations は装飾を消す（オーバーレイ閉じ時）
+ */
+const DEFAULT_SEARCH_OPTIONS: ISearchOptions = {
+  decorations: {
+    matchBackground: "#5a4a00",
+    matchBorder: "#ffd866",
+    matchOverviewRuler: "#ffd866",
+    activeMatchBackground: "#a07000",
+    activeMatchBorder: "#ffd866",
+    activeMatchColorOverviewRuler: "#ffd866",
+  },
+};
+
+export function findNext(id: string, query: string): boolean {
+  const instance = registry.get(id);
+  if (!instance || query.length === 0) return false;
+  return instance.searchAddon.findNext(query, DEFAULT_SEARCH_OPTIONS);
+}
+
+export function findPrevious(id: string, query: string): boolean {
+  const instance = registry.get(id);
+  if (!instance || query.length === 0) return false;
+  return instance.searchAddon.findPrevious(query, DEFAULT_SEARCH_OPTIONS);
+}
+
+export function clearSearchDecorations(id: string): void {
+  const instance = registry.get(id);
+  if (!instance) return;
+  instance.searchAddon.clearDecorations();
+}
+
+/**
+ * パス履歴抽出
+ * - PTY 出力チャンクをペインごとに小さなバッファに溜め、改行ごとに 1 行として走査
+ * - 絶対 (`/...`, `~/...`) と相対 (`./...`, `../...`, `<word>/<word>`) を別々のパターンで拾う
+ * - 相対は CWD と組み合わせて絶対化したものも履歴に積む（重複は store 側で dedup）
+ * - ANSI エスケープは目視ノイズにしかならないため、抽出時に除去
+ */
+const pathBuffers = new Map<string, string>();
+const ANSI_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][AB012]/g;
+
+// セミコロン・カンマ等で囲まれた `path:line:col` も拾うため、終端は空白系まで広めに取る
+// `:NN` 末尾は履歴側でファイルとして扱えるように残す
+const ABS_PATH_RE = /(?:^|[\s'"`(<\[])((?:~|\/)[A-Za-z0-9._\-/@~+%]+)/g;
+const REL_PATH_RE =
+  /(?:^|[\s'"`(<\[])((?:\.{1,2}\/|[A-Za-z0-9_.-]+\/)[A-Za-z0-9._\-/@+%]+)/g;
+
+function feedPathHistory(id: string, chunk: string): void {
+  const cleaned = chunk.replace(ANSI_PATTERN, "");
+  const buf = (pathBuffers.get(id) ?? "") + cleaned;
+  const newlineIdx = buf.lastIndexOf("\n");
+  if (newlineIdx === -1) {
+    // 改行がまだ来ていない → 次のチャンクへ持ち越し（暴走防止に上限）
+    pathBuffers.set(id, buf.length > 8192 ? buf.slice(-4096) : buf);
+    return;
+  }
+  const lines = buf.slice(0, newlineIdx).split("\n");
+  pathBuffers.set(id, buf.slice(newlineIdx + 1));
+
+  const cwd = useTerminalMetaStore.getState().metas.get(id)?.cwd ?? null;
+  const store = usePathHistoryStore.getState();
+  for (const line of lines) {
+    if (line.length === 0 || line.length > 4096) continue;
+    extractPaths(line, cwd, (raw, kind) => {
+      store.addPath(id, raw, kind);
+    });
+  }
+}
+
+function extractPaths(
+  line: string,
+  cwd: string | null,
+  emit: (raw: string, kind: "absolute" | "relative") => void,
+): void {
+  ABS_PATH_RE.lastIndex = 0;
+  REL_PATH_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ABS_PATH_RE.exec(line)) !== null) {
+    emit(stripTrailingPunct(match[1]), "absolute");
+  }
+  if (cwd) {
+    while ((match = REL_PATH_RE.exec(line)) !== null) {
+      const raw = stripTrailingPunct(match[1]);
+      // 拡張子なしの単一識別子（例: `foo/bar`）も含むが、`http://`等は除外したい
+      if (!/^https?:\/\//.test(raw)) {
+        emit(raw, "relative");
+      }
+    }
+  }
+}
+
+function stripTrailingPunct(s: string): string {
+  return s.replace(/[)>\].,;:!?'"`]+$/, "");
+}
+
+export function clearPathBuffer(id: string): void {
+  pathBuffers.delete(id);
 }
 
 /**

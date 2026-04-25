@@ -1,5 +1,36 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-25 - Cmd+F 検索オーバーレイ + ペイン別パス履歴 + サイドバー再読み込み
+
+#### 概要
+
+3 機能を 1 PR で追加: (1) ペインごとの Cmd+F テキスト検索（`@xterm/addon-search` を `terminalManager` に統合し、アクティブペインの右上に浮かぶオーバーレイ。Esc 閉じる / Enter 次 / Shift+Enter 前 / Tab で Path 履歴へ切替）。(2) PTY 出力からペイン別に絶対 (`/...`, `~/...`) と相対 (`./...`, `<word>/<word>`) のパスを抽出し最大 200 件の履歴を蓄積。Path タブで絞り込み、Enter でターミナルにシェルエスケープ付き挿入、⌘C でコピー。(3) サイドバーのディレクトリツリー再読み込み機能。`UndoRedoToolbar` に Refresh アイコン、選択タブ切替時に自動 refresh、Cmd+R ショートカット（dev ビルドの page reload を抑止するため常時 preventDefault）。
+
+#### 変更点
+
+- **新規依存**: `@xterm/addon-search`
+- **新規ファイル (renderer)**:
+  - `components/TerminalSearchOverlay.tsx`: Cmd+F のオーバーレイ UI。Text / Path 履歴 のタブ切替、キーボード操作（Esc/Enter/Shift+Enter/Tab/↑↓/⌘C）
+  - `stores/pathHistoryStore.ts`: ペイン別パス履歴（最大 200、末尾スラッシュ正規化、再観測で count++、`removePane`/`clearPane` でクリーンアップ）
+  - `stores/terminalSearchStore.ts`: 検索オーバーレイの開閉状態（同時に 1 ペインのみ）
+- **既存編集 (renderer)**:
+  - `services/terminalManager.ts`: `SearchAddon` ロード、`findNext` / `findPrevious` / `clearSearchDecorations` を export。`pty:onData` で ALT screen 以外なら `feedPathHistory` に流す。ANSI escape を除去し改行ごとに `extractPaths` でパスを抽出（持ち越しバッファ上限 8KB / 行長 4KB ガード）。`destroy()` で `pathHistoryStore.removePane` と `pathBuffers.delete` を追加
+  - `components/TerminalPane.tsx`: `useSearchOpenForPane` で `TerminalSearchOverlay` を条件レンダリング
+  - `App.tsx`: 既存 capture-phase keydown ハンドラに Cmd+F（toggle search）と Cmd+R（refresh sidebar、常時 preventDefault）を追加
+  - `stores/fileTreeStore.ts`: `refreshAllExpanded(rootPath)` を追加。`sidebarStore.expandedPaths` から当該ルート配下の展開中パスを集め `Promise.all` で並列再ロード
+  - `components/Sidebar/Sidebar.tsx`: `selectedTabCwd` 変更時に `refreshAllExpanded` を発火（タブ切替時の自動再読み込み）
+  - `components/Sidebar/UndoRedoToolbar.tsx`: Refresh ボタン追加（spinner state は `isRefreshing` で disabled）
+  - `components/Sidebar/icons.tsx`: `RefreshIcon` を追加
+  - `components/ShortcutsModal.tsx`: `⌘ F`（ペイン内検索 / パス履歴）と `⌘ R`（ディレクトリツリー再読み込み）を追記
+- **新規テスト**: `pathHistoryStore.test.ts`（7 件）/ `terminalSearchStore.test.ts`（5 件）/ `fileTreeStore.test.ts`（3 件）。190 / 190 グリーン
+- **設計判断**:
+  - パス挿入は既存 D&D と同じ直接 `pty.write(formatPaths(...))` パターンに揃える（Cmd+Z 行 Undo の対象外）
+  - Cmd+R はサイドバー閉時にも常に preventDefault（dev で webContents.reload を防ぐため）
+  - 相対パス抽出は CWD が判明している時のみ。`http://`/`https://` は除外
+  - パス履歴の重複は末尾スラッシュ正規化キーで吸収。同一 raw 再観測時は count++ + lastSeenAt 更新
+  - 検索オーバーレイ開閉は同時 1 ペインに限定し、複数オーバーレイ並列を許さない（フォーカス競合を防ぐ）
+  - 既存 chokidar watch は維持。手動 refresh は chokidar が unwatch 中（タブ切替で release）に取り逃した変更を補完する位置付け
+
 ### 2026-04-25 - サイドバー UX 強化（タブ視認性 / D&D / Undo・Redo / パスコピー）
 
 #### 概要
@@ -70,20 +101,4 @@ Cmd+W で最後から 2 つ目のペインを閉じて `terminalCount === 1` に
 - **terminalManager.test.ts**: 旧 `isShellReady becomes true after the fallback timer fires` テストを「フォールバックなしで 60s 経っても false」「OSC 7770 ハンドラ "A" 発火で true」の 2 ケースに置換。130 / 130 グリーン
 - **デバッグセッション**: 真因特定は実環境ログ（`PTY OUTPUT contains ^A/^E/^K (canonical mode echo!): "[7m^A[27m"`）と PTY 内 `bindkey '^A'` 出力（`"^A" self-insert`、main keymap=`viins`）に依拠。subshell の `/bin/zsh -i -c` テストでは `EDITOR` 未設定で emacs に落ち気付けなかった点を反省として記録
 
-### 2026-04-25 - シェル起動中のショートカット由来 PTY 書き込みを抑制 + キー判定の toLowerCase 統一
-
-#### 概要
-
-`Cmd+←` / `Cmd+→` を押すと `^A` / `^E` が literal echo される問題を修正。原因は PTY 起動直後の数百ms〜2 秒、シェルが canonical mode (echoctl 有効) で readline (zle) がまだアクティブでないため、`\x01` / `\x05` 等の制御コードが `^A` / `^E` として echo されること。`OSC 7770;A`（プロンプト直前マーカー）の初回受信を「readline アクティブ化」のシグナルとして扱う `shellReady` 状態を `terminalManager` に追加し、起動完了までショートカット由来の PTY 書き込みを silent suppress するゲートを実装。あわせてキー判定の `e.key === "x"` を `.toLowerCase()` に統一して CapsLock 不感問題を解消し、`Cmd+Shift+Arrow` / `Cmd+Shift+A` のドキュメントも追記。
-
-#### 変更点
-
-- **terminalManager.ts**: `TerminalInstance.shellReady` / `shellReadyTimer` フィールド追加。`OSC 7770;A` 初回受信またはフォールバック 3 秒タイマで true。`destroy()` でタイマを clearTimeout。`isShellReady(id)` を export
-- **terminalManager.ts**: `writeWithHistory` / `undo` / `redo` を `!shellReady` で silent suppress（履歴汚染も同時防止）
-- **App.tsx**: `Cmd+←` / `Cmd+→` / `Option+←` / `Option+→` の直接 `pty.write` 4 箇所に `terminalManager.isShellReady(activeTerminalId)` ガード追加
-- **App.tsx**: `Cmd+D` / `Cmd+W` / `Cmd+Z` / `Cmd+K` / `Option+D` の `e.key === "x"` を `e.key.toLowerCase() === "x"` に統一（CapsLock ON で発火しなかった問題を解消）
-- **ShortcutsModal.tsx**: 未掲載だった `⌘ ⇧ ←/→/↑/↓` と `⌘ ⇧ A`（現在のプロンプト行を選択）を Line Editing カテゴリに追記
-- **terminalManager.test.ts**: `createReadyInstance` ヘルパーを導入し既存 9 件の undo/redo テストを置換。`shell readiness gating` describe ブロックに `isShellReady` の初期 false / フォールバック発火 / `writeWithHistory` 抑制 / `undo`/`redo` 抑制 / 非存在 ID の 5 件追加。129 / 129 グリーン
-- **再現テストでの根本原因確認**: node-pty に直接 `\x01` を T+500ms / +1000ms / +1500ms / +2000ms で送ると全て `^A` が echo され、T+2500ms（プロンプト到達後）からは正常に `\b\b\b\b\b` 等のカーソル移動シーケンスのみ返ることを確認
-
-> 2026-04-25 ローリングアーカイブ: これ以前の 14 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-25 ローリングアーカイブ: これ以前の 15 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

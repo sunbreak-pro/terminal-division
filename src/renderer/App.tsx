@@ -18,6 +18,9 @@ import {
 import { getAllTerminalIds } from "./utils/layoutUtils";
 import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
+import { useTerminalSearchStore } from "./stores/terminalSearchStore";
+import { useFileTreeStore } from "./stores/fileTreeStore";
+import { useSidebarStore } from "./stores/sidebarStore";
 
 const App: React.FC = () => {
   const activeTerminalId = useActiveTerminalId();
@@ -117,6 +120,29 @@ const App: React.FC = () => {
         e.preventDefault();
         if (activeTerminalId && terminalCount > 1) {
           closeTerminal(activeTerminalId);
+        }
+        return;
+      }
+
+      // Cmd + F: 検索オーバーレイを開く（ペインごと）
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeTerminalId) {
+          useTerminalSearchStore.getState().toggle(activeTerminalId);
+        }
+        return;
+      }
+
+      // Cmd + R: サイドバーのディレクトリツリーを再読み込み
+      // dev ビルドでは Electron のデフォルトで page reload になり得るため、
+      // サイドバーの状態に関わらず常に preventDefault する。
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        e.stopPropagation();
+        const { isOpen, selectedTabCwd } = useSidebarStore.getState();
+        if (isOpen && selectedTabCwd) {
+          void useFileTreeStore.getState().refreshAllExpanded(selectedTabCwd);
         }
         return;
       }

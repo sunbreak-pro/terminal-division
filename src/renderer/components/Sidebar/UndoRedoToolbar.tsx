@@ -1,20 +1,35 @@
-import React from "react";
+import React, { useState } from "react";
 import { useCurrentTheme, useThemeConfig } from "../../stores/themeStore";
 import {
   useFileOpsHistoryStore,
   describeOp,
 } from "../../stores/fileOpsHistoryStore";
 import { undoLast, redoLast } from "../../services/fileOpsService";
-import { UndoIcon, RedoIcon } from "./icons";
+import { useFileTreeStore } from "../../stores/fileTreeStore";
+import { useSidebarStore } from "../../stores/sidebarStore";
+import { UndoIcon, RedoIcon, RefreshIcon } from "./icons";
 
 export const UndoRedoToolbar: React.FC = () => {
   const theme = useCurrentTheme();
   const config = useThemeConfig();
   const undoStack = useFileOpsHistoryStore((s) => s.undoStack);
   const redoStack = useFileOpsHistoryStore((s) => s.redoStack);
+  const refreshAllExpanded = useFileTreeStore((s) => s.refreshAllExpanded);
+  const selectedTabCwd = useSidebarStore((s) => s.selectedTabCwd);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
+  const canRefresh = !!selectedTabCwd && !isRefreshing;
+  const handleRefresh = async (): Promise<void> => {
+    if (!selectedTabCwd || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await refreshAllExpanded(selectedTabCwd);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
   const undoTip = canUndo
     ? `元に戻す (${describeOp(undoStack[undoStack.length - 1])})`
     : "元に戻す履歴がありません";
@@ -79,6 +94,26 @@ export const UndoRedoToolbar: React.FC = () => {
         }}
       >
         <RedoIcon size={14} />
+      </button>
+      <button
+        type="button"
+        title={
+          canRefresh
+            ? "ツリーを再読み込み (Cmd+R)"
+            : "再読み込みできるタブがありません"
+        }
+        disabled={!canRefresh}
+        onClick={() => void handleRefresh()}
+        style={baseButtonStyle(canRefresh)}
+        onMouseEnter={(e) => {
+          if (canRefresh)
+            e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.backgroundColor = "transparent";
+        }}
+      >
+        <RefreshIcon size={14} />
       </button>
       <div style={{ flex: 1 }} />
       <span

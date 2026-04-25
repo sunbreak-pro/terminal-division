@@ -24,7 +24,12 @@ const shortcutCategories: ShortcutCategory[] = [
       { keys: "⌘ ⇧ D", description: "横に分割" },
       { keys: "⌘ W", description: "現在のターミナルを閉じる" },
       { keys: "⌘ O", description: "ファイルを選択してパスを挿入" },
+      { keys: "⌘ F", description: "ペイン内検索 / パス履歴" },
     ],
+  },
+  {
+    title: "Sidebar",
+    shortcuts: [{ keys: "⌘ R", description: "ディレクトリツリーを再読み込み" }],
   },
   {
     title: "Navigation",

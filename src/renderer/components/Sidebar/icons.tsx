@@ -135,6 +135,25 @@ export const RedoIcon: React.FC<IconProps> = ({
   </svg>
 );
 
+export const RefreshIcon: React.FC<IconProps> = ({
+  size = 14,
+  color = "currentColor",
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={color}
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+    <polyline points="21 3 21 8 16 8" />
+  </svg>
+);
+
 export const CopyIcon: React.FC<IconProps> = ({
   size = 14,
   color = "currentColor",

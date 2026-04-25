@@ -10,6 +10,11 @@ import { rafDebounceWithDelay } from "../utils/rafDebounce";
 import { TerminalSubHeader } from "./TerminalSubHeader";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { formatPaths } from "../utils/insertFiles";
+import {
+  useSearchOpenForPane,
+  useTerminalSearchStore,
+} from "../stores/terminalSearchStore";
+import { TerminalSearchOverlay } from "./TerminalSearchOverlay";
 
 const TD_PATH_MIME = "application/x-td-path";
 
@@ -25,6 +30,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
     const activeTerminalId = useActiveTerminalId();
     const { setActiveTerminal, closeTerminal } = useTerminalActions();
     const isActive = activeTerminalId === id;
+
+    const isSearchOpen = useSearchOpenForPane(id);
+    const closeSearch = useTerminalSearchStore((s) => s.close);
 
     const currentTheme = useCurrentTheme();
     const themeConfig = useThemeConfig();
@@ -223,6 +231,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
             width: "100%",
           }}
         />
+        {isSearchOpen && (
+          <TerminalSearchOverlay paneId={id} onClose={closeSearch} />
+        )}
       </div>
     );
   },

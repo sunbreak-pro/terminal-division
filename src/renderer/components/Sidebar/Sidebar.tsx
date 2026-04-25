@@ -19,6 +19,7 @@ import { SidebarTabs } from "./SidebarTabs";
 import { DirectoryTree } from "./DirectoryTree";
 import { ResizeHandle } from "./ResizeHandle";
 import { UndoRedoToolbar } from "./UndoRedoToolbar";
+import { useFileTreeStore } from "../../stores/fileTreeStore";
 
 export const Sidebar: React.FC = () => {
   const theme = useCurrentTheme();
@@ -86,6 +87,13 @@ export const Sidebar: React.FC = () => {
       setSelectedTabCwd(tabs[0].cwd);
     }
   }, [tabs, selectedTabCwd, setSelectedTabCwd]);
+
+  // タブを切り替えた瞬間にそのツリーを強制再読み込み（chokidar が
+  // バックグラウンドで取り逃した変更を拾う）
+  useEffect(() => {
+    if (!selectedTabCwd) return;
+    void useFileTreeStore.getState().refreshAllExpanded(selectedTabCwd);
+  }, [selectedTabCwd]);
 
   const handleSelectTab = (tab: CwdTab): void => {
     setSelectedTabCwd(tab.cwd);
