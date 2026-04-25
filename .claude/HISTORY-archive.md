@@ -2,6 +2,33 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-25 - Sidebar Cmd+Z/Cmd+Shift+Z/Cmd+. ショートカット + Claude 入力欄での Cmd+Z 暴発防止
+
+#### 概要
+
+3 系統の改善を 1 まとめで実装: (1) サイドバーの Undo/Redo（rename / move / trash）にキーボードショートカット `Cmd+Z` / `Cmd+Shift+Z` を割り当て。`sidebarStore.lastInteractedArea` を導入し、最後にマウスダウン or フォーカスしたエリア（sidebar / terminal）でディスパッチ先を切り替える。`<aside>` の `onMouseDownCapture` で sidebar、`TerminalPane` の `onMouseDown` と xterm textarea の `focus` で terminal をマーク。rename input にフォーカス中はブラウザ標準のテキスト Undo を尊重するため `isEditableTarget` ガードを通過させる。(2) サイドバーの開閉トグルに `Cmd+.` を追加（`useSidebarStore.toggleOpen` 直結）。(3) Claude Code（Ink TUI）など readline 非対応プロセスが前面にいるときの `Cmd+Z` で `\x05\x15` が入力欄に流れて壊れる問題の根本対策として、`terminalManager.isReadlineActive(id)` ヘルパを追加し前面プロセス名 = シェル名のときだけ `undo()` / `redo()` を発火させる no-op ガードを実装。
+
+#### 変更点
+
+- **新規 store フィールド (renderer)**: `sidebarStore.ts` に `lastInteractedArea: 'sidebar' | 'terminal'` と `setLastInteractedArea` を追加。同値 set で再生成しない冪等チェック付き
+- **App.tsx ショートカット拡張**:
+  - `Cmd+Z` ハンドラを書き換え。`isEditableTarget(target)` で input/textarea（xterm-helper-textarea を除く）/ contentEditable はパススルー
+  - `lastInteractedArea === 'sidebar'` かつ `useFileOpsHistoryStore.undoStack.length > 0` のとき `undoLast()`、それ以外は `terminalManager.undo(activeTerminalId)`。`Cmd+Shift+Z` も同様に redo を分岐
+  - `Cmd+.` ハンドラを新規追加し `useSidebarStore.toggleOpen()` を直接呼び出し
+  - 新規ヘルパ `isEditableTarget(target)` を export せず module scope に追加
+- **Sidebar.tsx**: `<aside>` に `data-sidebar-root="true"` と `onMouseDownCapture={() => setLastInteractedArea("sidebar")}` を付与
+- **TerminalPane.tsx**: `handleMouseDown` と `onFocus` callback で `setLastInteractedArea("terminal")` をマーク
+- **terminalManager.ts**: `isReadlineActive(id)` ヘルパを新規追加。`metas.processName === metas.shellName` をチェック。`processName === null` 時は `shellName` 確定済みなら true（起動直後の zsh プロンプト待ち状態を救済）。`undo()` / `redo()` の冒頭に `if (!isReadlineActive(id)) return false;` ガードを挿入
+- **ShortcutsModal.tsx**: Sidebar セクションに `⌘ .` / `⌘ Z` / `⌘ ⇧ Z` を追記。`<div key={shortcut.keys}>` の重複を `${category.title}:${shortcut.keys}` 複合キーに変更（Sidebar / Line Editing で `⌘ Z` が重複するため）
+- **新規/更新テスト**:
+  - `terminalManager.test.ts`: `__testMetas` 永続化 Map で `setShellName` / `setProcessName` を実反映するモックに置換。`createReadyInstance` で `shellName=processName="zsh"` を設定。`returns false when foreground process is not the shell` ケースを追加
+  - `sidebarStore.test.ts`: `beforeEach` 初期化に `lastInteractedArea: "terminal"` を補完。`setLastInteractedArea` の冪等性テストを 1 件追加
+  - `ShortcutsModal.test.tsx`: `getByText("⌘ Z")` を `getAllByText` に変更（Sidebar / Line Editing 両方に登場）
+- **設計判断**:
+  - サイドバー Undo の SC は Cmd+Z 標準互換を優先し、focus context ではなく「最後にマウス操作したエリア」で振り分ける（DOM focus が body に逃げるケースが多いため）。rename input 中はブラウザ Undo を尊重
+  - readline ガードは `processName === shellName` の単純比較。1 秒間隔ポーリングのため切替直後に数百 ms の race があるが、暴発より安全側
+  - Shift+Enter で `\n` 受信時に履歴をリセットする既存挙動は据え置き。多行 zsh コマンドの Undo 改善は将来の OSC 133 シェル統合 (Tier 3-3) に委ねる
+
 ### 2026-04-25 - Cmd+F 検索オーバーレイ + ペイン別パス履歴 + サイドバー再読み込み
 
 #### 概要

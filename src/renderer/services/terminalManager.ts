@@ -613,6 +613,8 @@ export interface SearchOptions {
   caseSensitive?: boolean;
   wholeWord?: boolean;
   regex?: boolean;
+  // findNext のみ有効。現在の選択範囲が新しい term にもマッチしている間は移動しない
+  incremental?: boolean;
 }
 
 function buildSearchOptions(options?: SearchOptions): ISearchOptions {
@@ -620,6 +622,7 @@ function buildSearchOptions(options?: SearchOptions): ISearchOptions {
     caseSensitive: options?.caseSensitive ?? false,
     wholeWord: options?.wholeWord ?? false,
     regex: options?.regex ?? false,
+    incremental: options?.incremental ?? false,
     decorations: SEARCH_DECORATIONS,
   };
 }
@@ -648,6 +651,22 @@ export function clearSearchDecorations(id: string): void {
   const instance = registry.get(id);
   if (!instance) return;
   instance.searchAddon.clearDecorations();
+}
+
+/**
+ * スクロールバックをクリアする。
+ * - terminal.clear(): バッファ全体を削除し、現在のプロンプト行を新しい先頭行にする
+ *   （PTY プロセス・シェル状態は触らないため、実行中のコマンドや履歴は保持）
+ * - clearTextureAtlas(): canvas renderer のテクスチャ腐敗（macOS スリープ復帰時の
+ *   表示崩れ等）を強制再描画でリセット
+ *
+ * 大量出力で重くなったときや、文字化け/表示崩れを直したいときに使う。
+ */
+export function clearScrollback(id: string): void {
+  const instance = registry.get(id);
+  if (!instance) return;
+  instance.terminal.clear();
+  instance.terminal.clearTextureAtlas();
 }
 
 export interface SearchResultInfo {

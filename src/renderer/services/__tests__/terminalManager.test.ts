@@ -31,6 +31,8 @@ vi.mock("@xterm/xterm", () => {
       .mockReturnValue({ isDisposed: false, dispose: vi.fn() });
     registerDecoration = vi.fn().mockReturnValue(null);
     write = vi.fn();
+    clear = vi.fn();
+    clearTextureAtlas = vi.fn();
     options = { theme: {}, fontFamily: "monospace", fontSize: 13 };
   }
   return { Terminal: MockTerminal };
@@ -408,6 +410,28 @@ describe("terminalManager", () => {
       terminalManager.selectCurrentLine("test-select-line");
 
       expect(instance.terminal.selectLines).toHaveBeenCalledWith(0, 0);
+    });
+  });
+
+  describe("clearScrollback", () => {
+    it("should call terminal.clear() and clearTextureAtlas() on the registered instance", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-clear",
+        defaultOptions,
+        defaultCallbacks,
+      );
+
+      terminalManager.clearScrollback("test-clear");
+
+      expect(instance.terminal.clear).toHaveBeenCalledTimes(1);
+      expect(instance.terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    });
+
+    it("should be a no-op for unknown id (safe even if pane already destroyed)", () => {
+      // 未登録 id では何も投げない・触らない
+      expect(() => {
+        terminalManager.clearScrollback("non-existent-pane");
+      }).not.toThrow();
     });
   });
 

@@ -2,6 +2,7 @@ import React, { useCallback, useMemo } from "react";
 import { useTerminalMeta } from "../stores/terminalMetaStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { promptAndInsertFiles } from "../utils/insertFiles";
+import * as terminalManager from "../services/terminalManager";
 
 interface TerminalSubHeaderProps {
   id: string;
@@ -58,7 +59,16 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [id],
     );
 
-    const handleInsertButtonEnter = useCallback(
+    // スクロールバッファをクリア（プロンプト行は残す。シェル状態には触れない）
+    const handleClearScrollback = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        terminalManager.clearScrollback(id);
+      },
+      [id],
+    );
+
+    const handleIconButtonEnter = useCallback(
       (e: React.MouseEvent<HTMLButtonElement>) => {
         e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
         e.currentTarget.style.color = theme.colors.text;
@@ -66,12 +76,34 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [theme.colors.buttonHover, theme.colors.text],
     );
 
-    const handleInsertButtonLeave = useCallback(
+    const handleIconButtonLeave = useCallback(
       (e: React.MouseEvent<HTMLButtonElement>) => {
         e.currentTarget.style.backgroundColor = "transparent";
         e.currentTarget.style.color = theme.colors.textSecondary;
       },
       [theme.colors.textSecondary],
+    );
+
+    // 共通アイコンボタンスタイル（挿入 / クリア）
+    const iconButtonStyle = useMemo<React.CSSProperties>(
+      () => ({
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "18px",
+        height: "18px",
+        padding: 0,
+        backgroundColor: "transparent",
+        color: theme.colors.textSecondary,
+        border: `1px solid ${theme.colors.border}`,
+        borderRadius: "4px",
+        cursor: "pointer",
+        fontSize: "14px",
+        lineHeight: 1,
+        transition: "background-color 0.15s ease, color 0.15s ease",
+      }),
+      [theme.colors.textSecondary, theme.colors.border],
     );
 
     return (
@@ -123,45 +155,63 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         >
           {processDisplay}
         </span>
-        <button
-          type="button"
-          onClick={handleInsertFile}
-          onMouseEnter={handleInsertButtonEnter}
-          onMouseLeave={handleInsertButtonLeave}
-          title="ファイルを挿入 (Cmd+O)"
-          aria-label="ファイルを挿入"
+        <div
           style={{
             marginLeft: "auto",
-            flexShrink: 0,
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
-            width: "18px",
-            height: "18px",
-            padding: 0,
-            backgroundColor: "transparent",
-            color: theme.colors.textSecondary,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: "4px",
-            cursor: "pointer",
-            fontSize: "14px",
-            lineHeight: 1,
-            transition: "background-color 0.15s ease, color 0.15s ease",
+            gap: "4px",
+            flexShrink: 0,
           }}
         >
-          <svg
-            width="10"
-            height="10"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="3"
-            strokeLinecap="round"
+          <button
+            type="button"
+            onClick={handleClearScrollback}
+            onMouseEnter={handleIconButtonEnter}
+            onMouseLeave={handleIconButtonLeave}
+            title="スクロールバックをクリア（プロンプト行は保持）"
+            aria-label="スクロールバックをクリア"
+            style={iconButtonStyle}
           >
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={handleInsertFile}
+            onMouseEnter={handleIconButtonEnter}
+            onMouseLeave={handleIconButtonLeave}
+            title="ファイルを挿入 (Cmd+O)"
+            aria-label="ファイルを挿入"
+            style={iconButtonStyle}
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+        </div>
       </div>
     );
   },

@@ -40,6 +40,13 @@ export const TerminalSearchOverlay: React.FC<TerminalSearchOverlayProps> = ({
   const [pathFilter, setPathFilter] = useState("");
   const [pathSelectedIdx, setPathSelectedIdx] = useState(0);
   const [searchMissing, setSearchMissing] = useState(false);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [useRegex, setUseRegex] = useState(false);
+  const [regexInvalid, setRegexInvalid] = useState(false);
+  // -1 / 0 はマッチなし、>=1 で実マッチ件数
+  const [resultCount, setResultCount] = useState(0);
+  const [resultIndex, setResultIndex] = useState(-1);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -56,21 +63,72 @@ export const TerminalSearchOverlay: React.FC<TerminalSearchOverlayProps> = ({
     };
   }, [paneId]);
 
+  // SearchAddon のヒット件数イベントを購読
+  useEffect(() => {
+    if (mode !== "text") return;
+    const unsubscribe = terminalManager.subscribeSearchResults(
+      paneId,
+      ({ resultIndex: idx, resultCount: count }) => {
+        setResultIndex(idx);
+        setResultCount(count);
+      },
+    );
+    return unsubscribe;
+  }, [paneId, mode]);
+
+  // 正規表現バリデーション（regex モード時のみ）
+  useEffect(() => {
+    if (!useRegex || query.length === 0) {
+      setRegexInvalid(false);
+      return;
+    }
+    try {
+      new RegExp(query);
+      setRegexInvalid(false);
+    } catch {
+      setRegexInvalid(true);
+    }
+  }, [useRegex, query]);
+
+  const searchOptions = useMemo(
+    () => ({ caseSensitive, wholeWord, regex: useRegex }),
+    [caseSensitive, wholeWord, useRegex],
+  );
+
   // === Text モード: 検索ナビゲーション ===
   const runFind = useCallback(
     (direction: "next" | "prev") => {
-      if (query.length === 0) {
+      if (query.length === 0 || regexInvalid) {
         setSearchMissing(false);
         return;
       }
       const found =
         direction === "next"
-          ? terminalManager.findNext(paneId, query)
-          : terminalManager.findPrevious(paneId, query);
+          ? terminalManager.findNext(paneId, query, searchOptions)
+          : terminalManager.findPrevious(paneId, query, searchOptions);
       setSearchMissing(!found);
     },
-    [paneId, query],
+    [paneId, query, searchOptions, regexInvalid],
   );
+
+  // クエリ・オプション変更時に装飾とヒット件数をリフレッシュ。
+  // incremental: true により、現在のマッチが新しい query にも引き続き
+  // マッチしている間はカーソルを動かさない（VSCode 風のインクリメンタル検索）。
+  useEffect(() => {
+    if (mode !== "text") return;
+    if (query.length === 0 || regexInvalid) {
+      terminalManager.clearSearchDecorations(paneId);
+      setSearchMissing(false);
+      setResultCount(0);
+      setResultIndex(-1);
+      return;
+    }
+    const found = terminalManager.findNext(paneId, query, {
+      ...searchOptions,
+      incremental: true,
+    });
+    setSearchMissing(!found);
+  }, [paneId, query, searchOptions, regexInvalid, mode]);
 
   // === Path モード: 履歴抽出 + フィルタ ===
   const rawHistory = usePathHistory(paneId);
@@ -117,6 +175,35 @@ export const TerminalSearchOverlay: React.FC<TerminalSearchOverlayProps> = ({
         e.preventDefault();
         onClose();
         return;
+      }
+
+      // テキスト編集系のショートカット（macOS 標準。Electron の <input> では
+      // Cmd+ArrowLeft/Right が効かない・Cmd+Backspace が行頭削除にならないことが
+      // あるため明示的にハンドリングする）
+      const isMod = e.metaKey || e.ctrlKey;
+      if (isMod) {
+        const target = e.currentTarget;
+        if (e.key === "Backspace") {
+          // Cmd+Backspace: 入力欄を全クリア
+          e.preventDefault();
+          if (mode === "text") {
+            setQuery("");
+          } else {
+            setPathFilter("");
+          }
+          return;
+        }
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          target.setSelectionRange(0, 0);
+          return;
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          const end = target.value.length;
+          target.setSelectionRange(end, end);
+          return;
+        }
       }
 
       if (mode === "text") {
@@ -182,6 +269,22 @@ export const TerminalSearchOverlay: React.FC<TerminalSearchOverlayProps> = ({
     userSelect: "none",
   });
 
+  // 検索オプショントグル（Aa / Ab / .*）。アクティブ時は強調色で塗る。
+  const optionButtonStyle = (active: boolean): React.CSSProperties => ({
+    padding: "0 6px",
+    minWidth: 26,
+    fontSize: 11,
+    fontFamily: "Menlo, Monaco, monospace",
+    cursor: "pointer",
+    border: `1px solid ${active ? theme.colors.accent : theme.colors.border}`,
+    borderRadius: config.borderRadius,
+    backgroundColor: active
+      ? theme.colors.accent
+      : theme.colors.headerBackground,
+    color: active ? "#ffffff" : theme.colors.textSecondary,
+    userSelect: "none",
+  });
+
   return (
     <div
       role="dialog"
@@ -240,28 +343,68 @@ export const TerminalSearchOverlay: React.FC<TerminalSearchOverlayProps> = ({
 
       {mode === "text" ? (
         <>
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSearchMissing(false);
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder="検索ワード… Enter で次へ / Shift+Enter で前へ"
-            spellCheck={false}
+          <div
             style={{
-              width: "100%",
-              backgroundColor: theme.colors.background,
-              color: theme.colors.text,
-              border: `1px solid ${searchMissing ? theme.colors.danger : theme.colors.border}`,
-              borderRadius: config.borderRadius,
-              padding: "4px 6px",
-              fontSize: 12,
-              fontFamily: "inherit",
-              boxSizing: "border-box",
+              display: "flex",
+              alignItems: "stretch",
+              gap: 4,
             }}
-          />
+          >
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSearchMissing(false);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="検索ワード… Enter で次へ / Shift+Enter で前へ"
+              spellCheck={false}
+              style={{
+                flex: 1,
+                backgroundColor: theme.colors.background,
+                color: theme.colors.text,
+                border: `1px solid ${
+                  regexInvalid || searchMissing
+                    ? theme.colors.danger
+                    : theme.colors.border
+                }`,
+                borderRadius: config.borderRadius,
+                padding: "4px 6px",
+                fontSize: 12,
+                fontFamily: "inherit",
+                boxSizing: "border-box",
+                minWidth: 0,
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setCaseSensitive((v) => !v)}
+              title="大文字と小文字を区別 (Aa)"
+              aria-pressed={caseSensitive}
+              style={optionButtonStyle(caseSensitive)}
+            >
+              Aa
+            </button>
+            <button
+              type="button"
+              onClick={() => setWholeWord((v) => !v)}
+              title="単語単位で一致 (Ab)"
+              aria-pressed={wholeWord}
+              style={optionButtonStyle(wholeWord)}
+            >
+              Ab
+            </button>
+            <button
+              type="button"
+              onClick={() => setUseRegex((v) => !v)}
+              title="正規表現 (.*)"
+              aria-pressed={useRegex}
+              style={optionButtonStyle(useRegex)}
+            >
+              .*
+            </button>
+          </div>
           <div style={{ display: "flex", gap: 6, fontSize: 11 }}>
             <button
               type="button"
@@ -280,15 +423,22 @@ export const TerminalSearchOverlay: React.FC<TerminalSearchOverlayProps> = ({
             <div style={{ flex: 1 }} />
             <span
               style={{
-                color: searchMissing
-                  ? theme.colors.danger
-                  : theme.colors.textSecondary,
+                color:
+                  regexInvalid || (searchMissing && query.length > 0)
+                    ? theme.colors.danger
+                    : theme.colors.textSecondary,
                 alignSelf: "center",
               }}
             >
-              {searchMissing && query.length > 0
-                ? "見つかりません"
-                : "Tab: Path"}
+              {regexInvalid
+                ? "正規表現が不正です"
+                : query.length === 0
+                  ? "Tab: Path"
+                  : resultCount === 0
+                    ? "見つかりません"
+                    : resultIndex < 0
+                      ? `${resultCount} 件超`
+                      : `${resultIndex + 1} / ${resultCount}`}
             </span>
           </div>
         </>
