@@ -131,7 +131,7 @@ describe("validateSerializedLayout", () => {
 
   it("rejects split with wrong children count", () => {
     const layout = validLayout();
-    const split = layout.nodes[0][1] as Record<string, unknown>;
+    const split = layout.nodes[0][1] as unknown as Record<string, unknown>;
     split.children = ["a"];
     expect(validateSerializedLayout(layout)).toBeNull();
   });
