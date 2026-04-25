@@ -4,6 +4,8 @@ import { createWindow, canCreateWindow } from "./window-manager";
 import { recentDirectoryManager } from "./recent-directories";
 import { fileSystemManager } from "./file-system-handler";
 import { sidebarStateManager } from "./sidebar-state";
+import { sessionStateManager } from "./session-state";
+import type { SerializedLayout } from "./types/session-state";
 
 // IPCハンドラー登録（アプリ起動時に一度だけ呼ぶ）
 export function setupIpcHandlers(): void {
@@ -248,6 +250,24 @@ export function setupIpcHandlers(): void {
   ipcMain.handle("sidebar:getWidth", () => sidebarStateManager.getWidth());
   ipcMain.on("sidebar:setWidth", (_, width: number) => {
     sidebarStateManager.setWidth(width);
+  });
+
+  // ========== Session persistence ==========
+
+  // 復元データは最初の 1 回だけ返す（multi-window はスコープ外）
+  let sessionRestoreConsumed = false;
+  ipcMain.handle("session:getRestoreData", () => {
+    if (sessionRestoreConsumed) return null;
+    sessionRestoreConsumed = true;
+    return sessionStateManager.getRestoreData();
+  });
+
+  ipcMain.on("session:save", (_, payload: SerializedLayout) => {
+    sessionStateManager.save(payload);
+  });
+
+  ipcMain.on("session:clear", () => {
+    sessionStateManager.clear();
   });
 
   app.on("before-quit", () => {

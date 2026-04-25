@@ -18,6 +18,9 @@ interface TerminalMetaStore {
   initMeta: (id: string) => void;
   removeMeta: (id: string) => void;
   touchActive: (id: string) => void;
+  // セッション復元時に各葉ペインの cwd を一括投入する。
+  // initMeta の上書き禁止ガードを尊重しつつ、既存メタも cwd を上書きできる専用 action。
+  hydrateMetas: (entries: Array<[string, { cwd: string | null }]>) => void;
 }
 
 // セッション内で単調増加するカウンタ（initMeta / touchActive の両方で使用）
@@ -61,6 +64,23 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
     removeMeta: (id) => {
       const metas = new Map(get().metas);
       metas.delete(id);
+      set({ metas });
+    },
+
+    hydrateMetas: (entries) => {
+      const metas = new Map(get().metas);
+      for (const [id, { cwd }] of entries) {
+        const seq = nextSeq();
+        const existing = metas.get(id);
+        metas.set(id, {
+          cwd,
+          processName: existing?.processName ?? null,
+          shellName: existing?.shellName ?? null,
+          // 復元時は順序が決まらないため、エントリ順に createdAt を割り振る
+          createdAt: existing?.createdAt ?? seq,
+          lastActiveAt: existing?.lastActiveAt ?? seq,
+        });
+      }
       set({ metas });
     },
   };

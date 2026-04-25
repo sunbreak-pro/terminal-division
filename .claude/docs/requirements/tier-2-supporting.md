@@ -89,3 +89,34 @@ Tier 1 のコア体験を補強する機能。実装済みだが中核ではな�
 ### Dependencies
 
 - `theme.ts` / `globals.css` / `themeStore.ts`
+
+---
+
+## T2-7: セッション永続化
+
+### Purpose
+
+アプリ再起動時に前回のペイン分割構成と各ペインの CWD を復元し、ビルド監視 / ログ tail / 対話シェルなどの "作業セット" を毎回手動で組み直さずに済むようにする。
+
+### Boundary
+
+- **含む**: レイアウト二分木（`nodes` + `rootId`）の JSON 永続化、起動時の単一ウィンドウ復元、各葉ペインの CWD 復元、検証失敗時のサイレントフォールバック
+- **含まない**: 実行中プロセスの復元、コマンド履歴、ウィンドウ位置・サイズ、Multi-window の同時復元
+
+### Acceptance Criteria
+
+- [x] 永続先は `app.getPath("userData")/session-state.json`
+- [x] レイアウト変更（split/close）と CWD 変更（OSC 7）を契機に Renderer → Main で IPC 送信、Main 側 250ms debounce
+- [x] 起動時に最初のウィンドウだけが復元データを受け取る（Dock 経由の追加ウィンドウは `initialCwd` 優先）
+- [x] React マウント前に同期復元（`main.tsx` で `await getRestoreData()` → `restoreSession()`）
+- [x] スキーマ version 不一致 / ノード数超過 / ツリー整合性違反は全体破棄して単一ペイン起動
+- [x] PTY は新規生成、保存 CWD で起動。CWD が存在しなければ HOME に落ちる
+- [x] 検証ロジックの単体テスト（Main 側 13 件、Renderer 側 11 件 + hydrate 4 件）
+
+### Dependencies
+
+- `src/main/session-state.ts` / `src/main/types/session-state.ts`
+- `src/renderer/services/sessionRestore.ts` / `src/renderer/services/sessionPersist.ts`
+- `src/renderer/main.tsx`（起動時復元呼び出し）
+- `src/renderer/stores/terminalStore.ts`（`hydrateLayout`）
+- `src/renderer/stores/terminalMetaStore.ts`（`hydrateMetas`）

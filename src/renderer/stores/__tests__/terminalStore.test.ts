@@ -214,4 +214,79 @@ describe("terminalStore", () => {
       expect(useTerminalStore.getState().terminalCount).toBe(6);
     });
   });
+
+  describe("hydrateLayout", () => {
+    it("should replace store with provided layout (split + 2 leaves)", () => {
+      const split: SplitNode = {
+        id: "s1",
+        type: "split",
+        direction: "horizontal",
+        children: ["a", "b"],
+        parentId: null,
+      };
+      const a: TerminalPane = { id: "a", parentId: "s1" };
+      const b: TerminalPane = { id: "b", parentId: "s1" };
+      const nodes = new Map<string, SplitNode | TerminalPane>([
+        ["s1", split],
+        ["a", a],
+        ["b", b],
+      ]);
+
+      const ok = useTerminalStore
+        .getState()
+        .hydrateLayout({ nodes, rootId: "s1", activeTerminalId: "b" });
+
+      expect(ok).toBe(true);
+      const state = useTerminalStore.getState();
+      expect(state.rootId).toBe("s1");
+      expect(state.terminalCount).toBe(2);
+      expect(state.activeTerminalId).toBe("b");
+      expect(state.nodes.size).toBe(3);
+    });
+
+    it("should reject when rootId is missing in nodes", () => {
+      const a: TerminalPane = { id: "a", parentId: null };
+      const nodes = new Map([["a", a]]);
+      const ok = useTerminalStore
+        .getState()
+        .hydrateLayout({ nodes, rootId: "missing" });
+      expect(ok).toBe(false);
+    });
+
+    it("should reject when leaf count exceeds MAX_TERMINALS", () => {
+      // 7 leaves with no splits — invalid but tests cap enforcement
+      const nodes = new Map<string, TerminalPane>();
+      for (let i = 0; i < 7; i++) {
+        nodes.set(`p${i}`, { id: `p${i}`, parentId: null });
+      }
+      const ok = useTerminalStore
+        .getState()
+        .hydrateLayout({ nodes, rootId: "p0" });
+      expect(ok).toBe(false);
+    });
+
+    it("should fall back to first leaf when activeTerminalId is not a leaf", () => {
+      const split: SplitNode = {
+        id: "s1",
+        type: "split",
+        direction: "vertical",
+        children: ["a", "b"],
+        parentId: null,
+      };
+      const a: TerminalPane = { id: "a", parentId: "s1" };
+      const b: TerminalPane = { id: "b", parentId: "s1" };
+      const nodes = new Map<string, SplitNode | TerminalPane>([
+        ["s1", split],
+        ["a", a],
+        ["b", b],
+      ]);
+      const ok = useTerminalStore
+        .getState()
+        .hydrateLayout({ nodes, rootId: "s1", activeTerminalId: "s1" });
+      expect(ok).toBe(true);
+      // active は最初の葉（a または b のどちらか）
+      const active = useTerminalStore.getState().activeTerminalId;
+      expect(["a", "b"]).toContain(active);
+    });
+  });
 });

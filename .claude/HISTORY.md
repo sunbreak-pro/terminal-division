@@ -1,5 +1,29 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-25 - セッション永続化（T2-7、レイアウトと CWD の復元）
+
+#### 概要
+
+アプリ再起動時に前回のペイン分割構成と各葉ペインの CWD を復元する機能を実装（T3-4 → T2-7 へ昇格）。レイアウト二分木（`nodes` + `rootId`）と各葉ペインの cwd のみを `userData/session-state.json` に永続化し、起動時に最初のウィンドウへ同期復元する。実行中プロセス・コマンド履歴・ウィンドウサイズ・multi-window はスコープ外。検証失敗（version 不一致 / ノード数超過 / ツリー整合性違反）時はサイレントフォールバックで単一ペイン起動。React マウント前に `await window.api.session.getRestoreData()` で同期取得し、`terminalStore.hydrateLayout()` / `terminalMetaStore.hydrateMetas()` でストアを差し替えるため、TerminalPane が PTY を生成するときには既に保存 CWD がメタストアに乗っており、追加の配線なしで復元 PTY が正しい CWD で起動する。
+
+#### 変更点
+
+- **新規ファイル (Main)**: `src/main/types/session-state.ts`（DTO: `SerializedLayout` / `SerializedNode` / `SerializedMeta`、`SESSION_STATE_VERSION=1`、`MAX_NODES=11`）/ `src/main/session-state.ts`（`SessionStateManager` シングルトン、250ms debounce、検証ロジック: version / ノード数 / rootId / parent-children 整合 / サイクル / 孤立ノード / direction / 葉数 ≤ 6、metas は葉のみに絞り込み）
+- **新規ファイル (Renderer)**: `services/sessionRestore.ts`（`serializeCurrentSession` / `deserializeLayout` / `restoreSession`、防衛的な再検証）/ `services/sessionPersist.ts`（store 購読 + 200ms debounced IPC 送信、レイアウト構造変化と CWD 変化のみ検出、同一スナップショット抑制）
+- **既存編集 (Main)**: `ipc-handlers.ts` に `session:getRestoreData` (handle、最初の 1 回のみ返却、`sessionRestoreConsumed` フラグ管理) / `session:save` / `session:clear` を追加。`window-manager.ts` は変更なし（initial 単一ウィンドウへの配線は invoke 方式で renderer 側に集約）
+- **既存編集 (Preload)**: `window.api.session.{ save, clear, getRestoreData }` を公開。`getRestoreData` は `Promise<SerializedLayout | null>`（buffer + on(...) push 方式は React マウント前のレースを誘発するため invoke ベースに統一）
+- **既存編集 (Renderer Stores)**: `terminalStore.hydrateLayout()` を追加（rootId 存在 / 葉数 ≤ 6 / activeTerminalId フォールバック）。`terminalMetaStore.hydrateMetas()` を追加（initMeta の上書き禁止ガードを尊重しつつ復元時のみ既存メタ置換可能）
+- **既存編集 (Renderer Entry)**: `main.tsx` で `await window.api.session.getRestoreData()` → `restoreSession()` を React マウント前に同期実行。`App.tsx` の `useEffect` で `startSessionPersist()` を購読開始
+- **新規テスト**: `main/__tests__/session-state.test.ts`（13 件、検証の正常系 + 各破損パターン）/ `renderer/services/__tests__/sessionRestore.test.ts`（11 件、serialize / deserialize / round-trip / restoreSession）。`stores/__tests__/terminalStore.test.ts` に `hydrateLayout` 4 件追加。合計 17 ファイル / 226 件グリーン
+- **設計判断**:
+  - 復元データの取得は push (webContents.send + buffer) ではなく pull (ipcMain.handle + invoke) にすることで「main.tsx より IPC 受信が遅れる race」を構造的に解消
+  - 保存トリガは「レイアウト構造変化」と「CWD 変化」のみ。フォーカス切替や processName 更新では IPC を起こさない（直前スナップショットとの JSON 文字列比較で重複保存も抑制）
+  - debounce は renderer 側 200ms + Main 側 250ms の二段（IPC 回数とファイル I/O 回数の両方を抑制）
+  - multi-window はスコープ外。`sessionRestoreConsumed` フラグで最初の getRestoreData 呼び出しだけが復元データを返す
+  - スキーマバージョニングを v1 から導入し、将来の互換性破壊を `version !== 1` で全体破棄に倒す
+  - CWD が起動時に存在しないケースは PTY 側の HOME フォールバックに委ね、レイアウト構造は維持
+- **ドキュメント更新**: `CLAUDE.md` §3.7 セッション永続化節を新設、Tier Map の T3-4 を T2-7 へ昇格。`docs/requirements/tier-2-supporting.md` に T2-7 の Acceptance Criteria を追加。`docs/requirements/tier-3-experimental.md` から T3-4 を削除し T3-5 を T3-4 に繰上げ
+
 ### 2026-04-25 - サイドバーの「相対パスをコピー」をアクティブターミナルの CWD 起点に修正
 
 #### 概要
@@ -100,19 +124,4 @@
   - copy 操作は undo 履歴に積まない(逆操作=削除は破壊的すぎる)
   - 編集中(リネーム入力中)は draggable を無効化
 
-### 2026-04-25 - 左サイドバー追加（CWD 別タブ + ディレクトリツリー + ファイル操作）
-
-#### 概要
-
-Header の Title 右隣にトグルアイコンを追加し、開閉可能な左サイドバーを実装。サイドバー上部に各ペインの CWD 別タブを縦スタックで並べ（同 CWD のペインは 1 タブに集約、basename 衝突時は `name (parent)` 形式へ自動書換、tooltip でフルパス表示）、下にツリーを描画する。ツリーは lazy 展開（クリックで `fs:readDir` を発火）し、展開されたノードのみ `chokidar` (`depth: 0`) で参照カウント付きで watch、折りたたみ時に解放する。隠しファイル / `node_modules` も除外せず全表示。アクティブペインとタブは双方向に同期し、集約タブクリック時は所属ペインのうち直近アクティブだったペインをアクティブ化する（`terminalMetaStore` に `lastActiveAt` 単調増加カウンタを追加）。ファイルは右クリック / ダブルクリックでコンテキストメニュー（削除＝ゴミ箱 / 移動＝ネイティブダイアログ / 名称変更＝インライン編集 / そのディレクトリに移動 / VSCode で開く）、タブは右クリックで相対パス・フルパスのコピー。サイドバー幅のみ `userData/sidebar-state.json` に永続化、開閉状態と展開状態と選択タブはセッション内のみ。
-
-#### 変更点
-
-- **新規 IPC**: `fs:readDir` / `fs:watch` / `fs:unwatch` / `fs:rename` / `fs:moveToDir` / `fs:trash` / `fs:openInVSCode` / `sidebar:getWidth` / `sidebar:setWidth` を `ipc-handlers.ts` に追加。`fs:change` を main → renderer ブロードキャスト
-- **新規ファイル（main）**: `file-system-handler.ts`（chokidar 統合・参照カウント watcher・rename / moveToDir / trash / VSCode spawn）、`sidebar-state.ts`（幅の debounced 永続化、180–600px clamp）
-- **新規ファイル（renderer）**: `stores/sidebarStore.ts` / `stores/fileTreeStore.ts` / `utils/labelCollision.ts` + テスト（19 件）/ `components/Sidebar/` 配下に Sidebar / SidebarTabs / DirectoryTree / TreeNode / ResizeHandle / ContextMenu / ErrorToast / icons の 8 コンポーネント
-- **既存編集**: `App.tsx` レイアウトを Header の下に flex row（Sidebar + 既存 SplitContainer）化、`Header.tsx` にサイドバートグル追加、`terminalMetaStore.ts` に `lastActiveAt` / `createdAt` / `touchActive` 追加、`terminalStore.setActiveTerminal` から `touchActive` を自動連動、`preload/index.ts` に `window.api.fs.*` / `window.api.sidebar.*` を公開、`electron.vite.config.ts` の main rollup external に `chokidar` / `fsevents` を追加
-- **依存追加**: `chokidar@^3.6.0`
-- **設計判断**: ペインの右クリックメニューは存在しない / VSCode CLI 不在時はトーストで案内 / 移動先選択は OS ネイティブダイアログ / インライン編集の選択範囲は basename の拡張子前まで自動選択
-
-> 2026-04-25 ローリングアーカイブ: これ以前の 17 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-25 ローリングアーカイブ: これ以前の 18 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

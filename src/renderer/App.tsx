@@ -23,6 +23,7 @@ import { useFileTreeStore } from "./stores/fileTreeStore";
 import { useSidebarStore } from "./stores/sidebarStore";
 import { useFileOpsHistoryStore } from "./stores/fileOpsHistoryStore";
 import { undoLast, redoLast } from "./services/fileOpsService";
+import { startSessionPersist } from "./services/sessionPersist";
 
 // xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
 // 通常の input/textarea ではない。Cmd+Z 等を sidebar / terminal にディスパッチする
@@ -368,6 +369,11 @@ const App: React.FC = () => {
   // 他のウィンドウからのテーマ同期を受信
   useEffect(() => {
     return setupThemeSync();
+  }, []);
+
+  // セッション永続化: レイアウト / CWD 変更を debounced に Main へ送る
+  useEffect(() => {
+    return startSessionPersist();
   }, []);
 
   return (

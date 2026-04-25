@@ -108,7 +108,17 @@
 
 `App.tsx` で `window` の `keydown` を **capture phase** で監視し、xterm.js 到達前に処理。IME 中（`isComposing || keyCode === 229`）は無効化。一覧は §8 / `docs/requirements/tier-2-supporting.md` / `ShortcutsModal.tsx`。
 
-### 3.7 Dock / Window Manager
+### 3.7 セッション永続化
+
+- 永続先: `app.getPath("userData")/session-state.json`
+- 保存対象: レイアウト二分木（`nodes` + `rootId`）と各葉ペインの CWD のみ。実行中プロセス・コマンド履歴・ウィンドウサイズは対象外
+- 保存トリガ: Renderer の `sessionPersist.ts` が `terminalStore` / `terminalMetaStore` を購読し、レイアウト構造変化と CWD 変化のみ検出。renderer 側 200ms debounce で IPC 送信（`session:save`）→ Main 側 `SessionStateManager` がさらに 250ms debounce してファイル書込
+- 復元フロー: 起動時に `main.tsx` が `window.api.session.getRestoreData()` を await し、結果があれば React マウント前に `restoreSession()` でストアを差し替える。最初のウィンドウだけが復元データを受け取る（`session:getRestoreData` ハンドラ内で `sessionRestoreConsumed` フラグ管理、Dock 経由の追加ウィンドウは `initialCwd` 優先）
+- 検証: version、ノード数 ≤ 11（葉 6 + 分岐 5）、葉 ≤ 6、`rootId` 存在、parentId/children 整合、サイクル・孤立ノード検出。1 つでも違反したら全体破棄して単一ペインで起動
+- CWD 不存在ケース: 保存 CWD のディレクトリが起動時に存在しなくても PTY 側で HOME に落ちる（既存挙動）。レイアウト構造は維持
+- 実装ファイル: `src/main/session-state.ts` / `src/main/types/session-state.ts` / `src/renderer/services/sessionRestore.ts` / `src/renderer/services/sessionPersist.ts`
+
+### 3.8 Dock / Window Manager
 
 - OSC 7 で CWD を追跡 → `RecentDirectoryManager` が JSON 永続化（最大 10、ホーム除外、重複除去、存在チェック）
 - Dock メニューは「新しいウィンドウ」+ 最近のディレクトリ（`~` 短縮）で動的構築
@@ -246,15 +256,15 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 - **T2-3**: 外部リンクとディレクトリ移動（WebLinks、ネイティブダイアログ）
 - **T2-4**: 単一テーマとスタイル
 - **T2-5**: 左サイドバー（CWD 別縦タブ + lazy ディレクトリツリー + chokidar watch + ファイル操作 / 削除・移動・名称変更・cd・VSCode 起動）。Header の Title 右隣のトグルで開閉、幅のみ永続化
-- **T2-6**: サイドバー D&D（ツリー内移動 / 外部 Finder からのコピー / OS ネイティブ drag によるツリー外搬出 / ターミナルへのパス挿入）と Undo/Redo（rename・move・trash の 50 件スタック、ゴミ箱追跡復元、サイドバー上部アイコン）、ファイル右クリックメニューでの相対/フルパスコピー
+- **T2-6**: サイドバー D&D（ツリー内移動 / 外部 Finder からのコピー / OS ネイティブ drag によるツリー外搬出 / ターミナルへのパス挿入）と Undo/Redo（rename・move・trash の 50 件スタック、ゴミ箱追跡復元、サイドバー上部アイコン）、ファイル右クリックメニューでの相対/フルパスコピー（アクティブ ターミナル CWD 起点）
+- **T2-7**: セッション永続化（レイアウト二分木 + 各ペインの CWD のみ JSON 永続化、起動時に最初のウィンドウへ復元、検証失敗時はサイレントフォールバック、multi-window はスコープ外）
 
 ### Tier 3: 実験 / 凍結候補
 
 - **T3-1**: タブ機能（未定）
 - **T3-2**: プロファイル / テーマ管理（凍結）
 - **T3-3**: シェル統合（OSC 133、候補）
-- **T3-4**: セッション永続化（候補）
-- **T3-5**: テスト環境整備強化（随時追加）
+- **T3-4**: テスト環境整備強化（随時追加）
 
 ---
 

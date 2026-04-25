@@ -14,6 +14,13 @@ export type { SplitDirection, TerminalPane, SplitNode, LayoutNode };
 
 const MAX_TERMINALS = 6;
 
+export interface HydrateLayoutInput {
+  nodes: Map<string, LayoutNode>;
+  rootId: string;
+  // 復元時にアクティブ化するペイン ID（葉に限る）。未指定なら最初の葉。
+  activeTerminalId?: string | null;
+}
+
 export interface TerminalStore {
   nodes: Map<string, LayoutNode>;
   rootId: string;
@@ -24,6 +31,8 @@ export interface TerminalStore {
   splitTerminal: (terminalId: string, direction: SplitDirection) => boolean;
   closeTerminal: (terminalId: string) => void;
   canSplit: () => boolean;
+  // セッション復元: 検証済みのレイアウトでストアを置換する
+  hydrateLayout: (input: HydrateLayoutInput) => boolean;
 }
 
 function generateId(): string {
@@ -117,6 +126,27 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       });
     }
 
+    return true;
+  },
+
+  hydrateLayout: ({ nodes, rootId, activeTerminalId }) => {
+    // 防衛的な検証: rootId が存在しない、葉が 0 / >6、または MAX 超過なら拒否
+    if (!nodes.has(rootId)) return false;
+    const leaves = Array.from(nodes.values()).filter(isTerminalPane);
+    if (leaves.length === 0 || leaves.length > MAX_TERMINALS) return false;
+
+    // activeTerminalId は葉でなければ最初の葉に落とす
+    const resolvedActive =
+      activeTerminalId && leaves.some((p) => p.id === activeTerminalId)
+        ? activeTerminalId
+        : (leaves[0]?.id ?? null);
+
+    set({
+      nodes: new Map(nodes),
+      rootId,
+      activeTerminalId: resolvedActive,
+      terminalCount: leaves.length,
+    });
     return true;
   },
 
