@@ -4,11 +4,15 @@
 import { useTerminalStore } from "../stores/terminalStore";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { serializeCurrentSession } from "./sessionRestore";
+import { showErrorToast } from "../components/Sidebar/ErrorToast";
 
 const DEBOUNCE_MS = 200;
+// 同一エラーメッセージの toast を再表示するまでの最小間隔
+const SAVE_FAILED_DEDUPE_MS = 30_000;
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSerialized: string | null = null;
+const lastSaveFailedAt = new Map<string, number>();
 
 function scheduleSave(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
@@ -44,9 +48,18 @@ export function startSessionPersist(): () => void {
     }
   });
 
+  const unsubSaveFailed = window.api.session.onSaveFailed(({ message }) => {
+    const now = Date.now();
+    const last = lastSaveFailedAt.get(message) ?? 0;
+    if (now - last < SAVE_FAILED_DEDUPE_MS) return;
+    lastSaveFailedAt.set(message, now);
+    showErrorToast(`セッション保存に失敗しました: ${message}`);
+  });
+
   return () => {
     unsubLayout();
     unsubMeta();
+    unsubSaveFailed();
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;

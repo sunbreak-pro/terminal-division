@@ -22,7 +22,15 @@ interface WatchEntry {
   watcher: FSWatcher;
   refCount: number;
   windowIds: Set<number>;
+  // 連続したエラー件数。閾値超過で renderer に通知し count をリセット。
+  errorCount: number;
+  // 計測ウィンドウの起点。WATCHER_ERROR_WINDOW_MS を超えたら count を 0 に戻す。
+  errorWindowStart: number;
 }
+
+// 閾値: 5 分間で 5 件以上のエラーが起きたら 1 度だけ通知
+const WATCHER_ERROR_THRESHOLD = 5;
+const WATCHER_ERROR_WINDOW_MS = 5 * 60 * 1000;
 
 class FileSystemManager {
   private watchers: Map<string, WatchEntry> = new Map();
@@ -98,14 +106,42 @@ class FileSystemManager {
     watcher.on("unlinkDir", (p) => broadcast("unlinkDir", p));
     watcher.on("change", (p) => broadcast("change", p));
     watcher.on("error", (e) => {
+      const message = e instanceof Error ? e.message : String(e);
       console.warn(`[fs:watch] ${dirPath}:`, e);
+      this.recordWatcherError(dirPath, message);
     });
 
     this.watchers.set(dirPath, {
       watcher,
       refCount: 1,
       windowIds: new Set([windowId]),
+      errorCount: 0,
+      errorWindowStart: Date.now(),
     });
+  }
+
+  // chokidar の error 連発を 5 分間で 5 件超えたら一度だけ renderer へ通知し、
+  // 計測ウィンドウをリセットする。連投で toast が嵐にならないようにする。
+  private recordWatcherError(dirPath: string, message: string): void {
+    const entry = this.watchers.get(dirPath);
+    if (!entry) return;
+    const now = Date.now();
+    if (now - entry.errorWindowStart > WATCHER_ERROR_WINDOW_MS) {
+      entry.errorWindowStart = now;
+      entry.errorCount = 0;
+    }
+    entry.errorCount += 1;
+    if (entry.errorCount < WATCHER_ERROR_THRESHOLD) return;
+
+    // 閾値到達 → 通知してウィンドウをリセット
+    entry.errorCount = 0;
+    entry.errorWindowStart = now;
+    for (const wid of entry.windowIds) {
+      const win = BrowserWindow.fromId(wid);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send("fs:watcherError", { dirPath, message });
+      }
+    }
   }
 
   unwatch(dirPath: string, windowId: number): void {

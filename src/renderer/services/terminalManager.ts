@@ -14,6 +14,13 @@ export interface InputHistoryState {
   currentLine: string;
 }
 
+// プロンプトドットの状態管理（ターミナルID毎）
+// シェルからOSC 7770シーケンスを受信し、マーカー+デコレーションでドット色を制御
+interface PromptDotState {
+  marker: IMarker | null; // 現在のプロンプト行マーカー
+  decoration: IDecoration | null; // 色変更用デコレーション
+}
+
 export interface TerminalInstance {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -29,6 +36,7 @@ export interface TerminalInstance {
   dataListenerRemover: (() => void) | null;
   exitListenerRemover: (() => void) | null;
   inputHistory: InputHistoryState;
+  promptDot: PromptDotState;
 }
 
 // xterm.js の ALT screen（vim / less / fzf 等の TUI）中は履歴を変えない
@@ -98,14 +106,6 @@ function applyHistoryDelta(history: InputHistoryState, data: string): void {
 
 // Module-scope registry (independent of React lifecycle)
 const registry = new Map<string, TerminalInstance>();
-
-// プロンプトドットの状態管理（ターミナルID毎）
-// シェルからOSC 7770シーケンスを受信し、マーカー+デコレーションでドット色を制御
-interface PromptDotState {
-  marker: IMarker | null; // 現在のプロンプト行マーカー
-  decoration: IDecoration | null; // 色変更用デコレーション
-}
-const promptDotStates = new Map<string, PromptDotState>();
 
 export interface TerminalCallbacks {
   onData: (data: string) => void;
@@ -214,7 +214,8 @@ export function getOrCreate(
           // コマンド完了 → 前のプロンプトのドットを緑/赤に更新
           // onRenderでDOMオーバーレイに直接スタイル適用（canvas再描画に依存しない）
           const exitCode = parseInt(parts[1] || "0", 10);
-          const state = promptDotStates.get(id);
+          const inst = registry.get(id);
+          const state = inst?.promptDot;
           if (state?.marker && !state.marker.isDisposed) {
             // 古いデコレーションを破棄
             if (state.decoration) state.decoration.dispose();
@@ -261,11 +262,13 @@ export function getOrCreate(
         } else if (command === "A") {
           // プロンプト開始 → 新しいマーカーを保存（デコレーションなし = シェルのグレー●がそのまま見える）
           const marker = terminal.registerMarker(0);
-          if (marker) {
-            promptDotStates.set(id, { marker, decoration: null });
+          const inst = registry.get(id);
+          if (marker && inst) {
+            // 直前のマーカー / デコレーションは破棄して上書き
+            inst.promptDot.decoration?.dispose();
+            inst.promptDot = { marker, decoration: null };
           }
           // 初回プロンプト到達 = readline がアクティブになった証 → ショートカット解禁
-          const inst = registry.get(id);
           if (inst && !inst.shellReady) {
             inst.shellReady = true;
           }
@@ -359,6 +362,7 @@ export function getOrCreate(
     },
     exitListenerRemover,
     inputHistory,
+    promptDot: { marker: null, decoration: null },
   };
 
   // Store the registration function for use in attachToContainer
@@ -393,18 +397,15 @@ export function destroy(id: string): void {
   // パス履歴ストアのクリーンアップ
   usePathHistoryStore.getState().removePane(id);
 
+  // プロンプトドット状態のクリーンアップ（registry 削除前に instance 経由で破棄）
+  instance.promptDot.decoration?.dispose();
+  instance.promptDot.marker?.dispose();
+
   registry.delete(id);
   // サイズキャッシュのクリーンアップ
   lastSizes.delete(id);
   // パス履歴バッファのクリーンアップ
   pathBuffers.delete(id);
-  // プロンプトドット状態のクリーンアップ
-  const dotState = promptDotStates.get(id);
-  if (dotState) {
-    dotState.decoration?.dispose();
-    dotState.marker?.dispose();
-    promptDotStates.delete(id);
-  }
 }
 
 /**
@@ -597,34 +598,75 @@ export function undo(id: string): boolean {
  * SearchAddon: 検索ナビゲーション
  * - findNext / findPrevious は SearchAddon の検索ハイライトを移動
  * - clearSearchDecorations は装飾を消す（オーバーレイ閉じ時）
+ * - subscribeSearchResults はヒット件数（resultIndex/resultCount）の更新を通知
  */
-const DEFAULT_SEARCH_OPTIONS: ISearchOptions = {
-  decorations: {
-    matchBackground: "#5a4a00",
-    matchBorder: "#ffd866",
-    matchOverviewRuler: "#ffd866",
-    activeMatchBackground: "#a07000",
-    activeMatchBorder: "#ffd866",
-    activeMatchColorOverviewRuler: "#ffd866",
-  },
-};
+const SEARCH_DECORATIONS = {
+  matchBackground: "#5a4a00",
+  matchBorder: "#ffd866",
+  matchOverviewRuler: "#ffd866",
+  activeMatchBackground: "#a07000",
+  activeMatchBorder: "#ffd866",
+  activeMatchColorOverviewRuler: "#ffd866",
+} as const;
 
-export function findNext(id: string, query: string): boolean {
-  const instance = registry.get(id);
-  if (!instance || query.length === 0) return false;
-  return instance.searchAddon.findNext(query, DEFAULT_SEARCH_OPTIONS);
+export interface SearchOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  regex?: boolean;
 }
 
-export function findPrevious(id: string, query: string): boolean {
+function buildSearchOptions(options?: SearchOptions): ISearchOptions {
+  return {
+    caseSensitive: options?.caseSensitive ?? false,
+    wholeWord: options?.wholeWord ?? false,
+    regex: options?.regex ?? false,
+    decorations: SEARCH_DECORATIONS,
+  };
+}
+
+export function findNext(
+  id: string,
+  query: string,
+  options?: SearchOptions,
+): boolean {
   const instance = registry.get(id);
   if (!instance || query.length === 0) return false;
-  return instance.searchAddon.findPrevious(query, DEFAULT_SEARCH_OPTIONS);
+  return instance.searchAddon.findNext(query, buildSearchOptions(options));
+}
+
+export function findPrevious(
+  id: string,
+  query: string,
+  options?: SearchOptions,
+): boolean {
+  const instance = registry.get(id);
+  if (!instance || query.length === 0) return false;
+  return instance.searchAddon.findPrevious(query, buildSearchOptions(options));
 }
 
 export function clearSearchDecorations(id: string): void {
   const instance = registry.get(id);
   if (!instance) return;
   instance.searchAddon.clearDecorations();
+}
+
+export interface SearchResultInfo {
+  resultIndex: number;
+  resultCount: number;
+}
+
+/**
+ * SearchAddon の onDidChangeResults を購読する。
+ * 戻り値の関数で unsubscribe する。
+ */
+export function subscribeSearchResults(
+  id: string,
+  listener: (info: SearchResultInfo) => void,
+): () => void {
+  const instance = registry.get(id);
+  if (!instance) return () => {};
+  const disposable = instance.searchAddon.onDidChangeResults(listener);
+  return () => disposable.dispose();
 }
 
 /**

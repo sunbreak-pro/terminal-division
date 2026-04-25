@@ -16,6 +16,9 @@ interface TerminalMetaStore {
   setProcessName: (id: string, processName: string) => void;
   setShellName: (id: string, shellName: string) => void;
   initMeta: (id: string) => void;
+  // 分割直後の新ペインに対し、init と cwd 設定を 1 回の set で行う。
+  // サブスクライバが「meta だけある / cwd だけある」中間状態を観測しないことを保証する。
+  initLeafMeta: (id: string, cwd: string | null) => void;
   removeMeta: (id: string) => void;
   touchActive: (id: string) => void;
   // セッション復元時に各葉ペインの cwd を一括投入する。
@@ -47,6 +50,20 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
       const seq = nextSeq();
       metas.set(id, {
         cwd: null,
+        processName: null,
+        shellName: null,
+        lastActiveAt: seq,
+        createdAt: seq,
+      });
+      set({ metas });
+    },
+
+    initLeafMeta: (id, cwd) => {
+      const metas = new Map(get().metas);
+      if (metas.has(id)) return;
+      const seq = nextSeq();
+      metas.set(id, {
+        cwd,
         processName: null,
         shellName: null,
         lastActiveAt: seq,

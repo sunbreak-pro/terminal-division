@@ -20,6 +20,7 @@ import { DirectoryTree } from "./DirectoryTree";
 import { ResizeHandle } from "./ResizeHandle";
 import { UndoRedoToolbar } from "./UndoRedoToolbar";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
+import { showErrorToast } from "./ErrorToast";
 
 export const Sidebar: React.FC = () => {
   const theme = useCurrentTheme();
@@ -48,6 +49,14 @@ export const Sidebar: React.FC = () => {
       canceled = true;
     };
   }, [setWidth]);
+
+  // chokidar の連続エラーを Main 側で閾値判定 → 通知して toast 表示
+  useEffect(() => {
+    const unsub = window.api.fs.onWatcherError(({ dirPath }) => {
+      showErrorToast(`ファイル監視が失敗しています: ${dirPath}`);
+    });
+    return unsub;
+  }, []);
 
   // ペインメタから CWD タブを構築
   const tabs: CwdTab[] = useMemo(() => {

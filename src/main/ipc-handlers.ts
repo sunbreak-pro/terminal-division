@@ -307,12 +307,11 @@ export function setupIpcHandlers(): void {
 
   // ========== Session persistence ==========
 
-  // 復元データは最初の 1 回だけ返す（multi-window はスコープ外）
-  let sessionRestoreConsumed = false;
+  // 復元データは最初の 1 回だけ返す（multi-window はスコープ外）。
+  // consume は sessionStateManager 側で同期的に行うため、setupIpcHandlers の
+  // クロージャに状態を持たない。
   ipcMain.handle("session:getRestoreData", () => {
-    if (sessionRestoreConsumed) return null;
-    sessionRestoreConsumed = true;
-    return sessionStateManager.getRestoreData();
+    return sessionStateManager.consumeRestoreData();
   });
 
   ipcMain.on("session:save", (_, payload: SerializedLayout) => {

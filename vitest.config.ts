@@ -1,39 +1,42 @@
-import { resolve } from 'path'
-import { defineConfig } from 'vitest/config'
-import react from '@vitejs/plugin-react'
+import { resolve } from "path";
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
   test: {
     globals: true,
     // デフォルトはrendererテスト用のjsdom環境
-    environment: 'jsdom',
-    setupFiles: ['./src/renderer/test/setup.ts'],
+    environment: "jsdom",
+    setupFiles: ["./src/renderer/test/setup.ts"],
     include: [
-      'src/renderer/**/*.test.{ts,tsx}',
-      'src/main/**/*.test.ts'
+      "src/renderer/**/*.test.{ts,tsx}",
+      "src/main/**/*.test.ts",
+      "src/shared/**/*.test.ts",
     ],
-    // main processのテストはnode環境で実行
+    // main process / shared のテストは node 環境で実行
     environmentMatchGlobs: [
-      ['src/main/**/*.test.ts', 'node']
+      ["src/main/**/*.test.ts", "node"],
+      ["src/shared/**/*.test.ts", "node"],
     ],
     coverage: {
-      provider: 'v8',
-      reporter: ['text', 'html'],
+      provider: "v8",
+      reporter: ["text", "html"],
       include: [
-        'src/renderer/**/*.{ts,tsx}',
-        'src/main/**/*.ts'
+        "src/renderer/**/*.{ts,tsx}",
+        "src/main/**/*.ts",
+        "src/shared/**/*.ts",
       ],
       exclude: [
-        'src/renderer/test/**',
-        'src/**/*.test.{ts,tsx}',
-        'src/**/*.d.ts'
-      ]
-    }
+        "src/renderer/test/**",
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.d.ts",
+      ],
+    },
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src/renderer')
-    }
-  }
-})
+      "@": resolve(__dirname, "src/renderer"),
+    },
+  },
+});

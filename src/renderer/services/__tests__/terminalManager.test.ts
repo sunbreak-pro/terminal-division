@@ -187,6 +187,55 @@ describe("terminalManager", () => {
 
       expect(instance1).not.toBe(instance2);
     });
+
+    // StrictMode 二重マウント耐性: 同一 id で getOrCreate が複数回呼ばれても
+    // listener / OSC ハンドラ / IPC subscriber は 1 度しか登録されない
+    it("does not duplicate listeners when called twice with the same id", () => {
+      const id = "test-idempotent";
+      mockPtyApi.onData.mockClear();
+      mockPtyApi.onExit.mockClear();
+      mockPtyApi.onProcessName.mockClear();
+      mockPtyApi.onShellName.mockClear();
+
+      const instance1 = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const onDataCallsAfterFirst = (
+        instance1.terminal.onData as unknown as { mock: { calls: unknown[] } }
+      ).mock.calls.length;
+      const oscCallsAfterFirst = (
+        instance1.terminal.parser.registerOscHandler as unknown as {
+          mock: { calls: unknown[] };
+        }
+      ).mock.calls.length;
+
+      const instance2 = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+
+      expect(instance1).toBe(instance2);
+      // terminal.onData / OSC ハンドラの登録回数は最初の作成時から増えていない
+      expect(
+        (instance2.terminal.onData as unknown as { mock: { calls: unknown[] } })
+          .mock.calls.length,
+      ).toBe(onDataCallsAfterFirst);
+      expect(
+        (
+          instance2.terminal.parser.registerOscHandler as unknown as {
+            mock: { calls: unknown[] };
+          }
+        ).mock.calls.length,
+      ).toBe(oscCallsAfterFirst);
+      // IPC リスナーも 1 度ずつしか登録されない
+      expect(mockPtyApi.onData).toHaveBeenCalledTimes(1);
+      expect(mockPtyApi.onExit).toHaveBeenCalledTimes(1);
+      expect(mockPtyApi.onProcessName).toHaveBeenCalledTimes(1);
+      expect(mockPtyApi.onShellName).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("destroy", () => {

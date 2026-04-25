@@ -1,24 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 
-// セッション永続化 IPC 用の DTO 形状（Main / Renderer に同名の型あり、small interface のため複製）
-interface SerializedTerminalPane {
-  id: string;
-  parentId: string | null;
-}
-interface SerializedSplitNode {
-  id: string;
-  type: "split";
-  direction: "horizontal" | "vertical";
-  children: string[];
-  parentId: string | null;
-}
-type SerializedNode = SerializedTerminalPane | SerializedSplitNode;
-interface SerializedLayout {
-  version: 1;
-  rootId: string;
-  nodes: Array<[string, SerializedNode]>;
-  metas: Array<[string, { cwd: string | null }]>;
-}
+// セッション永続化 IPC 用の DTO 型は shared モジュールに集約
+import type { SerializedLayout } from "../shared/session-state-validator";
 
 function createIpcListener<T>(channel: string) {
   return (callback: (data: T) => void): (() => void) => {
@@ -108,6 +91,10 @@ const api = {
       type: "add" | "addDir" | "unlink" | "unlinkDir" | "change";
       changedPath: string;
     }>("fs:change"),
+    // chokidar の error 連発を閾値判定して 1 度だけ通知する
+    onWatcherError: createIpcListener<{ dirPath: string; message: string }>(
+      "fs:watcherError",
+    ),
     rename: (
       oldPath: string,
       newName: string,
@@ -164,6 +151,8 @@ const api = {
     // 起動時の復元データを 1 回だけ取り出す（Main 側で重複返却を抑制）
     getRestoreData: (): Promise<SerializedLayout | null> =>
       ipcRenderer.invoke("session:getRestoreData"),
+    // session-state.json 書き込み失敗を renderer に通知（toast 表示）
+    onSaveFailed: createIpcListener<{ message: string }>("session:saveFailed"),
   },
 };
 

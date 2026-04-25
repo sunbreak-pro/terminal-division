@@ -70,16 +70,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newTerminalId = generateId();
     const newSplitId = generateId();
 
-    // 新ペインのメタは必ず初期化する（initMeta は idempotent: 既存なら no-op）。
-    // CWD 未設定のペインから分割した場合でも meta が無いままになるのを防ぐ。
-    // TerminalPane.tsx は meta の cwd を見て PTY 起動 CWD を決めるため、
-    // meta 未初期化だと意図しない window.initialCwd フォールバックに落ちる。
+    // 新ペインのメタは必ず初期化する。CWD 未設定のペインから分割した場合でも
+    // meta が無いままになるのを防ぐ（TerminalPane.tsx は meta の cwd を見て PTY
+    // 起動 CWD を決めるため、meta 未初期化だと window.initialCwd へ落ちる）。
+    // initLeafMeta は initMeta + setCwd を 1 回の set で行うため、サブスクライバが
+    // 「meta だけある / cwd だけある」中間状態を観測しない。
     const metaStore = useTerminalMetaStore.getState();
-    metaStore.initMeta(newTerminalId);
-    const sourceCwd = metaStore.metas.get(terminalId)?.cwd;
-    if (sourceCwd) {
-      metaStore.setCwd(newTerminalId, sourceCwd);
-    }
+    const sourceCwd = metaStore.metas.get(terminalId)?.cwd ?? null;
+    metaStore.initLeafMeta(newTerminalId, sourceCwd);
 
     const newTerminal: TerminalPane = {
       id: newTerminalId,

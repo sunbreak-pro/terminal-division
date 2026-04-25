@@ -1,10 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // session-state.ts は import 時に new SessionStateManager() を実行し
 // app.getPath('userData') を呼ぶため、electron をモックする
+const mockGetAllWindows = vi.fn().mockReturnValue([]);
 vi.mock("electron", () => ({
   app: {
     getPath: vi.fn().mockReturnValue("/tmp"),
+  },
+  BrowserWindow: {
+    getAllWindows: () => mockGetAllWindows(),
   },
 }));
 
@@ -17,11 +21,12 @@ vi.mock("fs", () => ({
   },
 }));
 
-import { validateSerializedLayout } from "../session-state";
+import fs from "fs";
+import { sessionStateManager } from "../session-state";
 import {
   SESSION_STATE_VERSION,
   type SerializedLayout,
-} from "../types/session-state";
+} from "../../shared/session-state-validator";
 
 const validLayout = (): SerializedLayout => ({
   version: SESSION_STATE_VERSION,
@@ -46,111 +51,60 @@ const validLayout = (): SerializedLayout => ({
   ],
 });
 
-describe("validateSerializedLayout", () => {
-  it("accepts a well-formed layout", () => {
-    const result = validateSerializedLayout(validLayout());
-    expect(result).not.toBeNull();
-    expect(result?.rootId).toBe("s1");
-    expect(result?.nodes).toHaveLength(3);
+describe("SessionStateManager.consumeRestoreData", () => {
+  beforeEach(() => {
+    sessionStateManager.resetRestoreConsumedForTest();
   });
 
-  it("rejects null / non-object input", () => {
-    expect(validateSerializedLayout(null)).toBeNull();
-    expect(validateSerializedLayout(undefined)).toBeNull();
-    expect(validateSerializedLayout("string")).toBeNull();
-    expect(validateSerializedLayout(42)).toBeNull();
+  it("returns the cached state on the first call", () => {
+    // load() がモック fs.existsSync=false で走るため state は null。
+    // ここでは state が null でも consumed フラグが進むことを確認する。
+    expect(sessionStateManager.consumeRestoreData()).toBeNull();
   });
 
-  it("rejects wrong version", () => {
-    const layout = validLayout();
-    (layout as unknown as Record<string, unknown>).version = 999;
-    expect(validateSerializedLayout(layout)).toBeNull();
+  it("returns null on subsequent calls (multi-window race guard)", () => {
+    sessionStateManager.consumeRestoreData();
+    expect(sessionStateManager.consumeRestoreData()).toBeNull();
+    expect(sessionStateManager.consumeRestoreData()).toBeNull();
+  });
+});
+
+describe("SessionStateManager save failure notification", () => {
+  beforeEach(() => {
+    mockGetAllWindows.mockReset();
+    vi.mocked(fs.writeFileSync).mockReset();
   });
 
-  it("rejects missing rootId", () => {
-    const layout = validLayout();
-    (layout as unknown as Record<string, unknown>).rootId = "";
-    expect(validateSerializedLayout(layout)).toBeNull();
+  it("broadcasts session:saveFailed when writeFileSync throws", () => {
+    const send = vi.fn();
+    mockGetAllWindows.mockReturnValue([
+      { isDestroyed: () => false, webContents: { send } },
+    ]);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {
+      throw new Error("EACCES: permission denied");
+    });
+
+    sessionStateManager.save(validLayout());
+    sessionStateManager.flushForTest();
+
+    expect(send).toHaveBeenCalledWith(
+      "session:saveFailed",
+      expect.objectContaining({ message: expect.stringContaining("EACCES") }),
+    );
   });
 
-  it("rejects rootId not present in nodes", () => {
-    const layout = validLayout();
-    layout.rootId = "missing";
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
+  it("skips destroyed windows when broadcasting save failures", () => {
+    const send = vi.fn();
+    mockGetAllWindows.mockReturnValue([
+      { isDestroyed: () => true, webContents: { send } },
+    ]);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {
+      throw new Error("ENOSPC");
+    });
 
-  it("rejects rootId whose parentId is non-null", () => {
-    const layout = validLayout();
-    // root の parentId を非 null に書き換え
-    layout.nodes[0][1] = {
-      ...layout.nodes[0][1],
-      parentId: "s2",
-    };
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
+    sessionStateManager.save(validLayout());
+    sessionStateManager.flushForTest();
 
-  it("rejects when leaf count exceeds 6", () => {
-    // 7 panes flat (multiple roots — invalid structure but tests cap)
-    const nodes: SerializedLayout["nodes"] = [];
-    for (let i = 0; i < 7; i++) {
-      nodes.push([`p${i}`, { id: `p${i}`, parentId: null }]);
-    }
-    const layout: SerializedLayout = {
-      version: SESSION_STATE_VERSION,
-      rootId: "p0",
-      nodes,
-      metas: [],
-    };
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
-
-  it("rejects parent/children mismatch", () => {
-    const layout = validLayout();
-    // child の parentId を書き換える
-    layout.nodes[1][1] = {
-      ...layout.nodes[1][1],
-      parentId: "wrong",
-    };
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
-
-  it("rejects orphaned nodes not reachable from root", () => {
-    const layout = validLayout();
-    layout.nodes.push(["orphan", { id: "orphan", parentId: null }]);
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
-
-  it("rejects invalid direction value", () => {
-    const layout = validLayout();
-    layout.nodes[0][1] = {
-      ...layout.nodes[0][1],
-      direction: "diagonal" as unknown as "horizontal",
-    };
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
-
-  it("rejects split with wrong children count", () => {
-    const layout = validLayout();
-    const split = layout.nodes[0][1] as unknown as Record<string, unknown>;
-    split.children = ["a"];
-    expect(validateSerializedLayout(layout)).toBeNull();
-  });
-
-  it("drops meta entries pointing to split nodes", () => {
-    const layout = validLayout();
-    layout.metas.push(["s1", { cwd: "/should-be-dropped" }]);
-    const result = validateSerializedLayout(layout);
-    expect(result).not.toBeNull();
-    const ids = result!.metas.map(([id]) => id);
-    expect(ids).not.toContain("s1");
-  });
-
-  it("drops meta entries pointing to unknown ids", () => {
-    const layout = validLayout();
-    layout.metas.push(["ghost", { cwd: "/x" }]);
-    const result = validateSerializedLayout(layout);
-    expect(result).not.toBeNull();
-    const ids = result!.metas.map(([id]) => id);
-    expect(ids).not.toContain("ghost");
+    expect(send).not.toHaveBeenCalled();
   });
 });

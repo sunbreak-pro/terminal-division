@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import TerminalPane from "../TerminalPane";
 
 // terminalManagerモック
@@ -99,16 +99,18 @@ describe("TerminalPane", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
+    // useLayoutEffect 化により setTimeout(0) を排除したため fakeTimers 不要
 
     // デフォルトのモック設定
-    mockGetOrCreate.mockReturnValue(mockTerminalInstance);
+    mockGetOrCreate.mockReturnValue({
+      ...mockTerminalInstance,
+      ptyCreated: false,
+    });
     mockFit.mockReturnValue({ cols: 80, rows: 24 });
     vi.mocked(terminalStore.useActiveTerminalId).mockReturnValue("terminal-1");
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -201,30 +203,27 @@ describe("TerminalPane", () => {
   });
 
   it("creates PTY on first mount", () => {
-    mockTerminalInstance.ptyCreated = false;
+    mockGetOrCreate.mockReturnValue({
+      ...mockTerminalInstance,
+      ptyCreated: false,
+    });
 
     render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
-    // setTimeout内の処理を実行
-    vi.runAllTimers();
-
+    // useLayoutEffect で同期発火するため setTimeout 待ち不要
     expect(window.api.pty.create).toHaveBeenCalledWith("terminal-1", undefined);
   });
 
   it("does not create PTY if already created", () => {
     // PTYが既に作成済みの状態
-    const instanceWithPty = {
+    mockGetOrCreate.mockReturnValue({
       ...mockTerminalInstance,
       ptyCreated: true,
-    };
-    mockGetOrCreate.mockReturnValue(instanceWithPty);
+    });
 
     render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
-    // setTimeout内の処理を実行
-    vi.runAllTimers();
-
-    // createは呼ばれない
+    // createは呼ばれない（fit は handleFit 経由で同期実行される）
     expect(window.api.pty.create).not.toHaveBeenCalled();
   });
 });

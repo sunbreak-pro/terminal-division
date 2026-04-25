@@ -143,6 +143,18 @@ describe("terminalStore", () => {
       expect(meta?.cwd).toBe("/Users/test/project");
     });
 
+    it("notifies metaStore subscribers exactly once during split (no intermediate state)", () => {
+      const sub = vi.fn();
+      const unsub = useTerminalMetaStore.subscribe(sub);
+
+      const { splitTerminal } = useTerminalStore.getState();
+      splitTerminal("initial", "horizontal");
+
+      // initLeafMeta により init と cwd 設定が 1 回の set にまとまる
+      expect(sub).toHaveBeenCalledTimes(1);
+      unsub();
+    });
+
     it("should properly update parent references when splitting nested terminal", () => {
       const { splitTerminal } = useTerminalStore.getState();
 

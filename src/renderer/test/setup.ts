@@ -54,6 +54,20 @@ const mockShellApi = {
   openExternal: vi.fn(),
 };
 
+// window.api.session モック（onSaveFailed 等の listener は no-op で返す）
+const mockSessionApi = {
+  save: vi.fn(),
+  clear: vi.fn(),
+  getRestoreData: vi.fn().mockResolvedValue(null),
+  onSaveFailed: vi.fn().mockReturnValue(() => {}),
+};
+
+// window.api.fs モック（onWatcherError 等の listener は no-op で返す）
+const mockFsApi = {
+  onChange: vi.fn().mockReturnValue(() => {}),
+  onWatcherError: vi.fn().mockReturnValue(() => {}),
+};
+
 Object.defineProperty(window, "api", {
   value: {
     pty: mockPtyApi,
@@ -63,6 +77,8 @@ Object.defineProperty(window, "api", {
     system: mockSystemApi,
     recentDirs: mockRecentDirsApi,
     shell: mockShellApi,
+    session: mockSessionApi,
+    fs: mockFsApi,
   },
   writable: true,
 });

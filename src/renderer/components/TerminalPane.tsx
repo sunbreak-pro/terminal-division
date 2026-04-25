@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useCallback, useMemo } from "react";
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   useActiveTerminalId,
@@ -59,7 +65,10 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       }
     }, [id]);
 
-    useEffect(() => {
+    // useLayoutEffect: DOM 反映後・paint 前に同期実行されるため、
+    // attach → fit → pty.create の順序を setTimeout(0) なしで保証できる。
+    // StrictMode の二重マウントでも同期 fit が冪等なため安全。
+    useLayoutEffect(() => {
       if (!containerRef.current) return;
 
       // 1. Get or create terminal instance (callbacks are registered ONCE during creation)
@@ -95,53 +104,49 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
 
       // 3. Set up PTY (only if not already created)
       if (!instance.ptyCreated) {
-        // Mark as created IMMEDIATELY (before setTimeout) to prevent duplicate registration
+        // Mark as created IMMEDIATELY to prevent duplicate registration on StrictMode remount
         instance.ptyCreated = true;
 
-        // Create PTY after DOM is ready
-        setTimeout(() => {
-          instance.fitAddon.fit();
-          const { cols, rows } = instance.terminal;
+        // attach 直後の同期 fit でターミナルサイズを確定し、その値で pty.create を発火
+        instance.fitAddon.fit();
+        const { cols, rows } = instance.terminal;
 
-          // CWD優先順位: メタストア（分割時設定） > windowInitialCwd（Dockメニュー） > undefined
-          const initialCwd =
-            useTerminalMetaStore.getState().metas.get(id)?.cwd ??
-            window.api.window.getInitialCwd() ??
-            undefined;
+        // CWD優先順位: メタストア（分割時設定） > windowInitialCwd（Dockメニュー） > undefined
+        const initialCwd =
+          useTerminalMetaStore.getState().metas.get(id)?.cwd ??
+          window.api.window.getInitialCwd() ??
+          undefined;
 
-          window.api.pty
-            .create(id, initialCwd)
-            .then((ok) => {
-              if (!ok) {
-                // Main 側で spawn 失敗（shell ENOENT、permission denied 等）。
-                // 黒いままのターミナルを残さないよう、xterm に明示メッセージ + toast 通知する。
-                console.error(`PTY spawn failed for terminal ${id}`);
-                instance.terminal.write(
-                  "\r\n\x1b[31mError: ターミナルプロセスの起動に失敗しました\x1b[0m\r\n",
-                );
-                showErrorToast(
-                  "ターミナルプロセスの起動に失敗しました（シェルが見つからないか権限不足の可能性）",
-                );
-                return;
-              }
-              window.api.pty.resize(id, cols, rows);
-              // Main 側で spawn 直後に溜めた初期出力（zsh 起動メッセージなど）を flush する。
-              // pty:data リスナーは getOrCreate 内で同期登録済みなので確実に受け取れる。
-              window.api.pty.flushInitialBuffer(id);
-            })
-            .catch((error) => {
-              console.error(`Failed to create PTY for terminal ${id}:`, error);
+        window.api.pty
+          .create(id, initialCwd)
+          .then((ok) => {
+            if (!ok) {
+              // Main 側で spawn 失敗（shell ENOENT、permission denied 等）。
+              // 黒いままのターミナルを残さないよう、xterm に明示メッセージ + toast 通知する。
+              console.error(`PTY spawn failed for terminal ${id}`);
               instance.terminal.write(
-                "\r\n\x1b[31mError: Failed to create terminal process\x1b[0m\r\n",
+                "\r\n\x1b[31mError: ターミナルプロセスの起動に失敗しました\x1b[0m\r\n",
               );
-              showErrorToast("ターミナルプロセスの起動に失敗しました");
-            });
-        }, 0);
+              showErrorToast(
+                "ターミナルプロセスの起動に失敗しました（シェルが見つからないか権限不足の可能性）",
+              );
+              return;
+            }
+            window.api.pty.resize(id, cols, rows);
+            // Main 側で spawn 直後に溜めた初期出力（zsh 起動メッセージなど）を flush する。
+            // pty:data リスナーは getOrCreate 内で同期登録済みなので確実に受け取れる。
+            window.api.pty.flushInitialBuffer(id);
+          })
+          .catch((error) => {
+            console.error(`Failed to create PTY for terminal ${id}:`, error);
+            instance.terminal.write(
+              "\r\n\x1b[31mError: Failed to create terminal process\x1b[0m\r\n",
+            );
+            showErrorToast("ターミナルプロセスの起動に失敗しました");
+          });
       } else {
-        // Terminal already exists, just fit it
-        setTimeout(() => {
-          handleFit();
-        }, 0);
+        // Terminal already exists, just fit it (同期で fit、ResizeObserver の通知に頼らない)
+        handleFit();
       }
 
       // 4. Set up ResizeObserver with rAF-based debounce
