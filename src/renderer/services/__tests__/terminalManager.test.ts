@@ -527,11 +527,37 @@ describe("terminalManager", () => {
       expect(terminalManager.isShellReady(id)).toBe(false);
     });
 
-    it("isShellReady becomes true after the fallback timer fires", () => {
-      const id = "test-ready-fallback";
+    it("isShellReady stays false without OSC 7770;A (no fallback timer)", () => {
+      const id = "test-ready-no-fallback";
       terminalManager.getOrCreate(id, defaultOptions, defaultCallbacks);
       expect(terminalManager.isShellReady(id)).toBe(false);
-      vi.advanceTimersByTime(3000);
+      vi.advanceTimersByTime(60_000);
+      expect(terminalManager.isShellReady(id)).toBe(false);
+    });
+
+    it("isShellReady becomes true when the OSC 7770;A handler fires", () => {
+      const id = "test-ready-osc";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      expect(terminalManager.isShellReady(id)).toBe(false);
+
+      // getOrCreate 内で terminal.parser.registerOscHandler(7770, handler) が呼ばれている
+      const oscCalls = (
+        instance.terminal.parser.registerOscHandler as unknown as ReturnType<
+          typeof vi.fn
+        >
+      ).mock.calls;
+      const oscEntry = oscCalls.find(([code]: [number]) => code === 7770) as
+        | [number, (data: string) => boolean]
+        | undefined;
+      expect(oscEntry).toBeDefined();
+      const handler = oscEntry![1];
+
+      // "A" コマンド = プロンプト開始マーカー → shellReady を true にする
+      handler("A");
       expect(terminalManager.isShellReady(id)).toBe(true);
     });
 

@@ -17,18 +17,39 @@ ZDOTDIR="${getOrCreateIntegrationDir()}"
 `;
 }
 
-// zsh用 .zshrc: ユーザーの.zshrcを読み込み、precmdフックを登録
-// OSC 7770プロトコル: A=プロンプト開始、D;N=コマンド完了（N=exit code）
+// zsh用 .zshrc: ユーザーの.zshrcを読み込み、precmd/zle-line-init フックを登録
+// OSC 7770プロトコル: A=プロンプト開始（zle 起動後）、D;N=コマンド完了（N=exit code）
+//
+// 重要: A は zle-line-init から送る。precmd は zle 起動 = 端末 raw mode 切替 *前* に
+// 走るため、precmd で A を送って Renderer 側 shellReady=true → ユーザが Cmd+← を
+// 押すと、PTY がまだ canonical mode + echoctl のままで \x01 が ^A と表示される
+// race が起きる。zle-line-init は zle が raw mode を確立した直後に発火するので安全。
 function createZshrc(origZdotdir: string): string {
   return `# Terminal Division shell integration
 ZDOTDIR="${origZdotdir}"
 [[ -f "\${ZDOTDIR}/.zshrc" ]] && source "\${ZDOTDIR}/.zshrc"
 
+# Terminal Division ショートカットが送る制御シーケンスを readline 互換に固定する。
+# zsh の main keymap は \$EDITOR / \$VISUAL が "vi" で始まると viins になり、
+# その場合 ^A / ^E / ^K は self-insert（reverse video の ^A リテラル表示）に、
+# ^U は vi-kill-line になってしまう。Cmd+← / Cmd+→ / Cmd+K / Cmd+Backspace
+# / Option+Delete / Option+← / Option+→ / Option+D が常に同じ意味で動くよう
+# main keymap に明示的にバインドする（ユーザ .zshrc の後 = 後勝ち）。
+bindkey '^A' beginning-of-line       # Cmd+←
+bindkey '^E' end-of-line             # Cmd+→
+bindkey '^K' kill-line               # Cmd+K
+bindkey '^U' backward-kill-line      # Cmd+Backspace
+bindkey '^W' backward-kill-word      # Option+Delete
+bindkey '\\eb' backward-word         # Option+←
+bindkey '\\ef' forward-word          # Option+→
+bindkey '\\ed' kill-word             # Option+D
+
 # 状態管理
 __td_last_exit=0
 __td_has_run_command=0
 
-# Exit codeキャプチャ + コマンド完了マーカー送信（precmd_functionsの先頭）
+# precmd: exit code キャプチャ + コマンド完了マーカー (D) + CWD 通知
+# A はここでは送らず zle-line-init で送る
 __td_precmd() {
   __td_last_exit=$?
   if [[ $__td_has_run_command -eq 1 ]]; then
@@ -36,9 +57,16 @@ __td_precmd() {
     __td_has_run_command=0
   fi
   printf '\\e]7;file://%s%s\\a' "\${HOST}" "\${PWD}"
-  printf '\\e]7770;A\\a'
   return $__td_last_exit
 }
+
+# zle-line-init: zle が raw mode を確立した直後に発火 → A を送る
+# これにより Renderer 側 shellReady=true 時点で必ず raw mode が確立済みになり、
+# Cmd+← / Cmd+→ / Cmd+K の制御コードが ^A / ^E / ^K として echo される race を防ぐ
+__td_zle_line_init() {
+  printf '\\e]7770;A\\a'
+}
+zle -N zle-line-init __td_zle_line_init
 
 # コマンド開始マーカー（preexec = Enter押下後、実行前。空Enterでは発火しない）
 __td_preexec() {
