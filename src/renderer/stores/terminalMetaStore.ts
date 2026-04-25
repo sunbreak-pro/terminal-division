@@ -4,6 +4,10 @@ export interface TerminalMeta {
   cwd: string | null;
   processName: string | null;
   shellName: string | null;
+  // タブ集約時に「直近アクティブだったペイン」を選ぶための単調増加カウンタ
+  lastActiveAt: number;
+  // ペインがレイアウトに追加された順を保持（タブの並び順に使用）
+  createdAt: number;
 }
 
 interface TerminalMetaStore {
@@ -13,7 +17,12 @@ interface TerminalMetaStore {
   setShellName: (id: string, shellName: string) => void;
   initMeta: (id: string) => void;
   removeMeta: (id: string) => void;
+  touchActive: (id: string) => void;
 }
+
+// セッション内で単調増加するカウンタ（initMeta / touchActive の両方で使用）
+let monotonicCounter = 0;
+const nextSeq = (): number => ++monotonicCounter;
 
 export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
   const updateMeta = (id: string, updates: Partial<TerminalMeta>): void => {
@@ -32,13 +41,22 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
       const metas = new Map(get().metas);
       // 既にメタが存在する場合は上書きしない（分割時のCWD事前設定を保持するため）
       if (metas.has(id)) return;
-      metas.set(id, { cwd: null, processName: null, shellName: null });
+      const seq = nextSeq();
+      metas.set(id, {
+        cwd: null,
+        processName: null,
+        shellName: null,
+        lastActiveAt: seq,
+        createdAt: seq,
+      });
       set({ metas });
     },
 
     setCwd: (id, cwd) => updateMeta(id, { cwd }),
     setProcessName: (id, processName) => updateMeta(id, { processName }),
     setShellName: (id, shellName) => updateMeta(id, { shellName }),
+
+    touchActive: (id) => updateMeta(id, { lastActiveAt: nextSeq() }),
 
     removeMeta: (id) => {
       const metas = new Map(get().metas);

@@ -40,7 +40,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   activeTerminalId: initialTerminalId,
   terminalCount: 1,
 
-  setActiveTerminal: (id) => set({ activeTerminalId: id }),
+  setActiveTerminal: (id) => {
+    set({ activeTerminalId: id });
+    if (id) {
+      // タブ集約時に「直近アクティブだったペイン」を選ぶための更新
+      useTerminalMetaStore.getState().touchActive(id);
+    }
+  },
 
   canSplit: () => get().terminalCount < MAX_TERMINALS,
 

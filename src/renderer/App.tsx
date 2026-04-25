@@ -1,6 +1,8 @@
 import React, { useEffect, useCallback, useMemo } from "react";
 import Header from "./components/Header";
 import SplitContainer from "./components/SplitContainer";
+import { Sidebar } from "./components/Sidebar/Sidebar";
+import { ErrorToastHost } from "./components/Sidebar/ErrorToast";
 import {
   useActiveTerminalId,
   useTerminalCount,
@@ -301,9 +303,21 @@ const App: React.FC = () => {
       }}
     >
       <Header />
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <SplitContainer />
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "row",
+          overflow: "hidden",
+        }}
+      >
+        <Sidebar />
+        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+          <SplitContainer />
+        </div>
       </div>
+      <ErrorToastHost />
     </div>
   );
 };

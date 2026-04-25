@@ -245,6 +245,8 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 - **T2-2**: フォーカス視覚フィードバック（オレンジ枠線、textarea focus 同期）
 - **T2-3**: 外部リンクとディレクトリ移動（WebLinks、ネイティブダイアログ）
 - **T2-4**: 単一テーマとスタイル
+- **T2-5**: 左サイドバー（CWD 別縦タブ + lazy ディレクトリツリー + chokidar watch + ファイル操作 / 削除・移動・名称変更・cd・VSCode 起動）。Header の Title 右隣のトグルで開閉、幅のみ永続化
+- **T2-6**: サイドバー D&D（ツリー内移動 / 外部 Finder からのコピー / OS ネイティブ drag によるツリー外搬出 / ターミナルへのパス挿入）と Undo/Redo（rename・move・trash の 50 件スタック、ゴミ箱追跡復元、サイドバー上部アイコン）、ファイル右クリックメニューでの相対/フルパスコピー
 
 ### Tier 3: 実験 / 凍結候補
 

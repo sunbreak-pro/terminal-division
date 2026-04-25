@@ -13,6 +13,8 @@ import {
 } from "../stores/themeStore";
 import * as terminalManager from "../services/terminalManager";
 import ShortcutsModal from "./ShortcutsModal";
+import { useSidebarStore, useSidebarOpen } from "../stores/sidebarStore";
+import { PanelLeftIcon } from "./Sidebar/icons";
 
 const Header: React.FC = React.memo(() => {
   const activeTerminalId = useActiveTerminalId();
@@ -20,6 +22,8 @@ const Header: React.FC = React.memo(() => {
   const canSplit = useCanSplit();
   const { splitTerminal, closeTerminal } = useTerminalActions();
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
+  const sidebarOpen = useSidebarOpen();
+  const toggleSidebar = useSidebarStore((s) => s.toggleOpen);
 
   // テーマ関連
   const currentTheme = useCurrentTheme();
@@ -185,12 +189,43 @@ const Header: React.FC = React.memo(() => {
     >
       <div
         style={{
-          color: theme.colors.textSecondary,
-          fontSize: "13px",
-          fontWeight: 500,
+          display: "flex",
+          alignItems: "center",
+          gap: theme.spacing.sm,
         }}
       >
-        Terminal Division
+        <div
+          style={{
+            color: theme.colors.textSecondary,
+            fontSize: "13px",
+            fontWeight: 500,
+          }}
+        >
+          Terminal Division
+        </div>
+        <button
+          type="button"
+          className="titlebar-no-drag"
+          onClick={toggleSidebar}
+          title={sidebarOpen ? "サイドバーを閉じる" : "サイドバーを開く"}
+          aria-pressed={sidebarOpen}
+          style={{
+            ...buttonStyle,
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+            color: sidebarOpen ? theme.colors.text : theme.colors.textSecondary,
+            border: sidebarOpen
+              ? `1px solid ${theme.colors.borderActive}`
+              : `1px solid ${theme.colors.border}`,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "transparent";
+          }}
+        >
+          <PanelLeftIcon size={14} />
+        </button>
       </div>
 
       <div

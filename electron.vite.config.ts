@@ -1,25 +1,25 @@
-import { resolve } from 'path'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
-import react from '@vitejs/plugin-react'
+import { resolve } from "path";
+import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        external: ['node-pty']
-      }
-    }
+        external: ["node-pty", "chokidar", "fsevents"],
+      },
+    },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
   },
   renderer: {
     resolve: {
       alias: {
-        '@': resolve('src/renderer')
-      }
+        "@": resolve("src/renderer"),
+      },
     },
-    plugins: [react()]
-  }
-})
+    plugins: [react()],
+  },
+});

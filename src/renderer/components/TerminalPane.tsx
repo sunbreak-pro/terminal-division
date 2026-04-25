@@ -9,6 +9,9 @@ import * as terminalManager from "../services/terminalManager";
 import { rafDebounceWithDelay } from "../utils/rafDebounce";
 import { TerminalSubHeader } from "./TerminalSubHeader";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
+import { formatPaths } from "../utils/insertFiles";
+
+const TD_PATH_MIME = "application/x-td-path";
 
 interface TerminalPaneProps {
   id: string;
@@ -136,6 +139,52 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       setActiveTerminal(id);
     }, [id, setActiveTerminal]);
 
+    // ===== D&D: ツリーや外部からファイルをドロップしてパスを挿入 =====
+    const handleDragOver = useCallback((e: React.DragEvent): void => {
+      // パス含む drag のみ受け入れる
+      const types = e.dataTransfer.types;
+      if (
+        types.includes(TD_PATH_MIME) ||
+        types.includes("Files") ||
+        types.includes("text/plain")
+      ) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }
+    }, []);
+
+    const handleDrop = useCallback(
+      (e: React.DragEvent): void => {
+        e.preventDefault();
+        e.stopPropagation();
+        setActiveTerminal(id);
+
+        // 1) ツリー内 D&D: 独自 MIME から path を取得
+        const internal = e.dataTransfer.getData(TD_PATH_MIME);
+        if (internal) {
+          window.api.pty.write(id, formatPaths([internal]));
+          return;
+        }
+        // 2) 外部 (Finder 等) からのファイル: webUtils 経由でパスを取得
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) {
+          const paths = files
+            .map((f) => window.api.fs.getPathForFile(f))
+            .filter((p) => p && p.length > 0);
+          if (paths.length > 0) {
+            window.api.pty.write(id, formatPaths(paths));
+            return;
+          }
+        }
+        // 3) 最終手段: text/plain から取得
+        const text = e.dataTransfer.getData("text/plain");
+        if (text) {
+          window.api.pty.write(id, formatPaths([text]));
+        }
+      },
+      [id, setActiveTerminal],
+    );
+
     // Memoize container style
     const containerStyle = useMemo(
       () => ({
@@ -162,6 +211,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       <div
         className="terminal-container"
         onMouseDown={handleMouseDown}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
         style={containerStyle}
       >
         <TerminalSubHeader id={id} paneNumber={paneNumber} />
