@@ -28,6 +28,7 @@ export const Sidebar: React.FC = () => {
   const setWidth = useSidebarStore((s) => s.setWidth);
   const selectedTabCwd = useSidebarStore((s) => s.selectedTabCwd);
   const setSelectedTabCwd = useSidebarStore((s) => s.setSelectedTabCwd);
+  const setLastInteractedArea = useSidebarStore((s) => s.setLastInteractedArea);
 
   const metas = useTerminalMetaStore((s) => s.metas);
   const activeTerminalId = useActiveTerminalId();
@@ -108,6 +109,8 @@ export const Sidebar: React.FC = () => {
   return (
     <aside
       ref={containerRef}
+      data-sidebar-root="true"
+      onMouseDownCapture={() => setLastInteractedArea("sidebar")}
       style={{
         position: "relative",
         width,

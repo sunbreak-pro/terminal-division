@@ -36,6 +36,22 @@ function isAltScreen(terminal: Terminal): boolean {
   return terminal.buffer.active.type === "alternate";
 }
 
+// Cmd+Z / Cmd+Shift+Z の Undo/Redo は Ctrl+E + Ctrl+U + 再入力 の readline (zle/bash)
+// 前提のパッチで実現している。Claude Code (Ink TUI) のように readline を使わない
+// 子プロセスが前面にいるときに発火させると、`\x05` `\x15` がそのまま入力欄に
+// 流し込まれて壊れる。前面プロセス名がシェル名と一致しているときのみ有効化する。
+// processName ポーリングは 1 秒間隔のため、子プロセス起動直後の数百 ms は
+// 旧値を見る可能性があるが、誤って暴発するよりは安全。
+function isReadlineActive(id: string): boolean {
+  const meta = useTerminalMetaStore.getState().metas.get(id);
+  if (!meta) return false;
+  // 起動直後はまだ processName がポーリングされていない。shellName が確定していれば
+  // それを readline と見なす（実用上、起動直後はプロンプト待ちのため安全）。
+  if (meta.processName === null) return meta.shellName !== null;
+  if (meta.shellName === null) return false;
+  return meta.processName === meta.shellName;
+}
+
 function pushHistoryState(history: InputHistoryState, newLine: string): void {
   if (history.currentLine === newLine) return;
   history.redoStack = [];
@@ -559,6 +575,8 @@ export function undo(id: string): boolean {
   if (!instance) return false;
   if (!instance.shellReady) return false;
   if (isAltScreen(instance.terminal)) return false;
+  // 前面プロセスが claude / node / vim 等の非シェルなら no-op（暴発防止）
+  if (!isReadlineActive(id)) return false;
 
   const history = instance.inputHistory;
   if (history.undoStack.length === 0) return false;
@@ -687,6 +705,7 @@ export function redo(id: string): boolean {
   if (!instance) return false;
   if (!instance.shellReady) return false;
   if (isAltScreen(instance.terminal)) return false;
+  if (!isReadlineActive(id)) return false;
 
   const history = instance.inputHistory;
   if (history.redoStack.length === 0) return false;

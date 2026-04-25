@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+export type InteractionArea = "sidebar" | "terminal";
+
 interface SidebarStore {
   isOpen: boolean;
   width: number;
@@ -7,6 +9,9 @@ interface SidebarStore {
   selectedTabCwd: string | null;
   selectedNodePath: string | null;
   editingPath: string | null;
+  // Cmd+Z / Cmd+Shift+Z をサイドバーとターミナルどちらに振り分けるかの判定材料。
+  // mousedown / focus 時に更新する。
+  lastInteractedArea: InteractionArea;
 
   toggleOpen: () => void;
   setOpen: (open: boolean) => void;
@@ -17,6 +22,7 @@ interface SidebarStore {
   setSelectedNodePath: (path: string | null) => void;
   setEditingPath: (path: string | null) => void;
   resetExpansionForCwd: (cwd: string) => void;
+  setLastInteractedArea: (area: InteractionArea) => void;
 }
 
 const DEFAULT_WIDTH = 260;
@@ -41,6 +47,7 @@ export const useSidebarStore = create<SidebarStore>((set, get) => ({
   selectedTabCwd: null,
   selectedNodePath: null,
   editingPath: null,
+  lastInteractedArea: "terminal",
 
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
   setOpen: (open) => set({ isOpen: open }),
@@ -72,6 +79,11 @@ export const useSidebarStore = create<SidebarStore>((set, get) => ({
       if (!p.startsWith(cwd)) next.add(p);
     }
     set({ expandedPaths: next });
+  },
+
+  setLastInteractedArea: (area) => {
+    if (get().lastInteractedArea === area) return;
+    set({ lastInteractedArea: area });
   },
 }));
 

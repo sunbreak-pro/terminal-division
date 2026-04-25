@@ -67,8 +67,9 @@ describe("ShortcutsModal", () => {
   it("lists Undo / Redo shortcuts under Line Editing", () => {
     render(<ShortcutsModal isOpen={true} onClose={mockOnClose} />);
 
-    expect(screen.getByText("⌘ Z")).toBeInTheDocument();
-    expect(screen.getByText("⌘ ⇧ Z")).toBeInTheDocument();
+    // ⌘ Z / ⌘ ⇧ Z は Line Editing と Sidebar の双方に登場するため getAllByText で確認
+    expect(screen.getAllByText("⌘ Z").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("⌘ ⇧ Z").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("入力行を 1 段階戻す")).toBeInTheDocument();
     expect(screen.getByText("Undo を取り消す")).toBeInTheDocument();
   });

@@ -29,7 +29,18 @@ const shortcutCategories: ShortcutCategory[] = [
   },
   {
     title: "Sidebar",
-    shortcuts: [{ keys: "⌘ R", description: "ディレクトリツリーを再読み込み" }],
+    shortcuts: [
+      { keys: "⌘ .", description: "サイドバーの開閉" },
+      { keys: "⌘ R", description: "ディレクトリツリーを再読み込み" },
+      {
+        keys: "⌘ Z",
+        description: "ファイル操作を元に戻す（サイドバー操作直後）",
+      },
+      {
+        keys: "⌘ ⇧ Z",
+        description: "ファイル操作をやり直す（サイドバー操作直後）",
+      },
+    ],
   },
   {
     title: "Navigation",
@@ -173,7 +184,7 @@ const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose }) => {
             >
               {category.shortcuts.map((shortcut, index) => (
                 <div
-                  key={shortcut.keys}
+                  key={`${category.title}:${shortcut.keys}`}
                   style={{
                     display: "flex",
                     justifyContent: "space-between",

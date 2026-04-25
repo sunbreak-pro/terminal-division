@@ -39,6 +39,7 @@ describe("sidebarStore", () => {
       selectedTabCwd: null,
       selectedNodePath: null,
       editingPath: null,
+      lastInteractedArea: "terminal",
     });
   });
 
@@ -108,5 +109,16 @@ describe("sidebarStore", () => {
     expect(useSidebarStore.getState().editingPath).toBe("/x/file.txt");
     useSidebarStore.getState().setEditingPath(null);
     expect(useSidebarStore.getState().editingPath).toBeNull();
+  });
+
+  it("setLastInteractedArea switches and is idempotent on identical area", () => {
+    expect(useSidebarStore.getState().lastInteractedArea).toBe("terminal");
+    useSidebarStore.getState().setLastInteractedArea("sidebar");
+    expect(useSidebarStore.getState().lastInteractedArea).toBe("sidebar");
+    // 同じ値なら state を再生成しない（subscribe 再評価を抑制）
+    useSidebarStore.getState().setLastInteractedArea("sidebar");
+    expect(useSidebarStore.getState().lastInteractedArea).toBe("sidebar");
+    useSidebarStore.getState().setLastInteractedArea("terminal");
+    expect(useSidebarStore.getState().lastInteractedArea).toBe("terminal");
   });
 });

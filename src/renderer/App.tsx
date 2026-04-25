@@ -21,6 +21,22 @@ import * as terminalManager from "./services/terminalManager";
 import { useTerminalSearchStore } from "./stores/terminalSearchStore";
 import { useFileTreeStore } from "./stores/fileTreeStore";
 import { useSidebarStore } from "./stores/sidebarStore";
+import { useFileOpsHistoryStore } from "./stores/fileOpsHistoryStore";
+import { undoLast, redoLast } from "./services/fileOpsService";
+
+// xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
+// 通常の input/textarea ではない。Cmd+Z 等を sidebar / terminal にディスパッチする
+// 判定では「編集中の入力要素」として扱わない。
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT") return true;
+  if (tag === "TEXTAREA") {
+    return !target.classList.contains("xterm-helper-textarea");
+  }
+  if (target.isContentEditable) return true;
+  return false;
+}
 
 const App: React.FC = () => {
   const activeTerminalId = useActiveTerminalId();
@@ -157,8 +173,23 @@ const App: React.FC = () => {
         return;
       }
 
-      // Cmd + Z: Undo（行単位）
+      // Cmd + Z: Undo（サイドバー操作 or ターミナル行入力）
       if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "z") {
+        // 入力要素 (rename input 等) にフォーカスがあるときは
+        // ブラウザのテキスト Undo を尊重する。xterm の helper textarea は除外。
+        const target = e.target as HTMLElement | null;
+        if (isEditableTarget(target)) {
+          return;
+        }
+        const sidebarState = useSidebarStore.getState();
+        const fileOpsState = useFileOpsHistoryStore.getState();
+        const sidebarHasUndo = fileOpsState.undoStack.length > 0;
+        if (sidebarState.lastInteractedArea === "sidebar" && sidebarHasUndo) {
+          e.preventDefault();
+          e.stopPropagation();
+          void undoLast();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
@@ -167,13 +198,34 @@ const App: React.FC = () => {
         return;
       }
 
-      // Cmd + Shift + Z: Redo
+      // Cmd + Shift + Z: Redo（サイドバー or ターミナル）
       if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
+        const target = e.target as HTMLElement | null;
+        if (isEditableTarget(target)) {
+          return;
+        }
+        const sidebarState = useSidebarStore.getState();
+        const fileOpsState = useFileOpsHistoryStore.getState();
+        const sidebarHasRedo = fileOpsState.redoStack.length > 0;
+        if (sidebarState.lastInteractedArea === "sidebar" && sidebarHasRedo) {
+          e.preventDefault();
+          e.stopPropagation();
+          void redoLast();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           terminalManager.redo(activeTerminalId);
         }
+        return;
+      }
+
+      // Cmd + . : サイドバーの開閉トグル
+      if (isMeta && !isShift && !isOption && e.key === ".") {
+        e.preventDefault();
+        e.stopPropagation();
+        useSidebarStore.getState().toggleOpen();
         return;
       }
 

@@ -50,15 +50,46 @@ vi.mock("@xterm/addon-web-links", () => {
   return { WebLinksAddon: MockWebLinksAddon };
 });
 
+// 永続的な metas Map を共有して setShellName/setProcessName が反映されるようにする
+const __testMetas = new Map<
+  string,
+  {
+    cwd: string | null;
+    processName: string | null;
+    shellName: string | null;
+    lastActiveAt: number;
+    createdAt: number;
+  }
+>();
 vi.mock("../../stores/terminalMetaStore", () => ({
   useTerminalMetaStore: {
     getState: () => ({
-      metas: new Map(),
-      initMeta: vi.fn(),
-      setCwd: vi.fn(),
-      setProcessName: vi.fn(),
-      setShellName: vi.fn(),
-      removeMeta: vi.fn(),
+      metas: __testMetas,
+      initMeta: (id: string) => {
+        if (__testMetas.has(id)) return;
+        __testMetas.set(id, {
+          cwd: null,
+          processName: null,
+          shellName: null,
+          lastActiveAt: 0,
+          createdAt: 0,
+        });
+      },
+      setCwd: (id: string, cwd: string) => {
+        const m = __testMetas.get(id);
+        if (m) m.cwd = cwd;
+      },
+      setProcessName: (id: string, processName: string) => {
+        const m = __testMetas.get(id);
+        if (m) m.processName = processName;
+      },
+      setShellName: (id: string, shellName: string) => {
+        const m = __testMetas.get(id);
+        if (m) m.shellName = shellName;
+      },
+      removeMeta: (id: string) => {
+        __testMetas.delete(id);
+      },
     }),
   },
 }));
@@ -90,6 +121,7 @@ Object.defineProperty(window, "api", {
 
 // テスト対象をインポート（モックの後にインポート）
 import * as terminalManager from "../terminalManager";
+import { useTerminalMetaStore } from "../../stores/terminalMetaStore";
 
 describe("terminalManager", () => {
   const defaultOptions = {
@@ -105,6 +137,7 @@ describe("terminalManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    __testMetas.clear();
   });
 
   afterEach(() => {
@@ -352,7 +385,9 @@ describe("terminalManager", () => {
     };
 
     // undo/redo/writeWithHistory はシェル起動完了後（OSC 7770;A 受信後）に動く設計のため、
-    // テスト用に shellReady を立てたインスタンスを返すヘルパーを使う
+    // テスト用に shellReady を立てたインスタンスを返すヘルパーを使う。
+    // また Undo/Redo は前面プロセスがシェルのときのみ動くため、processName=shellName を
+    // セットしておく（実環境の "プロンプト待ち" 状態を模す）。
     const createReadyInstance = (
       id: string,
     ): ReturnType<typeof terminalManager.getOrCreate> => {
@@ -362,6 +397,9 @@ describe("terminalManager", () => {
         defaultCallbacks,
       );
       instance.shellReady = true;
+      const meta = useTerminalMetaStore.getState();
+      meta.setShellName(id, "zsh");
+      meta.setProcessName(id, "zsh");
       return instance;
     };
 
@@ -503,6 +541,26 @@ describe("terminalManager", () => {
 
       expect(mockPtyApi.write).toHaveBeenNthCalledWith(1, id, "\x05\x15");
       expect(mockPtyApi.write).toHaveBeenNthCalledWith(2, id, "h");
+    });
+
+    it("returns false when foreground process is not the shell (e.g. claude/vim)", () => {
+      const id = "test-undo-foreign-fg";
+      const instance = createReadyInstance(id);
+      const onData = getOnDataCallback(instance);
+
+      onData("a");
+      onData("b");
+      expect(terminalManager.undo(id)).toBe(true);
+      expect(terminalManager.redo(id)).toBe(true);
+
+      // 前面プロセスが claude / node / vim 等のシェル以外に切り替わったとき
+      useTerminalMetaStore.getState().setProcessName(id, "claude");
+      expect(terminalManager.undo(id)).toBe(false);
+      expect(terminalManager.redo(id)).toBe(false);
+
+      // シェルに戻れば再び動く
+      useTerminalMetaStore.getState().setProcessName(id, "zsh");
+      expect(terminalManager.undo(id)).toBe(true);
     });
 
     it("writeWithHistory records control sequences sent by shortcuts", () => {

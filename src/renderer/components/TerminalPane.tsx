@@ -9,6 +9,7 @@ import * as terminalManager from "../services/terminalManager";
 import { rafDebounceWithDelay } from "../utils/rafDebounce";
 import { TerminalSubHeader } from "./TerminalSubHeader";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
+import { useSidebarStore } from "../stores/sidebarStore";
 import { formatPaths } from "../utils/insertFiles";
 import {
   useSearchOpenForPane,
@@ -83,6 +84,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
           },
           onFocus: () => {
             setActiveTerminal(id);
+            useSidebarStore.getState().setLastInteractedArea("terminal");
           },
         },
       );
@@ -145,6 +147,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
 
     const handleMouseDown = useCallback((): void => {
       setActiveTerminal(id);
+      useSidebarStore.getState().setLastInteractedArea("terminal");
     }, [id, setActiveTerminal]);
 
     // ===== D&D: ツリーや外部からファイルをドロップしてパスを挿入 =====
