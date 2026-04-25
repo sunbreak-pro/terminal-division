@@ -16,6 +16,7 @@ import {
   useTerminalSearchStore,
 } from "../stores/terminalSearchStore";
 import { TerminalSearchOverlay } from "./TerminalSearchOverlay";
+import { showErrorToast } from "./Sidebar/ErrorToast";
 
 const TD_PATH_MIME = "application/x-td-path";
 
@@ -110,14 +111,30 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
 
           window.api.pty
             .create(id, initialCwd)
-            .then(() => {
+            .then((ok) => {
+              if (!ok) {
+                // Main 側で spawn 失敗（shell ENOENT、permission denied 等）。
+                // 黒いままのターミナルを残さないよう、xterm に明示メッセージ + toast 通知する。
+                console.error(`PTY spawn failed for terminal ${id}`);
+                instance.terminal.write(
+                  "\r\n\x1b[31mError: ターミナルプロセスの起動に失敗しました\x1b[0m\r\n",
+                );
+                showErrorToast(
+                  "ターミナルプロセスの起動に失敗しました（シェルが見つからないか権限不足の可能性）",
+                );
+                return;
+              }
               window.api.pty.resize(id, cols, rows);
+              // Main 側で spawn 直後に溜めた初期出力（zsh 起動メッセージなど）を flush する。
+              // pty:data リスナーは getOrCreate 内で同期登録済みなので確実に受け取れる。
+              window.api.pty.flushInitialBuffer(id);
             })
             .catch((error) => {
               console.error(`Failed to create PTY for terminal ${id}:`, error);
               instance.terminal.write(
                 "\r\n\x1b[31mError: Failed to create terminal process\x1b[0m\r\n",
               );
+              showErrorToast("ターミナルプロセスの起動に失敗しました");
             });
         }, 0);
       } else {

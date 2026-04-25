@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useTerminalStore } from "../terminalStore";
+import { useTerminalMetaStore } from "../terminalMetaStore";
 import type { SplitNode, TerminalPane } from "../../types/layout";
 import * as terminalManager from "../../services/terminalManager";
 
@@ -27,6 +28,7 @@ describe("terminalStore", () => {
       activeTerminalId: "initial",
       terminalCount: 1,
     });
+    useTerminalMetaStore.setState({ metas: new Map() });
     vi.clearAllMocks();
   });
 
@@ -109,6 +111,36 @@ describe("terminalStore", () => {
 
       expect(result).toBe(false);
       expect(useTerminalStore.getState().terminalCount).toBe(1);
+    });
+
+    it("should initialize meta for the new pane even when source has no cwd", () => {
+      // 親ペインに meta が無い状態で split → 新ペインの meta は必ず初期化される
+      const { splitTerminal } = useTerminalStore.getState();
+      splitTerminal("initial", "horizontal");
+
+      const state = useTerminalStore.getState();
+      const rootNode = state.nodes.get(state.rootId) as SplitNode;
+      const newTerminalId = rootNode.children[1];
+
+      const meta = useTerminalMetaStore.getState().metas.get(newTerminalId);
+      expect(meta).toBeDefined();
+      expect(meta?.cwd).toBeNull();
+    });
+
+    it("should inherit cwd from source pane when source has cwd set", () => {
+      const metaStore = useTerminalMetaStore.getState();
+      metaStore.initMeta("initial");
+      metaStore.setCwd("initial", "/Users/test/project");
+
+      const { splitTerminal } = useTerminalStore.getState();
+      splitTerminal("initial", "horizontal");
+
+      const state = useTerminalStore.getState();
+      const rootNode = state.nodes.get(state.rootId) as SplitNode;
+      const newTerminalId = rootNode.children[1];
+
+      const meta = useTerminalMetaStore.getState().metas.get(newTerminalId);
+      expect(meta?.cwd).toBe("/Users/test/project");
     });
 
     it("should properly update parent references when splitting nested terminal", () => {

@@ -2,6 +2,35 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-25 - サイドバー UX 強化（タブ視認性 / D&D / Undo・Redo / パスコピー）
+
+#### 概要
+
+初版サイドバーに対する 4 系統の UX 強化:
+
+1. タブにフォルダアイコン + 縦余白 (min-height 34px、bottom-border) を追加し視認性を向上
+2. ドラッグ&ドロップを実装(ツリー内移動 / 外部 Finder からのコピー / ツリーから外部アプリへ OS ネイティブ drag / ツリーからターミナルへパス挿入)
+3. 削除・名称変更・移動の Undo/Redo を 50 件のセッション内スタックで実装、サイドバー上部にアイコンツールバー配置
+4. ファイル/ディレクトリ右クリックメニューの最上段に相対パス・フルパスコピーを追加
+
+#### 変更点
+
+- **新規 IPC**: `fs:trashWithTracking`(`~/.Trash` を diff で追跡し復元用パス取得) / `fs:restoreFromTrash` / `fs:movePath`(直接移動、ダイアログなし) / `fs:copyPath`(再帰コピー、衝突時 ` copy`/` copy N` suffix) / `dnd:startDrag`(`webContents.startDrag` + `app.getFileIcon`)
+- **新規ファイル(renderer)**: `stores/fileOpsHistoryStore.ts`(50 件 undo/redo スタック) / `services/fileOpsService.ts`(performRename/Trash/Move/Copy + undoLast/redoLast) / `components/Sidebar/UndoRedoToolbar.tsx`
+- **既存編集(renderer)**:
+  - `Sidebar.tsx` 上部に `UndoRedoToolbar` をマウント
+  - `SidebarTabs.tsx` にフォルダアイコン + 余白 + 下線
+  - `TreeNode.tsx` に draggable + dragstart で `dnd.startDrag`(OS ネイティブ drag) + 独自 MIME `application/x-td-path` 埋込み + ディレクトリへの dragover/drop(内部=移動、外部=コピー)
+  - `DirectoryTree.tsx` のルートコンテナにも drop 受け、メニュー最上段にパスコピー
+  - `TerminalPane.tsx` に dragover/drop で `formatPaths` 経由でパス挿入
+- **既存編集(preload)**: `webUtils.getPathForFile` 公開、`fs.*` に新 IPC 追加、`dnd.startDrag` 追加
+- **設計判断**:
+  - D&D の挙動 → ツリー内=常に移動、外部 Finder→ツリー=常にコピー(原本破壊回避)、ツリー→ターミナル=パス挿入
+  - Undo の Cmd+Z はターミナル既存と衝突するためアイコンクリックのみ
+  - 削除 Undo はゴミ箱内追跡(`~/.Trash` 差分検出)、外部ボリュームで追跡失敗した場合はトースト通知し undo 不可
+  - copy 操作は undo 履歴に積まない(逆操作=削除は破壊的すぎる)
+  - 編集中(リネーム入力中)は draggable を無効化
+
 ### 2026-04-25 - 左サイドバー追加（CWD 別タブ + ディレクトリツリー + ファイル操作）
 
 #### 概要

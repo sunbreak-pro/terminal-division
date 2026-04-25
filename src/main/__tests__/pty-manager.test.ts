@@ -107,6 +107,9 @@ describe("PtyManager", () => {
       const result = ptyManager.createPty("reg-test", 1);
       expect(result).toBe(true);
 
+      // 初期出力は buffering されるため、flush で通常モードへ切り替える
+      ptyManager.flushInitialBuffer("reg-test");
+
       // onDataコールバック経由でデータ送信を確認
       const onDataCallback = mockOnData.mock.calls[0][0];
       onDataCallback("test output");
@@ -119,6 +122,7 @@ describe("PtyManager", () => {
 
     it("should not send to renderer after unregisterWindow", () => {
       ptyManager.createPty("unreg-test", 1);
+      ptyManager.flushInitialBuffer("unreg-test");
       ptyManager.unregisterWindow(1);
 
       mockSend.mockClear();
@@ -157,6 +161,7 @@ describe("PtyManager", () => {
 
     it("should send data to the correct windowId via onData", () => {
       ptyManager.createPty("data-test", 1);
+      ptyManager.flushInitialBuffer("data-test");
 
       const onDataCallback = mockOnData.mock.calls[0][0];
       onDataCallback("test output");
@@ -396,6 +401,7 @@ describe("PtyManager", () => {
   describe("sendToRenderer (via onData)", () => {
     it("should not send if window is destroyed", () => {
       ptyManager.createPty("destroyed-test", 1);
+      ptyManager.flushInitialBuffer("destroyed-test");
 
       mockIsDestroyed.mockReturnValue(true);
       mockSend.mockClear();
@@ -410,6 +416,7 @@ describe("PtyManager", () => {
 
     it("should not send if window is not registered", () => {
       ptyManager.createPty("unreg-send", 1);
+      ptyManager.flushInitialBuffer("unreg-send");
       ptyManager.unregisterWindow(1);
 
       mockSend.mockClear();
@@ -426,6 +433,103 @@ describe("PtyManager", () => {
         1,
         mockWindow as unknown as Electron.BrowserWindow,
       );
+    });
+  });
+
+  describe("initial buffer / flushInitialBuffer", () => {
+    it("should buffer initial output and not send until flushed", () => {
+      ptyManager.createPty("buffer-test", 1);
+
+      mockSend.mockClear();
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("zsh-startup-line-1\n");
+      onDataCallback("zsh-startup-line-2\n");
+
+      // buffering 中は pty:data が送られない
+      expect(mockSend).not.toHaveBeenCalledWith(
+        "pty:data",
+        expect.objectContaining({ id: "buffer-test" }),
+      );
+    });
+
+    it("should flush buffered output when flushInitialBuffer is called", () => {
+      ptyManager.createPty("flush-test", 1);
+
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("hello ");
+      onDataCallback("world");
+
+      mockSend.mockClear();
+      ptyManager.flushInitialBuffer("flush-test");
+
+      expect(mockSend).toHaveBeenCalledWith("pty:data", {
+        id: "flush-test",
+        data: "hello world",
+      });
+    });
+
+    it("should send subsequent output directly after flush", () => {
+      ptyManager.createPty("post-flush", 1);
+      ptyManager.flushInitialBuffer("post-flush");
+
+      mockSend.mockClear();
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("after");
+
+      expect(mockSend).toHaveBeenCalledWith("pty:data", {
+        id: "post-flush",
+        data: "after",
+      });
+    });
+
+    it("should be idempotent (second flush is a no-op)", () => {
+      ptyManager.createPty("idem-test", 1);
+
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      onDataCallback("buffered");
+
+      ptyManager.flushInitialBuffer("idem-test");
+      mockSend.mockClear();
+      ptyManager.flushInitialBuffer("idem-test");
+
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it("should auto-flush when buffer exceeds limit", () => {
+      ptyManager.createPty("auto-flush", 1);
+
+      const onDataCallback =
+        mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+      // 64KB を超える出力
+      const largeChunk = "x".repeat(65 * 1024);
+      onDataCallback(largeChunk);
+
+      // 自動 flush で pty:data が送られている
+      expect(mockSend).toHaveBeenCalledWith(
+        "pty:data",
+        expect.objectContaining({
+          id: "auto-flush",
+          data: expect.stringContaining("x"),
+        }),
+      );
+
+      // 以降は通常モード
+      mockSend.mockClear();
+      onDataCallback("normal");
+      expect(mockSend).toHaveBeenCalledWith("pty:data", {
+        id: "auto-flush",
+        data: "normal",
+      });
+    });
+
+    it("should do nothing for non-existent id", () => {
+      mockSend.mockClear();
+      ptyManager.flushInitialBuffer("non-existent");
+      expect(mockSend).not.toHaveBeenCalled();
     });
   });
 });

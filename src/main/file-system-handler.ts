@@ -111,15 +111,28 @@ class FileSystemManager {
   unwatch(dirPath: string, windowId: number): void {
     const entry = this.watchers.get(dirPath);
     if (!entry) return;
+    // 同ウィンドウから複数 ref がある場合（同パスを別コンポーネントから watch）も
+    // refCount で正しく管理する。windowIds は Set なので delete は idempotent。
     entry.refCount -= 1;
     if (entry.refCount <= 0) {
       void entry.watcher.close();
       this.watchers.delete(dirPath);
-    } else {
-      // refCount > 0 でも、最後に当該ウィンドウを参照していなければ Set から消す
-      // 実装簡略化: 別ウィンドウが同パスを開いているかは外部に把握していないので、
-      // refCount のみで判断する
-      void windowId; // 将来用
+      return;
+    }
+    // ウィンドウが完全に手放したかどうかは外部に把握していないため、
+    // refCount が 0 になったときの最終 unwatch でのみ Set から削除する。
+    // ただし unwatchAllForWindow / window destroy 経路で取りこぼしがあった場合の
+    // 防衛として、close 済みウィンドウの ID は除去しておく
+    for (const wid of entry.windowIds) {
+      const win = BrowserWindow.fromId(wid);
+      if (!win || win.isDestroyed()) {
+        entry.windowIds.delete(wid);
+      }
+    }
+    if (windowId !== undefined && entry.windowIds.size === 0) {
+      // windowIds が空 = 参照しているウィンドウが全て閉じている → 強制 close
+      void entry.watcher.close();
+      this.watchers.delete(dirPath);
     }
   }
 
@@ -304,11 +317,13 @@ class FileSystemManager {
 
   async openInVSCode(targetPath: string): Promise<boolean> {
     return new Promise((resolve) => {
-      // shell:true で PATH 解決を任せる。code が無ければ ENOENT ではなく終了コード 127 で出る
-      const proc = spawn(`code "${targetPath.replace(/"/g, '\\"')}"`, {
-        shell: true,
+      // shell:false + argv 配列で実行。targetPath にバッククオートや $() があっても
+      // shell が解釈せず、command injection を回避できる
+      const proc = spawn("code", [targetPath], {
+        shell: false,
         detached: true,
         stdio: "ignore",
+        env: process.env,
       });
       let resolved = false;
       proc.on("error", () => {

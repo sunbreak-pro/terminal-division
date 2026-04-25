@@ -17,6 +17,7 @@ const mockPtyApi = {
   resize: vi.fn(),
   destroy: vi.fn(),
   kill: vi.fn(),
+  flushInitialBuffer: vi.fn(),
   onData: vi.fn().mockReturnValue(() => {}),
   onExit: vi.fn().mockReturnValue(() => {}),
 };

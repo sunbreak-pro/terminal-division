@@ -44,6 +44,9 @@ const api = {
     resize: (id: string, cols: number, rows: number): void =>
       ipcRenderer.send("pty:resize", { id, cols, rows }),
     kill: (id: string): void => ipcRenderer.send("pty:kill", id),
+    // pty:create の reply を受けた後に呼ぶ。Main 側で spawn 直後に溜めた初期出力を pty:data として受け取る。
+    flushInitialBuffer: (id: string): void =>
+      ipcRenderer.send("pty:flushInitialBuffer", id),
     onData: createIpcListener<{ id: string; data: string }>("pty:data"),
     onExit: createIpcListener<{ id: string; exitCode: number }>("pty:exit"),
     onProcessName: createIpcListener<{ id: string; processName: string }>(

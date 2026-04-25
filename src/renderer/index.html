@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      CSP: contextIsolation + nodeIntegration:false 前提なので、外部ロードを禁止して
+      style/font の inline と data: を許可するだけの最小設定。
+      'unsafe-eval' は xterm.js / 開発時 Vite HMR 双方で必要なので残す。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' ws: wss:;"
+    />
     <title>Terminal Division</title>
   </head>
   <body>

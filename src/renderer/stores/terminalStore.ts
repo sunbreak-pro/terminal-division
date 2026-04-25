@@ -70,11 +70,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newTerminalId = generateId();
     const newSplitId = generateId();
 
-    // 元ペインのCWDを新ペインに事前設定（initMetaの上書き防止と連携）
+    // 新ペインのメタは必ず初期化する（initMeta は idempotent: 既存なら no-op）。
+    // CWD 未設定のペインから分割した場合でも meta が無いままになるのを防ぐ。
+    // TerminalPane.tsx は meta の cwd を見て PTY 起動 CWD を決めるため、
+    // meta 未初期化だと意図しない window.initialCwd フォールバックに落ちる。
     const metaStore = useTerminalMetaStore.getState();
+    metaStore.initMeta(newTerminalId);
     const sourceCwd = metaStore.metas.get(terminalId)?.cwd;
     if (sourceCwd) {
-      metaStore.initMeta(newTerminalId);
       metaStore.setCwd(newTerminalId, sourceCwd);
     }
 
