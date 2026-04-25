@@ -17,10 +17,19 @@ export interface TerminalInstance {
   fitAddon: FitAddon;
   ptyCreated: boolean;
   compositionRegistered: boolean;
+  // PTY 起動直後はシェルがまだ canonical mode で readline (zle) が起動していないため、
+  // \x01 / \x05 等の制御コードを送ると ^A / ^E と echo されてしまう。
+  // OSC 7770;A（プロンプト直前）受信またはフォールバックタイマで true にし、
+  // それまでショートカット由来の PTY 書き込みは silent suppress する。
+  shellReady: boolean;
+  shellReadyTimer: ReturnType<typeof setTimeout> | null;
   dataListenerRemover: (() => void) | null;
   exitListenerRemover: (() => void) | null;
   inputHistory: InputHistoryState;
 }
+
+// シェル統合を持たない構成でもショートカットを完全に塞がないためのフォールバック上限
+const SHELL_READY_FALLBACK_MS = 3000;
 
 // xterm.js の ALT screen（vim / less / fzf 等の TUI）中は履歴を変えない
 function isAltScreen(terminal: Terminal): boolean {
@@ -231,6 +240,15 @@ export function getOrCreate(
           if (marker) {
             promptDotStates.set(id, { marker, decoration: null });
           }
+          // 初回プロンプト到達 = readline がアクティブになった証 → ショートカット解禁
+          const inst = registry.get(id);
+          if (inst && !inst.shellReady) {
+            inst.shellReady = true;
+            if (inst.shellReadyTimer) {
+              clearTimeout(inst.shellReadyTimer);
+              inst.shellReadyTimer = null;
+            }
+          }
         }
       } catch (e) {
         console.warn("[OSC 7770] handler error:", e);
@@ -309,6 +327,8 @@ export function getOrCreate(
     fitAddon,
     ptyCreated: false,
     compositionRegistered: false,
+    shellReady: false,
+    shellReadyTimer: null,
     dataListenerRemover: () => {
       terminalDataDisposable.dispose();
       oscDisposable.dispose();
@@ -320,6 +340,14 @@ export function getOrCreate(
     exitListenerRemover,
     inputHistory,
   };
+
+  // OSC 7770;A が来ない構成（シェル統合無効/非対応シェル）向けのフォールバック
+  instance.shellReadyTimer = setTimeout(() => {
+    if (!instance.shellReady) {
+      instance.shellReady = true;
+    }
+    instance.shellReadyTimer = null;
+  }, SHELL_READY_FALLBACK_MS);
 
   // Store the registration function for use in attachToContainer
   (
@@ -336,6 +364,12 @@ export function getOrCreate(
 export function destroy(id: string): void {
   const instance = registry.get(id);
   if (!instance) return;
+
+  // shellReady フォールバックタイマがまだ走っていればクリア
+  if (instance.shellReadyTimer) {
+    clearTimeout(instance.shellReadyTimer);
+    instance.shellReadyTimer = null;
+  }
 
   // Remove listeners
   if (instance.dataListenerRemover) {
@@ -497,12 +531,25 @@ export function selectCurrentLine(id: string): void {
 }
 
 /**
+ * シェルの readline (zle/bash) がアクティブかを判定する。
+ * 起動直後は canonical mode のため、Ctrl+A 等を送ると ^A と echo されてしまう。
+ * 初回 OSC 7770;A 受信、または PTY 作成から SHELL_READY_FALLBACK_MS 経過で true。
+ */
+export function isShellReady(id: string): boolean {
+  const instance = registry.get(id);
+  if (!instance) return false;
+  return instance.shellReady;
+}
+
+/**
  * 履歴記録を伴う PTY 書き込み。ショートカットから制御シーケンスを送る場合に使う。
  * （通常のキー入力は terminal.onData 経由で自動的に履歴に入る）
+ * シェル起動中は silent suppress する（^X echo を防ぐ）。
  */
 export function writeWithHistory(id: string, payload: string): void {
   const instance = registry.get(id);
   if (!instance) return;
+  if (!instance.shellReady) return;
   if (!isAltScreen(instance.terminal)) {
     applyHistoryDelta(instance.inputHistory, payload);
   }
@@ -516,6 +563,7 @@ export function writeWithHistory(id: string, payload: string): void {
 export function undo(id: string): boolean {
   const instance = registry.get(id);
   if (!instance) return false;
+  if (!instance.shellReady) return false;
   if (isAltScreen(instance.terminal)) return false;
 
   const history = instance.inputHistory;
@@ -539,6 +587,7 @@ export function undo(id: string): boolean {
 export function redo(id: string): boolean {
   const instance = registry.get(id);
   if (!instance) return false;
+  if (!instance.shellReady) return false;
   if (isAltScreen(instance.terminal)) return false;
 
   const history = instance.inputHistory;

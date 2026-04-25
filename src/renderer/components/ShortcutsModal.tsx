@@ -44,6 +44,8 @@ const shortcutCategories: ShortcutCategory[] = [
       { keys: "⌘ K", description: "カーソル位置から行末まで削除" },
       { keys: "⌘ ←", description: "行頭に移動" },
       { keys: "⌘ →", description: "行末に移動" },
+      { keys: "⌘ ⇧ ←/→/↑/↓", description: "現在のプロンプト行を選択" },
+      { keys: "⌘ ⇧ A", description: "現在のプロンプト行を選択" },
       { keys: "⇧ Enter", description: "改行を挿入（コマンド実行なし）" },
     ],
   },

@@ -66,7 +66,7 @@ const App: React.FC = () => {
       const isOption = e.altKey;
 
       // Cmd + D: 縦に分割 (horizontal direction = left/right split)
-      if (isMeta && !isShift && !isOption && e.key === "d") {
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "d") {
         e.preventDefault();
         if (activeTerminalId && canSplitNow) {
           splitTerminal(activeTerminalId, "horizontal");
@@ -111,7 +111,7 @@ const App: React.FC = () => {
       }
 
       // Cmd + W: 閉じる
-      if (isMeta && !isShift && !isOption && e.key === "w") {
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "w") {
         e.preventDefault();
         if (activeTerminalId && terminalCount > 1) {
           closeTerminal(activeTerminalId);
@@ -130,7 +130,7 @@ const App: React.FC = () => {
       }
 
       // Cmd + Z: Undo（行単位）
-      if (isMeta && !isShift && !isOption && e.key === "z") {
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "z") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
@@ -160,7 +160,7 @@ const App: React.FC = () => {
       }
 
       // Cmd + K: カーソルから行末まで削除
-      if (isMeta && !isShift && !isOption && e.key === "k") {
+      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "k") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
@@ -172,7 +172,10 @@ const App: React.FC = () => {
       if (isMeta && !isShift && !isOption && e.key === "ArrowLeft") {
         e.preventDefault();
         e.stopPropagation();
-        if (activeTerminalId) {
+        if (
+          activeTerminalId &&
+          terminalManager.isShellReady(activeTerminalId)
+        ) {
           window.api.pty.write(activeTerminalId, "\x01"); // Ctrl+A
         }
         return;
@@ -182,7 +185,10 @@ const App: React.FC = () => {
       if (isMeta && !isShift && !isOption && e.key === "ArrowRight") {
         e.preventDefault();
         e.stopPropagation();
-        if (activeTerminalId) {
+        if (
+          activeTerminalId &&
+          terminalManager.isShellReady(activeTerminalId)
+        ) {
           window.api.pty.write(activeTerminalId, "\x05"); // Ctrl+E
         }
         return;
@@ -212,7 +218,10 @@ const App: React.FC = () => {
       if (!isMeta && !isShift && isOption && e.key === "ArrowLeft") {
         e.preventDefault();
         e.stopPropagation();
-        if (activeTerminalId) {
+        if (
+          activeTerminalId &&
+          terminalManager.isShellReady(activeTerminalId)
+        ) {
           window.api.pty.write(activeTerminalId, "\x1bb"); // ESC+b
         }
         return;
@@ -222,14 +231,17 @@ const App: React.FC = () => {
       if (!isMeta && !isShift && isOption && e.key === "ArrowRight") {
         e.preventDefault();
         e.stopPropagation();
-        if (activeTerminalId) {
+        if (
+          activeTerminalId &&
+          terminalManager.isShellReady(activeTerminalId)
+        ) {
           window.api.pty.write(activeTerminalId, "\x1bf"); // ESC+f
         }
         return;
       }
 
       // Option + D: 単語を前方削除（カーソル以降）
-      if (!isMeta && !isShift && isOption && e.key === "d") {
+      if (!isMeta && !isShift && isOption && e.key.toLowerCase() === "d") {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {

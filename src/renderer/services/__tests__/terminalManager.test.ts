@@ -351,13 +351,23 @@ describe("terminalManager", () => {
         : "normal";
     };
 
-    it("records normal typing and restores via undo/redo", () => {
-      const id = "test-undo-typing";
+    // undo/redo/writeWithHistory はシェル起動完了後（OSC 7770;A 受信後）に動く設計のため、
+    // テスト用に shellReady を立てたインスタンスを返すヘルパーを使う
+    const createReadyInstance = (
+      id: string,
+    ): ReturnType<typeof terminalManager.getOrCreate> => {
       const instance = terminalManager.getOrCreate(
         id,
         defaultOptions,
         defaultCallbacks,
       );
+      instance.shellReady = true;
+      return instance;
+    };
+
+    it("records normal typing and restores via undo/redo", () => {
+      const id = "test-undo-typing";
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("h");
@@ -386,11 +396,7 @@ describe("terminalManager", () => {
 
     it("treats Backspace as a history step", () => {
       const id = "test-undo-backspace";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("a");
@@ -404,11 +410,7 @@ describe("terminalManager", () => {
 
     it("treats Ctrl+U (\\x15) as clear-line and undo restores full line", () => {
       const id = "test-undo-ctrlu";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("h");
@@ -428,11 +430,7 @@ describe("terminalManager", () => {
 
     it("clears history on Enter", () => {
       const id = "test-undo-enter";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("a");
@@ -447,11 +445,7 @@ describe("terminalManager", () => {
 
     it("caps the undo stack at MAX_UNDO_STACK_SIZE", () => {
       const id = "test-undo-cap";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       for (let i = 0; i < 150; i++) onData("x");
@@ -463,11 +457,7 @@ describe("terminalManager", () => {
 
     it("clears redoStack when new input arrives after undo", () => {
       const id = "test-undo-redo-invalidate";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("a");
@@ -481,11 +471,7 @@ describe("terminalManager", () => {
 
     it("is a no-op on alternate screen (TUI)", () => {
       const id = "test-undo-altscreen";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("a");
@@ -506,11 +492,7 @@ describe("terminalManager", () => {
 
     it("sends Ctrl+E + Ctrl+U + previous line via pty.write on undo", () => {
       const id = "test-undo-pty-write";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("h");
@@ -525,11 +507,7 @@ describe("terminalManager", () => {
 
     it("writeWithHistory records control sequences sent by shortcuts", () => {
       const id = "test-write-with-history";
-      const instance = terminalManager.getOrCreate(
-        id,
-        defaultOptions,
-        defaultCallbacks,
-      );
+      const instance = createReadyInstance(id);
       const onData = getOnDataCallback(instance);
 
       onData("f");
@@ -539,6 +517,49 @@ describe("terminalManager", () => {
       terminalManager.writeWithHistory(id, "\x17"); // Ctrl+W: delete word backward
       expect(instance.inputHistory.currentLine).toBe("");
       expect(mockPtyApi.write).toHaveBeenLastCalledWith(id, "\x17");
+    });
+  });
+
+  describe("shell readiness gating", () => {
+    it("isShellReady is false right after getOrCreate", () => {
+      const id = "test-ready-false";
+      terminalManager.getOrCreate(id, defaultOptions, defaultCallbacks);
+      expect(terminalManager.isShellReady(id)).toBe(false);
+    });
+
+    it("isShellReady becomes true after the fallback timer fires", () => {
+      const id = "test-ready-fallback";
+      terminalManager.getOrCreate(id, defaultOptions, defaultCallbacks);
+      expect(terminalManager.isShellReady(id)).toBe(false);
+      vi.advanceTimersByTime(3000);
+      expect(terminalManager.isShellReady(id)).toBe(true);
+    });
+
+    it("writeWithHistory is suppressed when shell is not ready", () => {
+      const id = "test-ready-suppress-write";
+      terminalManager.getOrCreate(id, defaultOptions, defaultCallbacks);
+      mockPtyApi.write.mockClear();
+
+      terminalManager.writeWithHistory(id, "\x01"); // Ctrl+A
+      expect(mockPtyApi.write).not.toHaveBeenCalled();
+    });
+
+    it("undo / redo return false when shell is not ready", () => {
+      const id = "test-ready-suppress-undo";
+      const instance = terminalManager.getOrCreate(
+        id,
+        defaultOptions,
+        defaultCallbacks,
+      );
+      // 履歴を直接積んでも shellReady=false の間は undo/redo は false を返す
+      instance.inputHistory.undoStack.push("a");
+      expect(terminalManager.undo(id)).toBe(false);
+      instance.inputHistory.redoStack.push("a");
+      expect(terminalManager.redo(id)).toBe(false);
+    });
+
+    it("isShellReady returns false for non-existent id", () => {
+      expect(terminalManager.isShellReady("does-not-exist")).toBe(false);
     });
   });
 });
