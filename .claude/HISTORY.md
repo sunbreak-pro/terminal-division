@@ -1,5 +1,16 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-25 - Cmd+W で閉じるボタンの border shorthand と borderColor 混在による React 警告を修正
+
+#### 概要
+
+Cmd+W で最後から 2 つ目のペインを閉じて `terminalCount === 1` になり「閉じる」ボタンが disabled に切り替わる際、React が「Removing a style property during rerender (borderColor) when a conflicting property is set (border)」警告を出していた問題を修正。`buttonStyle` が `border` shorthand を持つ一方、有効時の `closeButtonStyle` だけが `borderColor` 単独プロパティを上書きしていたため、disabled 切替時に `borderColor` を消そうとしても shorthand `border` が残る矛盾が発生していた。
+
+#### 変更点
+
+- **Header.tsx (closeButtonStyle)**: `borderColor: theme.colors.danger` 単独設定を `border: '1px solid ${theme.colors.danger}'` shorthand に統一 (src/renderer/components/Header.tsx:104-110)
+- **Header.tsx (handleCloseButtonEnter / handleCloseButtonLeave)**: 直接 DOM 操作の `e.currentTarget.style.borderColor = ...` を `e.currentTarget.style.border = '1px solid ...'` に統一し、`buttonStyle` 側の shorthand と混在しないよう揃えた (src/renderer/components/Header.tsx:128-146)
+
 ### 2026-04-25 - vi-mode 環境で Cmd+←/→/K が ^A/^E/^K として echo されるバグを修正
 
 #### 概要
@@ -65,14 +76,4 @@
 - **insertFiles.test.ts（新規）**: `formatPaths` 5 ケース（通常/スペース/埋め込みクオート/複数連結/空配列）+ `promptAndInsertFiles` 4 ケース（正常系/キャンセル/空選択/例外）の計 9 テスト追加、全 113 件グリーン
 - **Known limitation**: preload は Electron プロセス起動時にロードされ HMR 非対応。dev 実行中に preload を変更した場合は `npm run dev` の再起動が必要（ユーザー確認済み）
 
-### 2026-04-23 - Cmd+Backspace をカーソルから行頭までの削除に修正
-
-#### 概要
-
-Cmd+Backspace が「カーソルから行頭まで削除」ではなく「行全体削除」になっていた問題を修正。`App.tsx` の Cmd+Backspace ハンドラが Ctrl+E（行末へ移動）→ Ctrl+U（backward-kill-line）の2段送信を行っていたため、カーソル右側の文字も巻き込んで消去されていた。ShortcutsModal のドキュメント「カーソル位置から行頭まで削除」とも仕様が食い違っていた。
-
-#### 変更点
-
-- **App.tsx**: Cmd+Backspace ハンドラから `\x05`（Ctrl+E）送信を削除し、`\x15`（Ctrl+U）のみ送信するよう変更。コメントも実動作に合わせ「カーソル位置から行頭まで削除」へ更新 (src/renderer/App.tsx:121-129)
-
-> 2026-04-25 ローリングアーカイブ: これ以前の 11 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-25 ローリングアーカイブ: これ以前の 12 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

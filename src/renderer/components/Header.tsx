@@ -104,7 +104,7 @@ const Header: React.FC = React.memo(() => {
   const closeButtonStyle = useMemo<React.CSSProperties>(
     () =>
       canClose
-        ? { ...buttonStyle, borderColor: theme.colors.danger }
+        ? { ...buttonStyle, border: `1px solid ${theme.colors.danger}` }
         : disabledStyle,
     [buttonStyle, disabledStyle, canClose],
   );
@@ -129,7 +129,7 @@ const Header: React.FC = React.memo(() => {
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (canClose) {
         e.currentTarget.style.backgroundColor = theme.colors.danger;
-        e.currentTarget.style.borderColor = theme.colors.danger;
+        e.currentTarget.style.border = `1px solid ${theme.colors.danger}`;
       }
     },
     [canClose],
@@ -139,7 +139,7 @@ const Header: React.FC = React.memo(() => {
     (e: React.MouseEvent<HTMLButtonElement>) => {
       e.currentTarget.style.backgroundColor = "transparent";
       if (canClose) {
-        e.currentTarget.style.borderColor = theme.colors.danger;
+        e.currentTarget.style.border = `1px solid ${theme.colors.danger}`;
       }
     },
     [canClose],
