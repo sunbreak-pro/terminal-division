@@ -4,6 +4,7 @@ import {
   parentBasenameOf,
   buildCwdTabs,
   homeRelativePath,
+  terminalRelativePath,
   type PaneCwdInput,
 } from "../labelCollision";
 
@@ -132,5 +133,32 @@ describe("homeRelativePath", () => {
   });
   it("returns absolute path when home is empty", () => {
     expect(homeRelativePath("/x/y", "")).toBe("/x/y");
+  });
+});
+
+describe("terminalRelativePath", () => {
+  it("returns '.' when path equals base", () => {
+    expect(terminalRelativePath("/a/b", "/a/b")).toBe(".");
+  });
+  it("returns child segment for descendants", () => {
+    expect(terminalRelativePath("/a/b/c.txt", "/a/b")).toBe("c.txt");
+    expect(terminalRelativePath("/a/b/c/d", "/a/b")).toBe("c/d");
+  });
+  it("uses '..' for ancestors", () => {
+    expect(terminalRelativePath("/a/b", "/a/b/c")).toBe("..");
+    expect(terminalRelativePath("/a", "/a/b/c")).toBe("../..");
+  });
+  it("uses '..' across siblings", () => {
+    expect(terminalRelativePath("/a/x/file.txt", "/a/b")).toBe("../x/file.txt");
+    expect(
+      terminalRelativePath("/Users/foo/Documents/f.txt", "/Users/foo/projects"),
+    ).toBe("../Documents/f.txt");
+  });
+  it("normalizes trailing slashes", () => {
+    expect(terminalRelativePath("/a/b/", "/a")).toBe("b");
+    expect(terminalRelativePath("/a/b", "/a/")).toBe("b");
+  });
+  it("returns absolute path when base is empty", () => {
+    expect(terminalRelativePath("/a/b", "")).toBe("/a/b");
   });
 });

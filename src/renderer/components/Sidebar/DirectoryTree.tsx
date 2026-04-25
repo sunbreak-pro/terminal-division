@@ -10,7 +10,12 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { showErrorToast } from "./ErrorToast";
 import { useSidebarStore } from "../../stores/sidebarStore";
 import { useActiveTerminalId } from "../../stores/terminalStore";
-import { basenameOf, homeRelativePath } from "../../utils/labelCollision";
+import { useTerminalMetaStore } from "../../stores/terminalMetaStore";
+import {
+  basenameOf,
+  homeRelativePath,
+  terminalRelativePath,
+} from "../../utils/labelCollision";
 import {
   performTrash,
   performMove,
@@ -32,6 +37,9 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({ rootPath }) => {
   const acquireWatch = useFileTreeStore((s) => s.acquireWatch);
   const releaseWatch = useFileTreeStore((s) => s.releaseWatch);
   const activeTerminalId = useActiveTerminalId();
+  const activeCwd = useTerminalMetaStore((s) =>
+    activeTerminalId ? (s.metas.get(activeTerminalId)?.cwd ?? null) : null,
+  );
   const setEditingPath = useSidebarStore((s) => s.setEditingPath);
 
   const [menu, setMenu] = useState<{
@@ -73,7 +81,10 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({ rootPath }) => {
   const buildMenuItems = useCallback(
     (node: FileNode): ContextMenuItem[] => {
       const items: ContextMenuItem[] = [];
-      const relative = homeRelativePath(node.path, homeDir);
+      // 「相対パス」はアクティブなターミナルの CWD 起点。CWD 不明時はホーム起点にフォールバック。
+      const relative = activeCwd
+        ? terminalRelativePath(node.path, activeCwd)
+        : homeRelativePath(node.path, homeDir);
 
       // ===== セクション 1: パスコピー =====
       items.push({
@@ -163,7 +174,7 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({ rootPath }) => {
       });
       return items;
     },
-    [activeTerminalId, setEditingPath, homeDir],
+    [activeTerminalId, activeCwd, setEditingPath, homeDir],
   );
 
   // ルートディレクトリへの D&D ドロップ

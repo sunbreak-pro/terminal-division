@@ -130,3 +130,36 @@ export function homeRelativePath(absPath: string, homeDir: string): string {
   }
   return absPath;
 }
+
+/**
+ * baseCwd 起点での相対パスを POSIX 形式（'/' 区切り）で返す。
+ * 同じディレクトリは ".", 子孫は "foo/bar", 範囲外は必要に応じて "../" を付ける。
+ * baseCwd が空、またはルートが一致しない場合は絶対パスをそのまま返す。
+ */
+export function terminalRelativePath(absPath: string, baseCwd: string): string {
+  if (!baseCwd) return absPath;
+  const normPath = normalizeCwd(absPath).replace(/\\/g, "/");
+  const normBase = normalizeCwd(baseCwd).replace(/\\/g, "/");
+  if (normPath === normBase) return ".";
+
+  const pathParts = normPath.split("/");
+  const baseParts = normBase.split("/");
+
+  let commonLen = 0;
+  const minLen = Math.min(pathParts.length, baseParts.length);
+  while (commonLen < minLen && pathParts[commonLen] === baseParts[commonLen]) {
+    commonLen++;
+  }
+
+  // ルート（先頭が "" の絶対パス）が一致しないなら相対化不能とみなす
+  if (commonLen === 0) return absPath;
+
+  const upCount = baseParts.length - commonLen;
+  const downParts = pathParts.slice(commonLen);
+
+  const segments: string[] = [];
+  for (let i = 0; i < upCount; i++) segments.push("..");
+  segments.push(...downParts);
+
+  return segments.length > 0 ? segments.join("/") : ".";
+}
