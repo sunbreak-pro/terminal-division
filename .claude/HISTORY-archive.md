@@ -2,6 +2,25 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-26 - ウィンドウごと独立テーマ（テーマ同期解除）
+
+#### 概要
+
+複数ウィンドウを開いた際、各ウィンドウが独立したテーマを持てるように変更。従来は localStorage 共有 + `theme:sync` IPC ブロードキャストで全ウィンドウのテーマが強制同期されていたが、これを完全廃止。新規ウィンドウは常に DEFAULT_THEME_ID（dark）で起動し、テーマ選択はそのウィンドウが開いている間だけメモリ上に保持する（再起動で失われる）。
+
+#### 変更点
+
+- **themeStore**: `getStoredThemeId` / `storeThemeId` / `setupThemeSync` を削除し、初期値を `DEFAULT_THEME_ID` リテラルに固定。`setTheme` から `window.api.theme.notifyChanged` 呼び出しを削除（純粋な local state 更新のみ）。localStorage 永続化は廃止
+- **App.tsx**: `setupThemeSync` の import と `useEffect(() => setupThemeSync(), [])` を削除
+- **IPC 削除**: `ipc-handlers.ts` の `theme:changed` ハンドラ、`preload/index.ts` の `window.api.theme` ネームスペース全体（`notifyChanged` / `onSync`）を削除
+- **未使用化したユーティリティ削除**: 唯一の利用箇所（theme:changed ハンドラ）を消したため未使用となった `pty-manager.broadcastToAll` を削除。関連テスト 3 件も削除
+- **テスト・モック更新**: `renderer/test/setup.ts` から `mockThemeApi` を削除。`themeStore.test.ts` の localStorage 永続化テスト 3 件を削除（254 → 253 件、すべてグリーン）
+- **テスト合計**: 19 ファイル / 253 件グリーン
+- **設計判断**:
+  - 「各ウィンドウの最後のテーマを覚える」にすると `session-state.json` を multi-window 対応に拡張する必要があり、既存の "最初の 1 ウィンドウだけが復元データを受け取る" 設計との整合に重大な改修が必要。今回は「再起動で全ウィンドウ dark から始まる」最小路線を採用
+  - 新規ウィンドウのテーマを「親ウィンドウから継承」ではなく「常に dark」にする選択は、ユーザーの明示的な指定（B 案）。Dock の「最近のディレクトリ」経由で開いた追加ウィンドウも同じ挙動
+  - `broadcastToAll` は generic な utility だが、唯一の caller を消した時点で dead code 扱い。"unused なら削除" の方針に従い除去（将来必要になれば再追加可能）
+
 ### 2026-04-25 - Cmd+F 検索パネル機能拡張（VSCode 風オプション + ヒット件数）+ スクロールバッククリアボタン
 
 #### 概要

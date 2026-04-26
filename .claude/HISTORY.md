@@ -1,6 +1,26 @@
 # HISTORY.md - 変更履歴
 
-### 2026-04-26 - Settings UI（テーマ / ショートカット / 不透明度、T2-9）（計画書: archive/2026-04-26-settings-feature.md）
+### 2026-04-26 - Markdown エディタのテーマ対応 UI/UX リデザイン
+
+#### 概要
+
+T2-8 で導入したペイン内 Markdown エディタが light テーマで「真っ白で見づらい」問題に対し、CodeMirror 設定をテーマ駆動に作り直した。原因は `EditorView.theme(..., { dark: true })` がハードコードされており（light テーマでも CodeMirror が dark モードとして動作）、かつ markdown 構文用の `HighlightStyle` が未定義で見出し / リンク / コード等が pale な default 色のままだったこと。修正は (a) 背景色の輝度から light/dark を自動判定して `dark` フラグを切替、(b) 見出し / 強調 / リンク / リストマーク / 引用 / 区切り線 / コード等を `theme.colors.accent` / `text` / `textSecondary` / `border` から派生させた `HighlightStyle` を新設、(c) 不透明だった選択背景を `withAlpha(accent, 0.28)` のセミトランスペアレントに、active line も `accent` 6–9% alpha に置換、(d) light テーマの editor 部分のみ `#fbfbf9` のオフホワイトに（xterm 側の light 設定には触れない）、(e) ファイルパスバーを `[MD]` バッジ + ディレクトリ淡色 + ファイル名強調に再設計。色操作ヘルパは `colorUtils.ts` に切り出して 25 件の単体テストを追加。
+
+#### 変更点
+
+- **MarkdownEditor.tsx**: `EditorView.theme()` の `{ dark: true }` ハードコードを `{ dark: !isLightBackground(theme.colors.terminalBackground) }` に変更（カスタムテーマも輝度判定で自動分岐）。`editorChrome` を `useMemo` で派生させ editorBg / gutterBg / codeBg / codeFg / ruleColor を一元管理。`.cm-selectionBackground` を `borderActive` ベタ塗り → `withAlpha(accent, 0.28)` に、`.cm-activeLine` / `.cm-activeLineGutter` を `buttonHover` → `withAlpha(accent, 0.06–0.16)` に置換。`.cm-content` に padding 14/6/32/6、`.cm-scroller` に lineHeight 1.65、フォントサイズ 13→13.5px、cursor 線幅 2px、`.cm-gutters` に `borderRight: 1px solid border` を追加。light テーマ時は editor 背景を pure white から `#fbfbf9` のオフホワイトに置換
+- **HighlightStyle 新設**: `@codemirror/language` の `syntaxHighlighting` + `HighlightStyle.define` で markdown 用構文ハイライトを定義。heading1–6 / strong / emphasis / strikethrough / link / url / monospace / quote / processingInstruction (= ListMark / HeaderMark) / contentSeparator / meta を `theme.colors.accent` / `text` / `textSecondary` / `border` および inline code 専用色（light=`#a3274a`、dark=`#e6a26a`）から派生
+- **ファイルパスバー再設計**: 単純な path 表示から `[MD]` バッジ（accent 12% alpha 背景 + 55% alpha ボーダー）+ ディレクトリ淡色 70% opacity + ファイル名 fontWeight 600 + `direction: rtl` で省略時もファイル名が見える形に変更
+- **新規 utility**: `src/renderer/utils/colorUtils.ts` に `withAlpha(hex, 0..1)` と `isLightBackground(hex)` を切り出し（`#rrggbb` 専用、不正形式・非対応形式は素通し / false 返し）。MarkdownEditor 内のインライン定義から外出しして再利用可能化
+- **新規テスト**: `utils/__tests__/colorUtils.test.ts` (25 件) — withAlpha は alpha 0/0.5/1 / クランプ（>1, <0）/ # 正規化 / 短縮形と長すぎる hex の素通し / 単一バイト保証、isLightBackground は white/black/各テーマ背景 / 加重輝度（pure red=dark, pure green=light, pure blue=dark）/ 0.5 閾値（#808080=light, #777777=dark）/ shorthand 非対応 / 不正 hex / # 省略許容
+- **テスト合計**: 25 ファイル / 361 件グリーン（修正前 336 から +25 件）
+- **依存追加**: なし（`@codemirror/language` / `@lezer/highlight` は既に `@uiw/react-codemirror` 経由で transitively 解決済み）
+- **設計判断**:
+  - **dark フラグ判定を `theme.id` ではなく輝度ベース**: カスタムテーマ（Settings UI で追加可能）を考慮すると id ベース判定はカバーしきれない。`terminalBackground` の加重輝度 (0.299R + 0.587G + 0.114B) > 0.5 で light 判定するほうがロバスト
+  - **light テーマだけ editor 背景を `#fbfbf9` に**: pure white は長時間編集で疲れるが、テーマ全体（xterm 含む）の `terminalBackground` を変えると影響が大きい。MarkdownEditor 内だけ off-white にすることで「ターミナルは白、エディタは少し落とした白」の差を作りつつ既存テーマ定義は無傷
+  - **選択 / アクティブ行に alpha**: 旧実装は `borderActive` 不透明で選択文字が読めない致命的な UX 問題があった。アプリ全体の `withAlpha` ヘルパーは将来別コンポーネントでも再利用するため utils に切り出し
+  - **HighlightStyle を別 useMemo に**: editorTheme と分離することで「chrome（gutter / cursor / 選択）」と「コンテンツ構文（見出し / リンク / コード）」の責務を明確化。両方とも `[theme.colors, editorChrome]` 依存だが、将来コードブロック言語別ハイライトを足す際の差分が局所化される
+  - **ファイルパスの `direction: rtl`**: 長い絶対パスでも常に末尾（ファイル名）が見える。Bidi 反転のためテキスト本体を `unicodeBidi: plaintext` に包んで論理順序を保つ標準テクニック
 
 #### 概要
 
@@ -102,23 +122,4 @@ Settings モーダル（800×600、左カテゴリ + 右タブ）を新設し、
   - `isInsideMarkdownEditor()` は `target.closest('[data-md-editor-pane]')` で検出。activeTerminalId ベースだと editor focus 直前のフレームで判定がズレるため、DOM 親探索のほうが堅牢
 - **計画書アーカイブ**: `.claude/archive/2026-04-26-markdown-editor.md` に Status=COMPLETED で移動済み
 
-### 2026-04-26 - ウィンドウごと独立テーマ（テーマ同期解除）
-
-#### 概要
-
-複数ウィンドウを開いた際、各ウィンドウが独立したテーマを持てるように変更。従来は localStorage 共有 + `theme:sync` IPC ブロードキャストで全ウィンドウのテーマが強制同期されていたが、これを完全廃止。新規ウィンドウは常に DEFAULT_THEME_ID（dark）で起動し、テーマ選択はそのウィンドウが開いている間だけメモリ上に保持する（再起動で失われる）。
-
-#### 変更点
-
-- **themeStore**: `getStoredThemeId` / `storeThemeId` / `setupThemeSync` を削除し、初期値を `DEFAULT_THEME_ID` リテラルに固定。`setTheme` から `window.api.theme.notifyChanged` 呼び出しを削除（純粋な local state 更新のみ）。localStorage 永続化は廃止
-- **App.tsx**: `setupThemeSync` の import と `useEffect(() => setupThemeSync(), [])` を削除
-- **IPC 削除**: `ipc-handlers.ts` の `theme:changed` ハンドラ、`preload/index.ts` の `window.api.theme` ネームスペース全体（`notifyChanged` / `onSync`）を削除
-- **未使用化したユーティリティ削除**: 唯一の利用箇所（theme:changed ハンドラ）を消したため未使用となった `pty-manager.broadcastToAll` を削除。関連テスト 3 件も削除
-- **テスト・モック更新**: `renderer/test/setup.ts` から `mockThemeApi` を削除。`themeStore.test.ts` の localStorage 永続化テスト 3 件を削除（254 → 253 件、すべてグリーン）
-- **テスト合計**: 19 ファイル / 253 件グリーン
-- **設計判断**:
-  - 「各ウィンドウの最後のテーマを覚える」にすると `session-state.json` を multi-window 対応に拡張する必要があり、既存の "最初の 1 ウィンドウだけが復元データを受け取る" 設計との整合に重大な改修が必要。今回は「再起動で全ウィンドウ dark から始まる」最小路線を採用
-  - 新規ウィンドウのテーマを「親ウィンドウから継承」ではなく「常に dark」にする選択は、ユーザーの明示的な指定（B 案）。Dock の「最近のディレクトリ」経由で開いた追加ウィンドウも同じ挙動
-  - `broadcastToAll` は generic な utility だが、唯一の caller を消した時点で dead code 扱い。"unused なら削除" の方針に従い除去（将来必要になれば再追加可能）
-
-> 2026-04-26 ローリングアーカイブ: これ以前の 26 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-26 ローリングアーカイブ: これ以前の 27 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
