@@ -265,7 +265,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
         <TerminalSubHeader id={id} paneNumber={paneNumber} />
         <div
           style={{
-            height: "calc(100% - 22px)",
+            height: "calc(100% - 28px)",
             width: "100%",
             position: "relative",
           }}

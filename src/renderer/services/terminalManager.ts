@@ -654,18 +654,57 @@ export function clearSearchDecorations(id: string): void {
 }
 
 /**
- * スクロールバックをクリアする。
+ * スクロールバックを全消去する（プロンプト行は保持）。
  * - terminal.clear(): バッファ全体を削除し、現在のプロンプト行を新しい先頭行にする
  *   （PTY プロセス・シェル状態は触らないため、実行中のコマンドや履歴は保持）
  * - clearTextureAtlas(): canvas renderer のテクスチャ腐敗（macOS スリープ復帰時の
  *   表示崩れ等）を強制再描画でリセット
  *
  * 大量出力で重くなったときや、文字化け/表示崩れを直したいときに使う。
+ * 部分削除は trimScrollback を、xterm 状態の完全初期化は resetTerminal を参照。
  */
 export function clearScrollback(id: string): void {
   const instance = registry.get(id);
   if (!instance) return;
   instance.terminal.clear();
+  instance.terminal.clearTextureAtlas();
+}
+
+/**
+ * スクロールバックを「直近 keepLines 行」まで縮める。
+ * - xterm.js の `scrollback` オプションを一時的に keepLines に下げると、
+ *   内部 BufferService が古い行から trim する（v5.5.x で確認済の挙動）
+ * - trim 発火直後に microtask で元の上限へ戻し、今後の出力が再び 10000 行まで
+ *   蓄積できるようにする（恒久的な上限変更ではない）
+ * - keepLines が現在上限以上 / 負数 / NaN なら no-op
+ *
+ * シェル状態 / PTY プロセスには触らない（clearScrollback と同じ）。
+ */
+export function trimScrollback(id: string, keepLines: number): void {
+  const instance = registry.get(id);
+  if (!instance) return;
+  if (!Number.isFinite(keepLines) || keepLines < 0) return;
+  const original = instance.terminal.options.scrollback ?? 10000;
+  if (keepLines >= original) return;
+  instance.terminal.options.scrollback = keepLines;
+  instance.terminal.clearTextureAtlas();
+  queueMicrotask(() => {
+    // ペイン破棄レース対策: registry から差し替えられていたら触らない
+    if (registry.get(id) !== instance) return;
+    instance.terminal.options.scrollback = original;
+  });
+}
+
+/**
+ * xterm 側の状態を完全初期化する。
+ * - terminal.reset(): カーソル形状、モード、代替バッファ、選択、スクロールバックを全リセット
+ * - PTY プロセス・シェル状態には触らない（実行中コマンドや環境は保持）
+ * - 用途: クリアでも直らない表示崩れ、TUI を抜けた直後にカーソルが戻らない時の最終手段
+ */
+export function resetTerminal(id: string): void {
+  const instance = registry.get(id);
+  if (!instance) return;
+  instance.terminal.reset();
   instance.terminal.clearTextureAtlas();
 }
 

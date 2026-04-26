@@ -164,3 +164,33 @@ Tier 1 のコア体験を補強する機能。実装済みだが中核ではな�
 - `src/renderer/utils/markdownFile.ts`（拡張子判定）
 - `src/renderer/utils/layoutUtils.ts`（`getPaneNumber`）
 - 依存パッケージ: `@uiw/react-codemirror` / `@codemirror/lang-markdown` / `@codemirror/commands` / `@codemirror/state` / `@codemirror/view`
+
+---
+
+## T2-9: ペインヘッダーのスクロールバック削除メニュー
+
+### Purpose
+
+「全消去」と「現状維持」の二択しかなかったスクロールバッククリアを、削除量を選択できるメニューに拡張。大量出力で重くなったときに直近行を残してログを軽くしたり、表示崩れ復旧用に完全リセットを選べるようにする。
+
+### Boundary
+
+- **含む**: ペインヘッダーのゴミ箱アイコン → クリックで直下にポップオーバー → 4 プリセット（全消去 / 直近 100 行 / 直近 500 行 / 直近 1000 行）+ 区切り線 + 完全リセット
+- **含まない**: カスタム数値入力、scrollback 上限自体の設定 UI、最後のコマンド出力単位の削除（OSC 133 / シェル統合に依存、T3-3 後送り）、全ペイン一括クリア、選択履歴の永続化
+
+### Acceptance Criteria
+
+- [x] ヘッダーのゴミ箱アイコンクリックで直下にポップオーバーが開く（既存 `Sidebar/ContextMenu` を流用）
+- [x] メニュー項目: ① すべてクリア（プロンプト行は保持）② 直近 100 行を残す ③ 直近 500 行を残す ④ 直近 1000 行を残す ⑤ 完全リセット（danger 色 / 区切り線で隔離）
+- [x] 部分削除は xterm.js の `terminal.options.scrollback` を一時的に下げて trim を発火し、microtask で元値（10000）へ戻す（恒久的な上限変更ではない）
+- [x] 完全リセットは `terminal.reset()` を呼ぶ。PTY プロセス・シェル状態には触らない
+- [x] keepLines が現在上限以上 / 負数 / NaN の場合は no-op
+- [x] メニュー外クリック / Esc / 同じアイコン再クリックで閉じる
+- [x] 右端ペインで開いてもメニューが画面外にはみ出さない（`ContextMenu` のはみ出し補正を継承）
+- [x] ボタンに `aria-haspopup="menu"` / `aria-expanded` を付与
+
+### Dependencies
+
+- `src/renderer/services/terminalManager.ts`（`clearScrollback` / `trimScrollback` / `resetTerminal`）
+- `src/renderer/components/TerminalSubHeader.tsx`（ボタン + メニュー組み立て）
+- `src/renderer/components/Sidebar/ContextMenu.tsx`（ポップオーバー本体）

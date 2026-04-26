@@ -259,6 +259,7 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 - **T2-6**: サイドバー D&D（ツリー内移動 / 外部 Finder からのコピー / OS ネイティブ drag によるツリー外搬出 / ターミナルへのパス挿入）と Undo/Redo（rename・move・trash の 50 件スタック、ゴミ箱追跡復元、サイドバー上部アイコン）、ファイル右クリックメニューでの相対/フルパスコピー（アクティブ ターミナル CWD 起点）
 - **T2-7**: セッション永続化（レイアウト二分木 + 各ペインの CWD のみ JSON 永続化、起動時に最初のウィンドウへ復元、検証失敗時はサイレントフォールバック、multi-window はスコープ外）
 - **T2-8**: ペイン内 Markdown エディタ（CodeMirror 6、`.md` / `.markdown` のみ、サイドバー右クリック → 「編集する」起動、ペインヘッダーに CLI / MD タブ、Cmd+S 保存・Cmd+Z/Cmd+Shift+Z で履歴、未保存時のタブ切替・別ファイル・Cmd+W で警告モーダル、`viewMode=md` の間も PTY は `display:none` で生存し CLI 復帰時に状態保持。MD 状態自体はセッション永続化対象外）
+- **T2-9**: スクロールバック削除メニュー（ヘッダーのゴミ箱アイコン → ポップオーバーで「全消去 / 直近 100・500・1000 行残す / 完全リセット」を選択。部分削除は `terminal.options.scrollback` の一時的な引き下げで trim を発火、microtask で元値復帰）
 
 ### Tier 3: 実験 / 凍結候補
 

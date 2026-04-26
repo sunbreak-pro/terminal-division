@@ -1,5 +1,28 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-26 - ペインヘッダー強調 + スクロールバック削除メニュー（T2-9）（計画書: archive/2026-04-26-clear-scrollback-options.md）
+
+#### 概要
+
+各ペイン上部のサブヘッダーを高さ 22px → 28px に拡張し、SF Pro Display 系フォント / 太字（folder=600, paneNumber=700）/ tabular-nums で視認性を強化。あわせてサブヘッダー高さ変更に伴い `TerminalPane` のコンテンツ領域 `calc(100% - 22px)` が `calc(100% - 28px)` から外れて active ペインのオレンジフォーカス枠（bottom）が見えなくなる回帰を修正。さらに既存「スクロールバッククリア」アイコンをポップオーバー化し、`ContextMenu` 経由で「すべてクリア / 直近 100・500・1000 行を残す / 完全リセット（danger）」の 5 項目を提示。部分削除は `terminal.options.scrollback` を一時的に keepLines まで下げて trim を発火 → `queueMicrotask` で元の上限へ戻す方式で、PTY / シェル状態には触れない既存の `clearScrollback` ポリシーと整合させた。完全リセットは `terminal.reset()` + `clearTextureAtlas()` で xterm 側の状態（カーソル形状・モード・代替バッファ・選択・スクロールバック）のみ初期化する最終手段として用意。
+
+#### 変更点
+
+- **TerminalSubHeader.tsx (ヘッダー強調)**: ルート div を高さ 22→28px、padding `0 8px → 0 10px`、gap 6→8px、fontSize 11→12px に変更。fontFamily に `"SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif` を明示し letterSpacing 0.02em / fontWeight 500 を追加。paneNumber は fontWeight 700 / fontSize 13px / `fontVariantNumeric: tabular-nums` で番号の幅ブレを防止。folderName は textColor を `theme.colors.text` に格上げ + fontWeight 600、processDisplay は fontWeight 500、CLI / MD タブはアクティブ時 fontWeight 700・非アクティブ 500 に。アイコンボタンサイズも 18→20px に拡張
+- **TerminalPane.tsx (フォーカス枠 bottom 修正)**: 内側コンテンツ領域の `height: calc(100% - 22px)` を `calc(100% - 28px)` に追従。サブヘッダー高さ変更で 6px はみ出して `.terminal-container` の `border: 3px solid activeTerminal` の bottom が見えなくなっていた回帰を解消
+- **terminalManager.ts (scrollback API 拡張)**: `trimScrollback(id, keepLines)` を新規追加。`terminal.options.scrollback` を一時的に keepLines に下げて xterm の BufferService に古い行 trim を発火させ、`queueMicrotask` で元値へ戻す（恒久的な上限変更ではない）。`registry.get(id) !== instance` のレース対策ガード付き、`keepLines >= original` / 負数 / NaN は no-op。`resetTerminal(id)` も新規追加し `terminal.reset()` + `terminal.clearTextureAtlas()` で xterm 側の状態を完全初期化（PTY / シェル状態は不変）。既存 `clearScrollback` の JSDoc に「全消去版」「部分削除は trimScrollback、完全リセットは resetTerminal」を追記
+- **TerminalSubHeader.tsx (削除メニュー)**: ゴミ箱アイコンをクリックすると `e.currentTarget.getBoundingClientRect()` の `(left, bottom + 4)` をアンカーに `ContextMenu` をポップオーバー表示。`useState<{ x: number; y: number } | null>` で開閉管理、aria-haspopup / aria-expanded を付与。メニュー項目は「すべてクリア（プロンプト行は保持）」「直近 100/500/1000 行を残す」「完全リセット」（separator 上、`danger: true`）の 5 件で、それぞれ `clearScrollback` / `trimScrollback(id, n)` / `resetTerminal(id)` を呼ぶ。`ContextMenu` は既存 `Sidebar/ContextMenu.tsx` を相対 import で再利用（ファイル移動は別 PR の責務に分離）
+- **新規テスト**: `terminalManager.test.ts` の MockTerminal に `reset` mock と `scrollback` 付き `options` 型を追加。`trimScrollback` のテスト 4 件（同期で scrollback 下がる + microtask で復帰 / `keepLines >= original` no-op / 負数・NaN・Infinity no-op / 未知 id no-op）と `resetTerminal` のテスト 2 件（reset + clearTextureAtlas が 1 回ずつ呼ばれる / 未知 id no-op）を追加
+- **テスト合計**: 22 ファイル / 291 件グリーン（修正前 285 から +6 件）
+- **ドキュメント更新**: `CLAUDE.md` Tier 2 に T2-9（スクロールバック削除メニュー）を追記。`docs/requirements/tier-2-supporting.md` に T2-9 詳細（Purpose / Boundary / Acceptance Criteria）を追加
+- **設計判断**:
+  - ヘッダー強調は「文字を太く + 行高を上げる」のみで色相を増やさず、既存テーマの contrast 体系を壊さない最小路線。SF Pro Display を明示するのは macOS 上で `-apple-system` がサイズ閾値で SF Pro Text/Display を切り替える挙動を 12px サイズで Display 寄りに固定するため
+  - フォーカス枠 bottom 消失は新規バグではなく、`TerminalPane` 側の `calc(100% - 22px)` が「サブヘッダー高さの参照」を文字列リテラルで持っていたために起きた典型的なマジックナンバー乖離。今回は最小修正に留め、共通定数化は別 PR の責務とする
+  - `trimScrollback` の microtask 復帰モデルは「sync で trim を発火 → 即座に上限を戻す」ことで、(a) 一時的な上限変更が他のクリア API と競合せず (b) 今後の出力で再び 10000 行まで蓄積できる挙動を両立。同一フレームでの連打は ContextMenu が 1 クリックで閉じる仕様に守られているため実質発生しない
+  - `resetTerminal` はクリア系の最終手段として「PTY 状態に触れない / シェル履歴は維持 / 表示崩れだけを根絶」のポリシーで設計。`terminal.reset()` 単体だとカーソル形状などのモード状態だけが戻り表示は残るケースがあるため `clearTextureAtlas()` を併用
+  - `ContextMenu` は `Sidebar/` 配下のままにし、`TerminalSubHeader` から相対 import で再利用。共通化のためのファイル移動は単独 PR の責務とすることで、本変更の差分を最小化
+- **計画書アーカイブ**: `.claude/archive/2026-04-26-clear-scrollback-options.md` に Status=COMPLETED で移動済み
+
 ### 2026-04-26 - ペイン内 Markdown エディタ（T2-8、CodeMirror 6）（計画書: archive/2026-04-26-markdown-editor.md）
 
 #### 概要
@@ -98,35 +121,4 @@
   - validator SSOT 化は型互換のため `main/types/session-state.ts` を re-export ファイルに留め、既存 import 経路を維持
 - **計画書アーカイブ**: `.claude/archive/2026-04-25-followup-improvements.md` に Status=COMPLETED で移動
 
-### 2026-04-25 - PTY 起動ログ安定化 + IPC セキュリティ強化 + 既知の小バグ修正
-
-#### 概要
-
-ペイン分割直後に新規ペインへ起動ログ（zsh 起動メッセージ・初回プロンプト）が表示されないラックレース問題を、Main 側の per-PTY 初期出力バッファ + renderer reply 後の明示 flush で構造的に解消。あわせて renderer から渡される任意パスを処理する fs / dnd / recentDirs / pty:create / window:create の全 IPC 境界に allow-list ベースのパス検証を入れ、`/etc/passwd` 等のシステム領域への偶発的・悪意的アクセスを遮断。`openInVSCode` のシェル経由 spawn を `shell: false` + argv 配列に置換して command injection を解消、`shell:openExternal` の URL 検証を `URL` parser ベースに強化、node-pty 環境変数から `NODE_OPTIONS` / `LD_PRELOAD` / `DYLD_*` を除外、CSP meta タグを追加。さらに PTY spawn 失敗をサイレントに残さないため renderer 側で toast 通知、splitTerminal が CWD 未設定の親から作られたとき新ペインの meta が未初期化のまま残るバグを修正、chokidar `unwatch` で破棄済みウィンドウの ID を掃除して watcher が孤立しない実装に。
-
-#### 変更点
-
-- **PTY 起動バッファ (Main)**: `pty-manager.ts` の `PtyProcess` に `initialBuffer` / `bufferingActive` を追加。`pty.spawn()` 直後の `onData` は buffer に蓄積し、64KB 超で auto-flush。新規 `flushInitialBuffer(id)` を export
-- **PTY 起動バッファ (IPC / Preload)**: `ipc-handlers.ts` に `pty:flushInitialBuffer` ハンドラ、`preload/index.ts` に `window.api.pty.flushInitialBuffer` を追加
-- **PTY 起動バッファ (Renderer)**: `TerminalPane.tsx` の `pty.create.then` で resize 直後に `flushInitialBuffer(id)` を呼び出し、リスナー登録準備完了の合図に。`pty:data` リスナーは `getOrCreate` 内で同期登録済みのため取りこぼしなし
-- **IPC パス allow-list (新規)**: `src/main/path-validator.ts` に `validatePath` を実装。許可境界はホーム配下 / `/Volumes/` / `/tmp/` / `/private/tmp/` / `/var/folders/` / `/private/var/folders/`。それ以外は `null` を返す
-- **IPC パス allow-list (適用)**: `ipc-handlers.ts` の `fs:readDir` / `fs:watch` / `fs:unwatch` / `fs:rename` / `fs:moveToDir` / `fs:trash` / `fs:trashWithTracking` / `fs:restoreFromTrash` / `fs:movePath` / `fs:copyPath` / `fs:openInVSCode` / `dnd:startDrag` / `recentDirs:add` / `pty:create`(initialCwd) / `window:create`(initialCwd) すべてに `validatePath` を適用。`fs:rename` は出来上がりパスも再検証
-- **shell injection / URL / env 強化**: `file-system-handler.ts:openInVSCode` を `spawn("code", [path], { shell: false })` に変更。`ipc-handlers.ts:shell:openExternal` を `new URL()` parse + `protocol === "http:" / "https:"` チェックに変更。`pty-manager.ts` の `cleanEnv` から `NODE_OPTIONS` / `LD_PRELOAD` / `DYLD_INSERT_LIBRARIES` / `DYLD_LIBRARY_PATH` を deny-list で除外
-- **CSP**: `src/renderer/index.html` に `Content-Security-Policy` meta タグを追加（default-src 'self'、style-src 'unsafe-inline'、xterm.js / Vite HMR のため script-src に 'unsafe-eval' は許可）
-- **PTY spawn 失敗の可視化 (Renderer)**: `TerminalPane.tsx` の `pty.create` resolve 値が `false` の場合 / catch 経路の両方で `showErrorToast` を呼び、xterm 内にも赤字メッセージを表示。新規 IPC 不要（既存戻り値を使用）
-- **splitTerminal の meta 初期化保証**: `terminalStore.ts:splitTerminal` で `sourceCwd` の有無に関わらず `metaStore.initMeta(newTerminalId)` を必ず呼ぶ。CWD 未設定の親ペインから分割した際にメタ未初期化のまま PTY 起動 → 想定外の `window.initialCwd` フォールバックに落ちるバグを解消
-- **chokidar watcher 掃除**: `file-system-handler.ts:unwatch` で `BrowserWindow.fromId` が destroyed の windowId を `entry.windowIds` から除去。空になった場合は強制 close する防衛経路を追加
-- **新規テスト**:
-  - `__tests__/path-validator.test.ts` 17 件（許可境界 / 拒否 / path traversal / sibling-prefix / 非文字列入力 / 正規化）
-  - `__tests__/pty-manager.test.ts` に initial buffer / flush ケースを 6 件追加（buffering 中の no-send / flush 後の通常モード / 二度目 flush no-op / 64KB auto-flush / 非存在 id no-op）
-  - `__tests__/terminalStore.test.ts` に splitTerminal の meta 初期化検証 2 件追加（CWD なし時 / CWD ありの継承）
-- **既存テスト修正**: `pty-manager.test.ts` の onData 系既存ケースは buffering 前提に合わせて `flushInitialBuffer` を先に呼んでから data callback を発火する形に修正。`renderer/test/setup.ts` の `mockPtyApi` に `flushInitialBuffer` を追加
-- **テスト合計**: 18 files / 251 件グリーン（修正前 17 / 226 から +1 file / +25 件）
-- **設計判断**:
-  - PTY 起動ログ問題は IPC 競合よりも「リスナー登録準備完了の合図がなく Main 側が早すぎて吐く」構造が真因。invoke の reply を「準備完了通知」として再利用することで、追加の handshake IPC を増やさず構造的に解決
-  - パス検証は ALLOW プレフィックスを明示。許可境界外は null で弾き、UX を壊さない範囲（外部ボリューム・macOS 一時領域）は明示的に許可。symlink 経由のエスケープは realpath を取らないため検出しない（明白な path traversal を止める防御線として位置付け）
-  - PTY spawn 失敗通知は新規 IPC を増やさず、`pty.create` の boolean 戻り値を判定するだけにすることで実装を最小化
-  - splitTerminal の修正は既存の `initMeta` の idempotent 設計（既存なら no-op）を尊重したまま「呼ぶこと自体を必須化」する形に倒すことで、後方互換と保守性を両立
-  - chokidar の windowIds 掃除は `unwatch` の通常経路にもガードを入れる二層防御。`unwatchAllForWindow` が既存にあるが、ウィンドウが先に destroy された race のフォロー
-
-> 2026-04-26 ローリングアーカイブ: これ以前の 23 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-26 ローリングアーカイブ: これ以前の 24 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

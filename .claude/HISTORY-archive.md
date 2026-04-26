@@ -2,6 +2,37 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-25 - PTY 起動ログ安定化 + IPC セキュリティ強化 + 既知の小バグ修正
+
+#### 概要
+
+ペイン分割直後に新規ペインへ起動ログ（zsh 起動メッセージ・初回プロンプト）が表示されないラックレース問題を、Main 側の per-PTY 初期出力バッファ + renderer reply 後の明示 flush で構造的に解消。あわせて renderer から渡される任意パスを処理する fs / dnd / recentDirs / pty:create / window:create の全 IPC 境界に allow-list ベースのパス検証を入れ、`/etc/passwd` 等のシステム領域への偶発的・悪意的アクセスを遮断。`openInVSCode` のシェル経由 spawn を `shell: false` + argv 配列に置換して command injection を解消、`shell:openExternal` の URL 検証を `URL` parser ベースに強化、node-pty 環境変数から `NODE_OPTIONS` / `LD_PRELOAD` / `DYLD_*` を除外、CSP meta タグを追加。さらに PTY spawn 失敗をサイレントに残さないため renderer 側で toast 通知、splitTerminal が CWD 未設定の親から作られたとき新ペインの meta が未初期化のまま残るバグを修正、chokidar `unwatch` で破棄済みウィンドウの ID を掃除して watcher が孤立しない実装に。
+
+#### 変更点
+
+- **PTY 起動バッファ (Main)**: `pty-manager.ts` の `PtyProcess` に `initialBuffer` / `bufferingActive` を追加。`pty.spawn()` 直後の `onData` は buffer に蓄積し、64KB 超で auto-flush。新規 `flushInitialBuffer(id)` を export
+- **PTY 起動バッファ (IPC / Preload)**: `ipc-handlers.ts` に `pty:flushInitialBuffer` ハンドラ、`preload/index.ts` に `window.api.pty.flushInitialBuffer` を追加
+- **PTY 起動バッファ (Renderer)**: `TerminalPane.tsx` の `pty.create.then` で resize 直後に `flushInitialBuffer(id)` を呼び出し、リスナー登録準備完了の合図に。`pty:data` リスナーは `getOrCreate` 内で同期登録済みのため取りこぼしなし
+- **IPC パス allow-list (新規)**: `src/main/path-validator.ts` に `validatePath` を実装。許可境界はホーム配下 / `/Volumes/` / `/tmp/` / `/private/tmp/` / `/var/folders/` / `/private/var/folders/`。それ以外は `null` を返す
+- **IPC パス allow-list (適用)**: `ipc-handlers.ts` の `fs:readDir` / `fs:watch` / `fs:unwatch` / `fs:rename` / `fs:moveToDir` / `fs:trash` / `fs:trashWithTracking` / `fs:restoreFromTrash` / `fs:movePath` / `fs:copyPath` / `fs:openInVSCode` / `dnd:startDrag` / `recentDirs:add` / `pty:create`(initialCwd) / `window:create`(initialCwd) すべてに `validatePath` を適用。`fs:rename` は出来上がりパスも再検証
+- **shell injection / URL / env 強化**: `file-system-handler.ts:openInVSCode` を `spawn("code", [path], { shell: false })` に変更。`ipc-handlers.ts:shell:openExternal` を `new URL()` parse + `protocol === "http:" / "https:"` チェックに変更。`pty-manager.ts` の `cleanEnv` から `NODE_OPTIONS` / `LD_PRELOAD` / `DYLD_INSERT_LIBRARIES` / `DYLD_LIBRARY_PATH` を deny-list で除外
+- **CSP**: `src/renderer/index.html` に `Content-Security-Policy` meta タグを追加（default-src 'self'、style-src 'unsafe-inline'、xterm.js / Vite HMR のため script-src に 'unsafe-eval' は許可）
+- **PTY spawn 失敗の可視化 (Renderer)**: `TerminalPane.tsx` の `pty.create` resolve 値が `false` の場合 / catch 経路の両方で `showErrorToast` を呼び、xterm 内にも赤字メッセージを表示。新規 IPC 不要（既存戻り値を使用）
+- **splitTerminal の meta 初期化保証**: `terminalStore.ts:splitTerminal` で `sourceCwd` の有無に関わらず `metaStore.initMeta(newTerminalId)` を必ず呼ぶ。CWD 未設定の親ペインから分割した際にメタ未初期化のまま PTY 起動 → 想定外の `window.initialCwd` フォールバックに落ちるバグを解消
+- **chokidar watcher 掃除**: `file-system-handler.ts:unwatch` で `BrowserWindow.fromId` が destroyed の windowId を `entry.windowIds` から除去。空になった場合は強制 close する防衛経路を追加
+- **新規テスト**:
+  - `__tests__/path-validator.test.ts` 17 件（許可境界 / 拒否 / path traversal / sibling-prefix / 非文字列入力 / 正規化）
+  - `__tests__/pty-manager.test.ts` に initial buffer / flush ケースを 6 件追加（buffering 中の no-send / flush 後の通常モード / 二度目 flush no-op / 64KB auto-flush / 非存在 id no-op）
+  - `__tests__/terminalStore.test.ts` に splitTerminal の meta 初期化検証 2 件追加（CWD なし時 / CWD ありの継承）
+- **既存テスト修正**: `pty-manager.test.ts` の onData 系既存ケースは buffering 前提に合わせて `flushInitialBuffer` を先に呼んでから data callback を発火する形に修正。`renderer/test/setup.ts` の `mockPtyApi` に `flushInitialBuffer` を追加
+- **テスト合計**: 18 files / 251 件グリーン（修正前 17 / 226 から +1 file / +25 件）
+- **設計判断**:
+  - PTY 起動ログ問題は IPC 競合よりも「リスナー登録準備完了の合図がなく Main 側が早すぎて吐く」構造が真因。invoke の reply を「準備完了通知」として再利用することで、追加の handshake IPC を増やさず構造的に解決
+  - パス検証は ALLOW プレフィックスを明示。許可境界外は null で弾き、UX を壊さない範囲（外部ボリューム・macOS 一時領域）は明示的に許可。symlink 経由のエスケープは realpath を取らないため検出しない（明白な path traversal を止める防御線として位置付け）
+  - PTY spawn 失敗通知は新規 IPC を増やさず、`pty.create` の boolean 戻り値を判定するだけにすることで実装を最小化
+  - splitTerminal の修正は既存の `initMeta` の idempotent 設計（既存なら no-op）を尊重したまま「呼ぶこと自体を必須化」する形に倒すことで、後方互換と保守性を両立
+  - chokidar の windowIds 掃除は `unwatch` の通常経路にもガードを入れる二層防御。`unwatchAllForWindow` が既存にあるが、ウィンドウが先に destroy された race のフォロー
+
 ### 2026-04-25 - セッション永続化（T2-7、レイアウトと CWD の復元）
 
 #### 概要

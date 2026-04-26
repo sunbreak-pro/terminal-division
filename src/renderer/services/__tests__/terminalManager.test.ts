@@ -33,7 +33,18 @@ vi.mock("@xterm/xterm", () => {
     write = vi.fn();
     clear = vi.fn();
     clearTextureAtlas = vi.fn();
-    options = { theme: {}, fontFamily: "monospace", fontSize: 13 };
+    reset = vi.fn();
+    options: {
+      theme: object;
+      fontFamily: string;
+      fontSize: number;
+      scrollback?: number;
+    } = {
+      theme: {},
+      fontFamily: "monospace",
+      fontSize: 13,
+      scrollback: 10000,
+    };
   }
   return { Terminal: MockTerminal };
 });
@@ -431,6 +442,78 @@ describe("terminalManager", () => {
       // 未登録 id では何も投げない・触らない
       expect(() => {
         terminalManager.clearScrollback("non-existent-pane");
+      }).not.toThrow();
+    });
+  });
+
+  describe("trimScrollback", () => {
+    it("temporarily lowers scrollback then restores it via microtask", async () => {
+      const instance = terminalManager.getOrCreate(
+        "test-trim",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      // 既定 10000 を下回る値で trim を発火
+      terminalManager.trimScrollback("test-trim", 100);
+      // 同期: scrollback が 100 に下がっている
+      expect(instance.terminal.options.scrollback).toBe(100);
+      expect(instance.terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
+      // microtask 解決後に元の値へ戻る
+      await Promise.resolve();
+      expect(instance.terminal.options.scrollback).toBe(10000);
+    });
+
+    it("is a no-op when keepLines >= current scrollback", async () => {
+      const instance = terminalManager.getOrCreate(
+        "test-trim-noop-large",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      terminalManager.trimScrollback("test-trim-noop-large", 10000);
+      expect(instance.terminal.options.scrollback).toBe(10000);
+      expect(instance.terminal.clearTextureAtlas).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(instance.terminal.options.scrollback).toBe(10000);
+    });
+
+    it("is a no-op for negative or non-finite keepLines", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-trim-noop-neg",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      terminalManager.trimScrollback("test-trim-noop-neg", -1);
+      terminalManager.trimScrollback("test-trim-noop-neg", Number.NaN);
+      terminalManager.trimScrollback(
+        "test-trim-noop-neg",
+        Number.POSITIVE_INFINITY,
+      );
+      expect(instance.terminal.options.scrollback).toBe(10000);
+      expect(instance.terminal.clearTextureAtlas).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op for unknown id", () => {
+      expect(() => {
+        terminalManager.trimScrollback("non-existent-pane", 100);
+      }).not.toThrow();
+    });
+  });
+
+  describe("resetTerminal", () => {
+    it("calls terminal.reset() and clearTextureAtlas() on the registered instance", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-reset",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      terminalManager.resetTerminal("test-reset");
+      expect(instance.terminal.reset).toHaveBeenCalledTimes(1);
+      expect(instance.terminal.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    });
+
+    it("is a no-op for unknown id", () => {
+      expect(() => {
+        terminalManager.resetTerminal("non-existent-pane");
       }).not.toThrow();
     });
   });

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   useTerminalMeta,
   useTerminalMetaStore,
@@ -10,6 +10,7 @@ import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
 import { useMarkdownDialogStore } from "../stores/markdownDialogStore";
 import { getFileName } from "../utils/markdownFile";
 import { showErrorToast } from "./Sidebar/ErrorToast";
+import { ContextMenu, ContextMenuItem } from "./Sidebar/ContextMenu";
 
 interface TerminalSubHeaderProps {
   id: string;
@@ -160,12 +161,52 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [mdFilePath],
     );
 
-    // スクロールバッファをクリア（プロンプト行は残す。シェル状態には触れない）
+    // スクロールバック削除メニュー: クリックでアイコン下にポップオーバーを開く
+    const [clearMenuPos, setClearMenuPos] = useState<{
+      x: number;
+      y: number;
+    } | null>(null);
+
     const handleClearScrollback = useCallback(
       (e: React.MouseEvent<HTMLButtonElement>) => {
         e.stopPropagation();
-        terminalManager.clearScrollback(id);
+        if (clearMenuPos !== null) {
+          setClearMenuPos(null);
+          return;
+        }
+        const rect = e.currentTarget.getBoundingClientRect();
+        setClearMenuPos({ x: rect.left, y: rect.bottom + 4 });
       },
+      [clearMenuPos],
+    );
+
+    const closeClearMenu = useCallback(() => setClearMenuPos(null), []);
+
+    const clearMenuItems = useMemo<ContextMenuItem[]>(
+      () => [
+        {
+          label: "すべてクリア（プロンプト行は保持）",
+          onClick: () => terminalManager.clearScrollback(id),
+        },
+        {
+          label: "直近 100 行を残す",
+          onClick: () => terminalManager.trimScrollback(id, 100),
+        },
+        {
+          label: "直近 500 行を残す",
+          onClick: () => terminalManager.trimScrollback(id, 500),
+        },
+        {
+          label: "直近 1000 行を残す",
+          onClick: () => terminalManager.trimScrollback(id, 1000),
+        },
+        {
+          label: "完全リセット",
+          onClick: () => terminalManager.resetTerminal(id),
+          danger: true,
+          separatorBefore: true,
+        },
+      ],
       [id],
     );
 
@@ -192,8 +233,8 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        width: "18px",
-        height: "18px",
+        width: "20px",
+        height: "20px",
         padding: 0,
         backgroundColor: "transparent",
         color: theme.colors.textSecondary,
@@ -210,14 +251,18 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     return (
       <div
         style={{
-          height: "22px",
-          minHeight: "22px",
+          height: "28px",
+          minHeight: "28px",
           backgroundColor: theme.colors.headerBackground,
           display: "flex",
           alignItems: "center",
-          padding: "0 8px",
-          gap: "6px",
-          fontSize: "11px",
+          padding: "0 10px",
+          gap: "8px",
+          fontSize: "12px",
+          fontFamily:
+            '"SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontWeight: 500,
+          letterSpacing: "0.02em",
           color: theme.colors.textSecondary,
           userSelect: "none",
           overflow: "hidden",
@@ -228,8 +273,10 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         <span
           style={{
             color: theme.colors.accent,
-            fontWeight: 600,
+            fontWeight: 700,
+            fontSize: "13px",
             flexShrink: 0,
+            fontVariantNumeric: "tabular-nums",
           }}
         >
           {paneNumber}
@@ -253,15 +300,16 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
                 background: "transparent",
                 border: "none",
                 color: !isMd ? theme.colors.text : theme.colors.textSecondary,
-                fontSize: 11,
+                fontSize: 12,
                 fontFamily: "inherit",
+                letterSpacing: "0.03em",
                 padding: "0 8px",
                 cursor: "pointer",
                 borderBottom: !isMd
                   ? `2px solid ${theme.colors.accent}`
                   : "2px solid transparent",
                 marginBottom: -1,
-                fontWeight: !isMd ? 600 : 400,
+                fontWeight: !isMd ? 700 : 500,
               }}
             >
               CLI
@@ -274,15 +322,16 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
                 background: "transparent",
                 border: "none",
                 color: isMd ? theme.colors.text : theme.colors.textSecondary,
-                fontSize: 11,
+                fontSize: 12,
                 fontFamily: "inherit",
+                letterSpacing: "0.02em",
                 padding: "0 4px 0 8px",
                 cursor: "pointer",
                 borderBottom: isMd
                   ? `2px solid ${theme.colors.accent}`
                   : "2px solid transparent",
                 marginBottom: -1,
-                fontWeight: isMd ? 600 : 400,
+                fontWeight: isMd ? 700 : 500,
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 4,
@@ -350,6 +399,8 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
                 textOverflow: "ellipsis",
                 flexShrink: 1,
                 minWidth: 0,
+                color: theme.colors.text,
+                fontWeight: 600,
               }}
               title={displayCwd}
             >
@@ -362,6 +413,7 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
                 textOverflow: "ellipsis",
                 flexShrink: 1,
                 minWidth: 0,
+                fontWeight: 500,
               }}
             >
               {processDisplay}
@@ -382,8 +434,10 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
             onClick={handleClearScrollback}
             onMouseEnter={handleIconButtonEnter}
             onMouseLeave={handleIconButtonLeave}
-            title="スクロールバックをクリア（プロンプト行は保持）"
-            aria-label="スクロールバックをクリア"
+            title="スクロールバックを削除（クリックでオプション表示）"
+            aria-label="スクロールバックを削除"
+            aria-haspopup="menu"
+            aria-expanded={clearMenuPos !== null}
             style={iconButtonStyle}
           >
             <svg
@@ -425,6 +479,14 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
             </svg>
           </button>
         </div>
+        {clearMenuPos && (
+          <ContextMenu
+            x={clearMenuPos.x}
+            y={clearMenuPos.y}
+            items={clearMenuItems}
+            onClose={closeClearMenu}
+          />
+        )}
       </div>
     );
   },
