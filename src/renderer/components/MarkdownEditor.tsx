@@ -8,6 +8,8 @@ import React, {
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, keymap } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
+import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import {
   useTerminalMetaStore,
@@ -16,6 +18,7 @@ import {
 import { useTerminalActions } from "../stores/terminalStore";
 import { showErrorToast } from "./Sidebar/ErrorToast";
 import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
+import { withAlpha, isLightBackground } from "../utils/colorUtils";
 
 interface MarkdownEditorProps {
   id: string;
@@ -90,49 +93,139 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
     [handleSave],
   );
 
-  // テーマ連携: CodeMirror の背景・前景色をアプリテーマに合わせる
+  // light/dark に応じた派生色（テーマ連携の中核）
+  const editorChrome = useMemo(() => {
+    const isLight = isLightBackground(theme.colors.terminalBackground);
+    // light テーマは pure white を避け、目に優しいオフホワイトに
+    const editorBg = isLight ? "#fbfbf9" : theme.colors.terminalBackground;
+    // gutter は app pane header と同色にして視覚的整合を取る
+    const gutterBg = theme.colors.headerBackground;
+    // inline code 背景: light は微暗いグレー、dark は微明オーバーレイ
+    const codeBg = isLight ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.07)";
+    // inline code 前景: 背景輝度に応じて読みやすい色
+    const codeFg = isLight ? "#a3274a" : "#e6a26a";
+    // 区切り線（hr など）の色
+    const ruleColor = theme.colors.border;
+    return { isLight, editorBg, gutterBg, codeBg, codeFg, ruleColor };
+  }, [theme.colors]);
+
+  // テーマ連携: CodeMirror の chrome（gutter / cursor / selection / line）をアプリテーマに合わせる
   const editorTheme = useMemo(
     () =>
       EditorView.theme(
         {
           "&": {
-            backgroundColor: theme.colors.terminalBackground,
+            backgroundColor: editorChrome.editorBg,
             color: theme.colors.text,
             height: "100%",
-            fontSize: "13px",
+            fontSize: "13.5px",
+          },
+          ".cm-scroller": {
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            lineHeight: "1.65",
           },
           ".cm-content": {
             caretColor: theme.colors.text,
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            padding: "14px 6px 32px 6px",
           },
           ".cm-gutters": {
-            backgroundColor: theme.colors.headerBackground,
+            backgroundColor: editorChrome.gutterBg,
             color: theme.colors.textSecondary,
             border: "none",
+            borderRight: `1px solid ${theme.colors.border}`,
+          },
+          ".cm-lineNumbers .cm-gutterElement": {
+            opacity: "0.55",
+            minWidth: "2.4em",
+            padding: "0 8px 0 6px",
+            textAlign: "right",
+          },
+          "&.cm-focused": {
+            outline: "none",
           },
           "&.cm-focused .cm-cursor": {
             borderLeftColor: theme.colors.text,
+            borderLeftWidth: "2px",
           },
-          "&.cm-focused .cm-selectionBackground, ::selection": {
-            backgroundColor: theme.colors.borderActive,
-          },
+          ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection":
+            {
+              backgroundColor: `${withAlpha(theme.colors.accent, 0.28)} !important`,
+            },
           ".cm-activeLine": {
-            backgroundColor: theme.colors.buttonHover,
+            backgroundColor: withAlpha(
+              theme.colors.accent,
+              editorChrome.isLight ? 0.06 : 0.09,
+            ),
           },
           ".cm-activeLineGutter": {
-            backgroundColor: theme.colors.buttonHover,
+            backgroundColor: withAlpha(
+              theme.colors.accent,
+              editorChrome.isLight ? 0.1 : 0.16,
+            ),
+            color: theme.colors.text,
           },
         },
-        { dark: true },
+        { dark: !editorChrome.isLight },
       ),
-    [theme.colors],
+    [theme.colors, editorChrome],
   );
 
+  // markdown 構文ハイライト（見出し / 強調 / リンク / コード / リスト等）
+  const mdHighlight = useMemo(() => {
+    const accent = theme.colors.accent;
+    const text = theme.colors.text;
+    const muted = theme.colors.textSecondary;
+    return HighlightStyle.define([
+      { tag: t.heading1, color: accent, fontWeight: "700" },
+      { tag: t.heading2, color: accent, fontWeight: "700" },
+      { tag: t.heading3, color: accent, fontWeight: "600" },
+      { tag: t.heading4, color: accent, fontWeight: "600" },
+      { tag: t.heading5, color: accent, fontWeight: "600" },
+      { tag: t.heading6, color: accent, fontWeight: "600" },
+      { tag: t.strong, fontWeight: "700", color: text },
+      { tag: t.emphasis, fontStyle: "italic", color: text },
+      { tag: t.strikethrough, textDecoration: "line-through", color: muted },
+      { tag: t.link, color: accent, textDecoration: "underline" },
+      { tag: t.url, color: accent },
+      {
+        tag: t.monospace,
+        color: editorChrome.codeFg,
+        backgroundColor: editorChrome.codeBg,
+      },
+      { tag: t.quote, color: muted, fontStyle: "italic" },
+      // ListMark / HeaderMark / BlockquoteMark など構文記号
+      { tag: t.processingInstruction, color: accent },
+      // 水平線
+      {
+        tag: t.contentSeparator,
+        color: editorChrome.ruleColor,
+        fontWeight: "600",
+      },
+      { tag: t.meta, color: muted },
+    ]);
+  }, [theme.colors, editorChrome]);
+
   const extensions = useMemo(
-    () => [markdown(), saveKeymap, editorTheme],
-    [saveKeymap, editorTheme],
+    () => [
+      markdown(),
+      saveKeymap,
+      editorTheme,
+      syntaxHighlighting(mdHighlight),
+    ],
+    [saveKeymap, editorTheme, mdHighlight],
   );
+
+  // ファイルパスを「ディレクトリ部分」と「ファイル名」に分けて表示する
+  const { dirPart, fileName } = useMemo(() => {
+    if (!filePath) return { dirPart: "", fileName: "" };
+    const idx = filePath.lastIndexOf("/");
+    if (idx < 0) return { dirPart: "", fileName: filePath };
+    return {
+      dirPart: filePath.slice(0, idx + 1),
+      fileName: filePath.slice(idx + 1),
+    };
+  }, [filePath]);
 
   return (
     <div
@@ -141,7 +234,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
       style={{
         height: "100%",
         width: "100%",
-        backgroundColor: theme.colors.terminalBackground,
+        backgroundColor: editorChrome.editorBg,
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
@@ -149,20 +242,55 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
     >
       <div
         style={{
+          display: "flex",
+          alignItems: "center",
+          gap: themeConfig.spacing.xs,
           padding: `${themeConfig.spacing.xs} ${themeConfig.spacing.md}`,
           fontSize: 11,
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           color: theme.colors.textSecondary,
           borderBottom: `1px solid ${theme.colors.border}`,
           backgroundColor: theme.colors.headerBackground,
           whiteSpace: "nowrap",
           overflow: "hidden",
-          textOverflow: "ellipsis",
         }}
         title={filePath ?? ""}
       >
-        {filePath ?? ""}
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            padding: "1px 6px",
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            color: theme.colors.accent,
+            border: `1px solid ${withAlpha(theme.colors.accent, 0.55)}`,
+            borderRadius: 3,
+            backgroundColor: withAlpha(theme.colors.accent, 0.12),
+            flexShrink: 0,
+          }}
+        >
+          MD
+        </span>
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            direction: "rtl",
+            textAlign: "left",
+          }}
+        >
+          <span style={{ unicodeBidi: "plaintext" }}>
+            <span style={{ opacity: 0.7 }}>{dirPart}</span>
+            <span style={{ color: theme.colors.text, fontWeight: 600 }}>
+              {fileName}
+            </span>
+          </span>
+        </span>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
         <CodeMirror
           ref={cmRef}
           value={initialValue}
