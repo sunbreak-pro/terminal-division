@@ -10,11 +10,7 @@ import {
   useNodes,
   useTerminalActions,
 } from "./stores/terminalStore";
-import {
-  useCurrentTheme,
-  useThemeConfig,
-  setupThemeSync,
-} from "./stores/themeStore";
+import { useCurrentTheme, useThemeConfig } from "./stores/themeStore";
 import { getAllTerminalIds } from "./utils/layoutUtils";
 import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
@@ -365,11 +361,6 @@ const App: React.FC = () => {
     terminalCount,
     moveFocus,
   ]);
-
-  // 他のウィンドウからのテーマ同期を受信
-  useEffect(() => {
-    return setupThemeSync();
-  }, []);
 
   // セッション永続化: レイアウト / CWD 変更を debounced に Main へ送る
   useEffect(() => {

@@ -54,13 +54,6 @@ export function setupIpcHandlers(): void {
     recentDirectoryManager.addDirectory(safe);
   });
 
-  // テーマ変更を他のウィンドウに同期
-  ipcMain.on("theme:changed", (event, themeId: string) => {
-    const senderWin = BrowserWindow.fromWebContents(event.sender);
-    const excludeId = senderWin ? senderWin.id : undefined;
-    ptyManager.broadcastToAll("theme:sync", themeId, excludeId);
-  });
-
   // ディレクトリ選択ダイアログ
   ipcMain.handle("dialog:selectDirectory", async (event) => {
     const parentWin = BrowserWindow.fromWebContents(event.sender);

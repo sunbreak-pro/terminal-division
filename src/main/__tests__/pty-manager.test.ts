@@ -349,55 +349,6 @@ describe("PtyManager", () => {
     });
   });
 
-  describe("broadcastToAll", () => {
-    it("should send to all registered windows", () => {
-      const mockWindow2 = createMockWindow2();
-      ptyManager.registerWindow(
-        2,
-        mockWindow2 as unknown as Electron.BrowserWindow,
-      );
-
-      mockSend.mockClear();
-      mockSend2.mockClear();
-
-      ptyManager.broadcastToAll("theme:sync", "dark");
-
-      expect(mockSend).toHaveBeenCalledWith("theme:sync", "dark");
-      expect(mockSend2).toHaveBeenCalledWith("theme:sync", "dark");
-
-      ptyManager.unregisterWindow(2);
-    });
-
-    it("should exclude the specified windowId", () => {
-      const mockWindow2 = createMockWindow2();
-      ptyManager.registerWindow(
-        2,
-        mockWindow2 as unknown as Electron.BrowserWindow,
-      );
-
-      mockSend.mockClear();
-      mockSend2.mockClear();
-
-      ptyManager.broadcastToAll("theme:sync", "dark", 1);
-
-      // window 1は除外される
-      expect(mockSend).not.toHaveBeenCalled();
-      expect(mockSend2).toHaveBeenCalledWith("theme:sync", "dark");
-
-      ptyManager.unregisterWindow(2);
-    });
-
-    it("should not send to destroyed windows", () => {
-      mockIsDestroyed.mockReturnValue(true);
-      mockSend.mockClear();
-
-      ptyManager.broadcastToAll("theme:sync", "dark");
-
-      expect(mockSend).not.toHaveBeenCalled();
-      mockIsDestroyed.mockReturnValue(false);
-    });
-  });
-
   describe("sendToRenderer (via onData)", () => {
     it("should not send if window is destroyed", () => {
       ptyManager.createPty("destroyed-test", 1);

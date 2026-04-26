@@ -57,18 +57,6 @@ class PtyManager {
     }
   }
 
-  broadcastToAll(
-    channel: string,
-    data: unknown,
-    excludeWindowId?: number,
-  ): void {
-    for (const [id, win] of this.windows) {
-      if (id !== excludeWindowId && !win.isDestroyed()) {
-        win.webContents.send(channel, data);
-      }
-    }
-  }
-
   createPty(id: string, windowId: number, initialCwd?: string): boolean {
     if (this.processes.has(id)) {
       return false;

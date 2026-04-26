@@ -7,30 +7,6 @@ import {
   type ThemeConfig,
 } from "../styles/theme";
 
-const STORAGE_KEY = "terminal-division-theme";
-
-// localStorageからテーマIDを取得
-function getStoredThemeId(): string {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored && themes[stored]) {
-      return stored;
-    }
-  } catch {
-    // localStorage使用不可の場合は無視
-  }
-  return DEFAULT_THEME_ID;
-}
-
-// localStorageにテーマIDを保存
-function storeThemeId(themeId: string): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, themeId);
-  } catch {
-    // localStorage使用不可の場合は無視
-  }
-}
-
 export interface ThemeStore {
   // 現在のテーマID
   currentThemeId: string;
@@ -44,8 +20,10 @@ export interface ThemeStore {
   setTheme: (themeId: string) => void;
 }
 
+// 各ウィンドウは独立したテーマを持つ。永続化・ウィンドウ間同期は意図的に行わず、
+// 新規ウィンドウは常に DEFAULT_THEME_ID で起動する。
 export const useThemeStore = create<ThemeStore>((set, get) => ({
-  currentThemeId: getStoredThemeId(),
+  currentThemeId: DEFAULT_THEME_ID,
   availableThemes: Object.values(themes),
   config: themeConfig,
 
@@ -59,12 +37,7 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
       console.warn(`Theme "${themeId}" not found, using default`);
       themeId = DEFAULT_THEME_ID;
     }
-
-    storeThemeId(themeId);
     set({ currentThemeId: themeId });
-
-    // 他のウィンドウにテーマ変更を通知
-    window.api.theme.notifyChanged(themeId);
   },
 }));
 
@@ -81,13 +54,3 @@ export const useAvailableThemes = (): Theme[] =>
 export const useSetTheme = (): ((themeId: string) => void) =>
   useThemeStore((s) => s.setTheme);
 export const useThemeConfig = (): ThemeConfig => useThemeStore((s) => s.config);
-
-// 他のウィンドウからのテーマ同期を受信するリスナーを設定
-export function setupThemeSync(): () => void {
-  return window.api.theme.onSync((themeId: string) => {
-    if (themes[themeId]) {
-      storeThemeId(themeId);
-      useThemeStore.setState({ currentThemeId: themeId });
-    }
-  });
-}

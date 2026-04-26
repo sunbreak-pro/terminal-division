@@ -28,12 +28,6 @@ const mockDialogApi = {
   selectFiles: vi.fn().mockResolvedValue(null),
 };
 
-// window.api.themeモック
-const mockThemeApi = {
-  notifyChanged: vi.fn(),
-  onSync: vi.fn().mockReturnValue(() => {}),
-};
-
 // window.api.windowモック
 const mockWindowApi = {
   getInitialCwd: vi.fn().mockReturnValue(null),
@@ -72,7 +66,6 @@ Object.defineProperty(window, "api", {
   value: {
     pty: mockPtyApi,
     dialog: mockDialogApi,
-    theme: mockThemeApi,
     window: mockWindowApi,
     system: mockSystemApi,
     recentDirs: mockRecentDirsApi,

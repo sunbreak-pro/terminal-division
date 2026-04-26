@@ -51,11 +51,6 @@ const api = {
   recentDirs: {
     add: (dirPath: string): void => ipcRenderer.send("recentDirs:add", dirPath),
   },
-  theme: {
-    notifyChanged: (themeId: string): void =>
-      ipcRenderer.send("theme:changed", themeId),
-    onSync: createIpcListener<string>("theme:sync"),
-  },
   dialog: {
     selectDirectory: (): Promise<string | null> =>
       ipcRenderer.invoke("dialog:selectDirectory"),
