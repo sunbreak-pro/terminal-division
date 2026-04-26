@@ -27,6 +27,7 @@
     "chokidar": "^3.6.0",
     "node-pty": "^1.0.0",
     "react": "^18.3.1",
+    "react-colorful": "^5.6.1",
     "react-dom": "^18.3.1",
     "react-resizable-panels": "^4.5.9",
     "zustand": "^5.0.3"

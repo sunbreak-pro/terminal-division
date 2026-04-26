@@ -1,5 +1,40 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-26 - Settings UI（テーマ / ショートカット / 不透明度、T2-9）（計画書: archive/2026-04-26-settings-feature.md）
+
+#### 概要
+
+Settings モーダル（800×600、左カテゴリ + 右タブ）を新設し、xterm.js `ITheme` 全 30 プロパティのカスタマイズ、ショートカット 24 ID の record-key 再割当（競合検出付き）、ウィンドウ不透明度スライダー + vibrancy トグルを 1 画面に統合。設計は VS Code / Zed 方式の「GUI first + JSON SSOT」で、`userData/settings.json` を Single Source of Truth にし、Renderer は `useSettingsStore` (Zustand) 経由で main からブロードキャストされる `settings:changed` を購読。テーマ編集は **「ライブプレビュー + 明示的保存」** モデルを採用：`themeStore.overrideTheme` に draft を保持して後ろのターミナル本体（xterm.js）にもリアルタイム反映、フッターの「保存」ボタンで `updateCustomTheme()` を呼び settings に永続化、「キャンセル」/× / ESC / 背景クリックで draft 破棄。`react-colorful` の HexColorPicker をポップオーバー化した `ColorField` 共通コンポーネントが、内部に draft state を持って **「タイプ中の不完全な HEX を親に流さない」** ことでテーマが消える致命バグを構造的に防ぐ。`.itermcolors`（XML plist）パーサを外部依存ゼロで実装し、`mbadolato/iTerm2-Color-Schemes` の 450+ プリセットをインポート可能。Header の旧「ショートカット」ボタンは Settings 内のショートカットタブで完全代替されたため削除。
+
+#### 変更点
+
+- **shared SSOT 化**: `src/shared/theme-types.ts` に `XtermTheme` / `AppColors` / `Theme` 型と `validateTheme` / `isHexColor` を集約（renderer/styles/theme.ts は型を re-export + プリセット値のみ保持）。`src/shared/settings.ts` に `AppSettings` / `validateAppSettings` / `mergeSettings` を SSOT 化、検証はフィールド単位フォールバック（セッション永続化と異なり一部破損で全設定を失わない）
+- **main 永続化**: `src/main/settings.ts` に `SettingsManager`（`userData/settings.json`、debounce 250ms、broadcast 即時、サイレントフォールバック）。`src/main/itermcolors-parser.ts` で plist XML を正規表現パース（外部依存なし、1MB 上限、Ansi 0-15 + Background/Foreground/Cursor/Selection マッピング）
+- **IPC 5 チャネル追加**: `settings:get` / `settings:update` / `settings:importItermColors` (handle/invoke)、`settings:changed` (broadcast)、`window:setOpacity` / `app:relaunch` (on/send)。`window-manager.ts` で起動時に `settingsManager.get().window` を反映し、`vibrancyEnabled` のとき `transparent: true` + `vibrancy: "under-window"` + `backgroundColor: "#00000000"` の 3 点セットを適用、`win.setOpacity(opacity)` で初期値反映
+- **shortcuts レジストリ化**: `src/renderer/shortcuts/registry.ts` に 24 ID（split-vertical / focus-_ / kill-line-_ / open-settings 等）を SSOT 化。`parseKey` / `matchKey` / `formatKey` / `canonicalize`（cmd/meta/command エイリアス吸収）/ `resolveShortcutKey`（user override > default）/ `findConflictingIds` を提供。App.tsx の 23 個の `if` ブロックを `Partial<Record<ShortcutId, handler>>` ディスパッチに置換、Cmd+Shift+Arrow → select-current-line のエイリアス 4 キーのみ前段で特殊処理
+- **settingsStore + settingsModalStore**: `useSettingsStore`（load / update / `settings:changed` 購読 / 楽観更新）+ セレクタ `useShortcutBindings` / `useWindowSettings` / `useCustomThemes`。`useSettingsModalStore` で isOpen + recordingShortcutId を管理し、録音中は App.tsx 側で global keydown を抑制、ShortcutSettings 側の listener が capture phase で取得
+- **themeStore リファクタ**: `availableThemes`/`getCurrentTheme` を撤去 → `useAvailableThemes` / `useCurrentTheme` をリアクティブフック化。`overrideTheme` フィールドと `setOverrideTheme()` 追加、`useCurrentTheme` の優先順位は **override > 組込 > customThemes > default**。`setTheme()` は永続化付き（settings.update を呼ぶ）+ override クリア。`setThemeIdLocal()` は永続化なし（起動時 settings load 反映用）。`addCustomTheme` / `updateCustomTheme` / `deleteCustomTheme` を追加（settings 経由で全ウィンドウへ broadcast）
+- **SettingsModal + 4 サブコンポーネント**: `SettingsModal.tsx`（800×600、左 180px カテゴリリスト + 右タブ、フッターに「キャンセル」「保存」、未保存変更インジケータ）、`AppearanceSettings.tsx`（テーマ選択 / 「複製して編集」 / カスタム編集 / 基本色・ANSI 16 色・App UI のアコーディオン / ライブプレビュー / .itermcolors インポート / JSON エクスポート、auto-editing useEffect でカスタム選択時に override 自動セット）、`ShortcutSettings.tsx`（24 ID 表 / Record-Key UX / 競合検出バナーで上書き or キャンセル / クリア / デフォルトに戻す）、`WindowSettings.tsx`（Opacity スライダー即時反映 / Vibrancy トグル + 再起動誘導）、`ColorField.tsx`（react-colorful + HEX 入力 + スウォッチ + click-outside、内部 draft state で **不完全 HEX を親に流さない**）
+- **ColorField 致命バグ修正**: 旧実装は HEX 入力欄の onChange で常に親に通知していたため、ユーザーが `#ff` までタイプした瞬間に main 側 validateTheme が null を返し customThemes 配列からテーマが落ちて「色変更がリセットされる」現象が発生。draft state で「有効 HEX のみ親に通知」+ blur 時に draft を value にスナップ復帰する形に修正
+- **保存モデル変更**: 旧実装は ColorField onChange → 即 settings 永続化だったが、ユーザー要望「閉じたら変更が消える / 明示的に保存したい」に対応するため draft / commit モデルへ。テーマ編集中の override は `themeStore` に保持してターミナル本体にライブ反映、「保存」ボタンで `updateCustomTheme(draft)` 永続化 → override クリア。「キャンセル」/× / ESC / 背景クリック / テーマ切替で override 自動クリア。Opacity / Vibrancy / ショートカットは即時保存のため Save の対象外（フッターヘルプテキストで明示）
+- **Header 整理**: 「ショートカット」ボタンを削除（Settings 内のショートカットタブで完全代替）、代わりに歯車アイコンの「設定 (Cmd+,)」ボタンを追加。`ShortcutsModal.tsx` とそのテストを撤去
+- **window-manager**: 起動時に settings 読込 + `vibrancyEnabled` 反映 + `setOpacity()` 初期値適用
+- **registry のバグ修正（テスト駆動）**: `normalizeKeyName(" ")` が length-1 ブランチで先 return して `"Cmd+ "` を返していたバグを Gate 4 で検出し修正（→ `"Cmd+Space"`）
+- **新規テスト 53 件**: `shortcuts/__tests__/registry.test.ts`（24 ケース、parseKey の修飾キー順序 / 修飾キー単独 null / Space 正規化、matchKey の case-insensitive とエイリアス、formatKey の絵文字レンダリング、resolveShortcutKey / findConflictingIds の override・null・除外）、`shared/__tests__/theme-types.test.ts`（10 ケース、isHexColor の各種パターンと validateTheme のフィールド単位検証）、`shared/__tests__/settings.test.ts`（19 ケース、validateAppSettings の version / opacity clamp / vibrancy 厳密 true / shortcut 文字列長制限 / customThemes フィルタ、mergeSettings の浅マージ・shortcuts 完全置換）
+- **既存テスト更新**: `themeStore.test.ts` を新 API に追従（getCurrentTheme メソッド撤去 → setTheme/setThemeIdLocal/themes record 直接ルックアップ）、`Header.test.tsx` の「ショートカットモーダル」テストを「設定ボタン → settingsModalStore.open()」に置換、`ShortcutsModal.test.tsx` を撤去
+- **テスト合計**: 24 ファイル / 335 件グリーン（修正前 282 から +53 件）
+- **依存追加**: `react-colorful`（軽量 ~2.8kB、HexColorPicker のみ使用）
+- **設計判断**:
+  - **GUI first + JSON SSOT**: VS Code / Zed の二層モデル。settings.json を SSOT にすることでパワーユーザーが直接編集でき、GUI は発見可能性を担保。Zed 公式ブログ「JSON only では新機能の発見が impossible」の知見を採用
+  - **ウィンドウ独立 + 永続化共通**: `themeStore.currentThemeId` はウィンドウローカル（settings broadcast でも他ウィンドウのテーマは触らない）。`customThemes` / `shortcuts` / `window` は全ウィンドウ即時同期。前提は既存 `make each window's theme independent` コミット (a155d11) の方針踏襲
+  - **draft / commit モデル（テーマ編集のみ）**: 「色変更が消える」問題と「明示的保存が欲しい」要望の両方を解決。Opacity / Vibrancy / ショートカットを draft 化しなかったのは UX 的に「即時反映」が自然なため（特に Opacity スライダー）。フッターヘルプテキストで両者の振る舞いを明示
+  - **ColorField の draft state**: タイプ中の不完全な HEX を親に流すと、main 側 validateTheme が「全フィールド有効」を要求するためテーマ全体を破棄してしまう。renderer 側で「有効値のみ親に通知」が最もロバスト
+  - **vibrancy デフォルト Off**: Electron #31862（vibrancy + transparent で白背景、v16+ の既知バグ）を考慮しオプトイン方式。フッターヘルプテキストで「再起動が必要」「一部環境で背景が白くなる」を明示。CSS `backdrop-filter` フォールバックは Phase 2 候補
+  - **Cmd+Shift+Arrow エイリアス**: 1 アクション × 4 キー（select-current-line）の特殊ケースは registry に乗せず前段で直接処理。registry の「1 ID = 1 デフォルトキー」ルールを保つ
+  - **`.itermcolors` パーサの外部依存ゼロ**: `plist` パッケージを使わず正規表現で実装。`mbadolato/iTerm2-Color-Schemes` の 450+ プリセットを取り込めればユーザー価値が大きく、依存追加は不釣り合い。AppColors は base テーマから流用、xterm パートのみ上書き
+  - **registry の Space バグ**: テスト駆動で発見。length-1 ブランチで先 return する設計を「" " を先に special-case」に変更。同種のバグはテストの存在意義そのもの
+- **計画書アーカイブ**: `.claude/archive/2026-04-26-settings-feature.md` に Status=COMPLETED で移動済み
+
 ### 2026-04-26 - プロンプトドット成功/失敗カラー反映バグ修正
 
 #### 概要
@@ -86,29 +121,4 @@
   - 新規ウィンドウのテーマを「親ウィンドウから継承」ではなく「常に dark」にする選択は、ユーザーの明示的な指定（B 案）。Dock の「最近のディレクトリ」経由で開いた追加ウィンドウも同じ挙動
   - `broadcastToAll` は generic な utility だが、唯一の caller を消した時点で dead code 扱い。"unused なら削除" の方針に従い除去（将来必要になれば再追加可能）
 
-### 2026-04-25 - Cmd+F 検索パネル機能拡張（VSCode 風オプション + ヒット件数）+ スクロールバッククリアボタン
-
-#### 概要
-
-ペインごとの Cmd+F 検索オーバーレイに VSCode 相当の検索オプション（Case sensitive / Whole word / Regex）とヒット件数表示（`3 / 12` / `件超` / `見つかりません` / `正規表現が不正です`）、入力欄編集ショートカット（Cmd+Backspace で全クリア / Cmd+←→ で行頭・行末移動）を追加。`SearchAddon.onDidChangeResults` を `terminalManager.subscribeSearchResults` 経由で購読し、クエリ・オプション変更で `findNext` を再実行（`incremental: true` で現在マッチ位置を保持）して装飾とカウンタを同時更新。あわせて `TerminalSubHeader` 右側にゴミ箱アイコンの「スクロールバッククリア」ボタンを追加し、`terminal.clear()` + `clearTextureAtlas()` でバッファ削除と canvas テクスチャ腐敗の強制再描画をワンタッチ実行できるようにした（PTY・シェル状態は不変）。
-
-#### 変更点
-
-- **terminalManager 検索 API 拡張**: `findNext` / `findPrevious` の第3引数に `SearchOptions { caseSensitive, wholeWord, regex, incremental }` を追加。`buildSearchOptions` で `ISearchOptions` 形に変換、装飾は既存 `SEARCH_DECORATIONS` を強制適用。`subscribeSearchResults(id, listener)` を新設し `SearchAddon.onDidChangeResults` を unsubscribe 関数付きで露出
-- **terminalManager クリア API**: `clearScrollback(id)` を新設。`terminal.clear()`（プロンプト行を新先頭にしてバッファ削除）+ `terminal.clearTextureAtlas()`（macOS スリープ復帰時の表示崩れ等のテクスチャ腐敗を強制再描画）を順に呼ぶ。registry 未登録 id は no-op
-- **TerminalSearchOverlay UI 拡張**:
-  - 入力欄右に `Aa` / `Ab` / `.*` の 3 トグル（active 時は accent 色塗り）。`searchOptions` を `useMemo` で安定化
-  - クエリ・オプション変更を監視する `useEffect` で `findNext(..., { ...searchOptions, incremental: true })` を再実行し装飾を refresh、空クエリ時は `clearSearchDecorations` でリセット
-  - `regexInvalid` state を `new RegExp(query)` の try/catch で更新し、不正時は赤枠 +「正規表現が不正です」表示で `runFind` を抑止
-  - ヒット件数表示: `resultIndex+1 / resultCount`（threshold 超は `resultCount` 件超、ヒット 0 は「見つかりません」、空クエリは「Tab: Path」）
-  - `handleKeyDown` に `Cmd/Ctrl + Backspace` → 入力全クリア、`Cmd/Ctrl + ArrowLeft` → `setSelectionRange(0, 0)`、`Cmd/Ctrl + ArrowRight` → 末尾移動を追加（Electron で input 内ショートカットが効かない問題への明示対応。path モードでも動作）
-- **TerminalSubHeader クリアボタン**: 既存「ファイル挿入」ボタンを共通 `iconButtonStyle` 化し、その左にゴミ箱 SVG の「クリア」ボタンを追加。tooltip「スクロールバックをクリア（プロンプト行は保持）」、aria-label 設定。`onClick` で `terminalManager.clearScrollback(id)` を呼ぶ
-- **新規テスト**: `terminalManager.test.ts` の MockTerminal に `clear` / `clearTextureAtlas` mock を追加し、`clearScrollback` の単体テスト 2 件（呼び出し検証 + 未登録 id ガード）を追加
-- **テスト合計**: 19 ファイル / 259 件グリーン（修正前 257 から +2 件）
-- **設計判断**:
-  - `incremental: true` を refresh effect 側だけ渡すことで「タイプ中は現在のマッチに留まる」UX を実現。Enter / Shift+Enter での明示的なナビゲーションは従来通り次/前のマッチへ進める
-  - 件数表示は `resultIndex < 0` を SearchAddon のオーバーフロー（既定 1000 件）として「件超」に倒し、UI を 1 行で完結させる
-  - クリアボタンは `terminal.clear()` のみではなく `clearTextureAtlas()` も併用。「バッファ肥大化に伴う表示バグ」要件と xterm.js が公式ワークアラウンドとして提示する canvas 復元処理が一致するため
-  - クリア操作は PTY / シェル履歴に触れない。実行中コマンドを保持したまま画面だけリセットする UX が macOS Terminal の Cmd+K 標準と整合
-
-> 2026-04-26 ローリングアーカイブ: これ以前の 25 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-26 ローリングアーカイブ: これ以前の 26 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

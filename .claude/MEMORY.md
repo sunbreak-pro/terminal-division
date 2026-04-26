@@ -6,10 +6,10 @@
 
 ## 直近の完了
 
+- Settings UI（テーマ / ショートカット / 不透明度、T2-9）✅（2026-04-26、計画書: archive/2026-04-26-settings-feature.md）
 - プロンプトドット成功/失敗カラー反映バグ修正 ✅（2026-04-26）
 - ペインヘッダー強調 + スクロールバック削除メニュー（T2-9）✅（2026-04-26、計画書: archive/2026-04-26-clear-scrollback-options.md）
-- ペイン内 Markdown エディタ（T2-8、CodeMirror 6）✅（2026-04-26、計画書: archive/2026-04-26-markdown-editor.md）
 
 ## 予定
 
-- Settings UI（テーマ / ショートカット / 不透明度、計画書: `2026-04-26-settings-feature.md`）
+（なし）

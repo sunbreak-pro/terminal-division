@@ -2,6 +2,31 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-25 - Cmd+F 検索パネル機能拡張（VSCode 風オプション + ヒット件数）+ スクロールバッククリアボタン
+
+#### 概要
+
+ペインごとの Cmd+F 検索オーバーレイに VSCode 相当の検索オプション（Case sensitive / Whole word / Regex）とヒット件数表示（`3 / 12` / `件超` / `見つかりません` / `正規表現が不正です`）、入力欄編集ショートカット（Cmd+Backspace で全クリア / Cmd+←→ で行頭・行末移動）を追加。`SearchAddon.onDidChangeResults` を `terminalManager.subscribeSearchResults` 経由で購読し、クエリ・オプション変更で `findNext` を再実行（`incremental: true` で現在マッチ位置を保持）して装飾とカウンタを同時更新。あわせて `TerminalSubHeader` 右側にゴミ箱アイコンの「スクロールバッククリア」ボタンを追加し、`terminal.clear()` + `clearTextureAtlas()` でバッファ削除と canvas テクスチャ腐敗の強制再描画をワンタッチ実行できるようにした（PTY・シェル状態は不変）。
+
+#### 変更点
+
+- **terminalManager 検索 API 拡張**: `findNext` / `findPrevious` の第3引数に `SearchOptions { caseSensitive, wholeWord, regex, incremental }` を追加。`buildSearchOptions` で `ISearchOptions` 形に変換、装飾は既存 `SEARCH_DECORATIONS` を強制適用。`subscribeSearchResults(id, listener)` を新設し `SearchAddon.onDidChangeResults` を unsubscribe 関数付きで露出
+- **terminalManager クリア API**: `clearScrollback(id)` を新設。`terminal.clear()`（プロンプト行を新先頭にしてバッファ削除）+ `terminal.clearTextureAtlas()`（macOS スリープ復帰時の表示崩れ等のテクスチャ腐敗を強制再描画）を順に呼ぶ。registry 未登録 id は no-op
+- **TerminalSearchOverlay UI 拡張**:
+  - 入力欄右に `Aa` / `Ab` / `.*` の 3 トグル（active 時は accent 色塗り）。`searchOptions` を `useMemo` で安定化
+  - クエリ・オプション変更を監視する `useEffect` で `findNext(..., { ...searchOptions, incremental: true })` を再実行し装飾を refresh、空クエリ時は `clearSearchDecorations` でリセット
+  - `regexInvalid` state を `new RegExp(query)` の try/catch で更新し、不正時は赤枠 +「正規表現が不正です」表示で `runFind` を抑止
+  - ヒット件数表示: `resultIndex+1 / resultCount`（threshold 超は `resultCount` 件超、ヒット 0 は「見つかりません」、空クエリは「Tab: Path」）
+  - `handleKeyDown` に `Cmd/Ctrl + Backspace` → 入力全クリア、`Cmd/Ctrl + ArrowLeft` → `setSelectionRange(0, 0)`、`Cmd/Ctrl + ArrowRight` → 末尾移動を追加（Electron で input 内ショートカットが効かない問題への明示対応。path モードでも動作）
+- **TerminalSubHeader クリアボタン**: 既存「ファイル挿入」ボタンを共通 `iconButtonStyle` 化し、その左にゴミ箱 SVG の「クリア」ボタンを追加。tooltip「スクロールバックをクリア（プロンプト行は保持）」、aria-label 設定。`onClick` で `terminalManager.clearScrollback(id)` を呼ぶ
+- **新規テスト**: `terminalManager.test.ts` の MockTerminal に `clear` / `clearTextureAtlas` mock を追加し、`clearScrollback` の単体テスト 2 件（呼び出し検証 + 未登録 id ガード）を追加
+- **テスト合計**: 19 ファイル / 259 件グリーン（修正前 257 から +2 件）
+- **設計判断**:
+  - `incremental: true` を refresh effect 側だけ渡すことで「タイプ中は現在のマッチに留まる」UX を実現。Enter / Shift+Enter での明示的なナビゲーションは従来通り次/前のマッチへ進める
+  - 件数表示は `resultIndex < 0` を SearchAddon のオーバーフロー（既定 1000 件）として「件超」に倒し、UI を 1 行で完結させる
+  - クリアボタンは `terminal.clear()` のみではなく `clearTextureAtlas()` も併用。「バッファ肥大化に伴う表示バグ」要件と xterm.js が公式ワークアラウンドとして提示する canvas 復元処理が一致するため
+  - クリア操作は PTY / シェル履歴に触れない。実行中コマンドを保持したまま画面だけリセットする UX が macOS Terminal の Cmd+K 標準と整合
+
 ### 2026-04-25 - Follow-up Improvements（起動ログ補強 / 可用性通知 / リファクタ）（計画書: archive/2026-04-25-followup-improvements.md）
 
 #### 概要

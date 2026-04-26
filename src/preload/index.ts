@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 // セッション永続化 IPC 用の DTO 型は shared モジュールに集約
 import type { SerializedLayout } from "../shared/session-state-validator";
+import type { AppSettings, PartialAppSettings } from "../shared/settings";
+import type { Theme, AppColors, XtermTheme } from "../shared/theme-types";
 
 function createIpcListener<T>(channel: string) {
   return (callback: (data: T) => void): (() => void) => {
@@ -47,6 +49,28 @@ const api = {
       initialCwdBuffer = null; // 一度消費したらクリア
       return cwd;
     },
+    // 不透明度を即時反映（再起動不要）
+    setOpacity: (value: number): void =>
+      ipcRenderer.send("window:setOpacity", value),
+  },
+  app: {
+    // vibrancy 切替後の再起動。renderer 側で確認モーダルを出してから呼ぶ。
+    relaunch: (): void => ipcRenderer.send("app:relaunch"),
+  },
+  settings: {
+    get: (): Promise<AppSettings> => ipcRenderer.invoke("settings:get"),
+    update: (patch: PartialAppSettings): Promise<AppSettings> =>
+      ipcRenderer.invoke("settings:update", patch),
+    importItermColors: (base: {
+      id: string;
+      name: string;
+      colors: AppColors;
+      xterm: XtermTheme;
+    }): Promise<
+      | { ok: true; theme: Theme }
+      | { ok: false; canceled?: boolean; error?: string }
+    > => ipcRenderer.invoke("settings:importItermColors", base),
+    onChanged: createIpcListener<AppSettings>("settings:changed"),
   },
   recentDirs: {
     add: (dirPath: string): void => ipcRenderer.send("recentDirs:add", dirPath),

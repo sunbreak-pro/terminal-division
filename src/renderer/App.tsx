@@ -16,7 +16,14 @@ import {
   useRootId,
   useTerminalActions,
 } from "./stores/terminalStore";
-import { useCurrentTheme, useThemeConfig } from "./stores/themeStore";
+import {
+  useCurrentTheme,
+  useThemeConfig,
+  useThemeStore,
+} from "./stores/themeStore";
+import { useSettingsStore } from "./stores/settingsStore";
+import { useSettingsModalStore } from "./stores/settingsModalStore";
+import { SettingsModal } from "./components/SettingsModal";
 import { getAllTerminalIds, getPaneNumber } from "./utils/layoutUtils";
 import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
@@ -30,6 +37,12 @@ import { useTerminalMetaStore } from "./stores/terminalMetaStore";
 import { useMarkdownDialogStore } from "./stores/markdownDialogStore";
 import { isMarkdownPath } from "./utils/markdownFile";
 import * as markdownEditorRegistry from "./services/markdownEditorRegistry";
+import {
+  SHORTCUT_DEFINITIONS,
+  matchKey,
+  resolveShortcutKey,
+  type ShortcutId,
+} from "./shortcuts/registry";
 
 // xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
 // 通常の input/textarea ではない。Cmd+Z 等を sidebar / terminal にディスパッチする
@@ -192,63 +205,30 @@ const App: React.FC = () => {
   );
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      // IME変換中は処理をスキップ
-      if (e.isComposing || e.keyCode === 229) {
-        return;
-      }
-
-      const isMeta = e.metaKey;
-      const isShift = e.shiftKey;
-      const isOption = e.altKey;
-
-      // Cmd + D: 縦に分割 (horizontal direction = left/right split)
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "d") {
+    // 各 ShortcutId に対するアクション。registry のデフォルトキーまたは settings の
+    // 上書きキーが押されたときにディスパッチされる。preventDefault / stopPropagation も
+    // ハンドラ内で行う。各ハンドラは未充足条件で early return する（既存挙動の踏襲）。
+    const handlers: Partial<Record<ShortcutId, (e: KeyboardEvent) => void>> = {
+      "split-vertical": (e) => {
         e.preventDefault();
         if (activeTerminalId && canSplitNow) {
           splitTerminal(activeTerminalId, "horizontal");
         }
-        return;
-      }
-
-      // Cmd + Shift + D: 横に分割 (vertical direction = top/bottom split)
-      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "d") {
+      },
+      "split-horizontal": (e) => {
         e.preventDefault();
         if (activeTerminalId && canSplitNow) {
           splitTerminal(activeTerminalId, "vertical");
         }
-        return;
-      }
-
-      // Cmd + Shift + 矢印: 行選択
-      if (isMeta && isShift && !isOption) {
-        if (
-          e.key === "ArrowLeft" ||
-          e.key === "ArrowRight" ||
-          e.key === "ArrowUp" ||
-          e.key === "ArrowDown"
-        ) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (activeTerminalId) {
-            terminalManager.selectCurrentLine(activeTerminalId);
-          }
-          return;
-        }
-      }
-
-      // Cmd + Shift + A: 現在行を選択
-      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "a") {
+      },
+      "select-current-line": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           terminalManager.selectCurrentLine(activeTerminalId);
         }
-        return;
-      }
-
-      // Cmd + W: 閉じる（MD で dirty なら未保存警告を挟む）
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "w") {
+      },
+      "close-pane": (e) => {
         e.preventDefault();
         if (!activeTerminalId || terminalCount <= 1) return;
         const meta = useTerminalMetaStore
@@ -279,54 +259,38 @@ const App: React.FC = () => {
           return;
         }
         closeTerminal(activeTerminalId);
-        return;
-      }
-
-      // Cmd + F: 検索オーバーレイを開く（ペインごと）
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "f") {
+      },
+      "find-in-pane": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           useTerminalSearchStore.getState().toggle(activeTerminalId);
         }
-        return;
-      }
-
-      // Cmd + R: サイドバーのディレクトリツリーを再読み込み
-      // dev ビルドでは Electron のデフォルトで page reload になり得るため、
-      // サイドバーの状態に関わらず常に preventDefault する。
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "r") {
+      },
+      "reload-tree": (e) => {
+        // dev ビルドでは Electron のデフォルトで page reload になり得るため、
+        // サイドバーの状態に関わらず常に preventDefault する。
         e.preventDefault();
         e.stopPropagation();
         const { isOpen, selectedTabCwd } = useSidebarStore.getState();
         if (isOpen && selectedTabCwd) {
           void useFileTreeStore.getState().refreshAllExpanded(selectedTabCwd);
         }
-        return;
-      }
-
-      // Cmd + O: ファイルを選択してパスを挿入
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "o") {
+      },
+      "insert-file-path": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           void promptAndInsertFiles(activeTerminalId);
         }
-        return;
-      }
-
-      // Cmd + Z: Undo（サイドバー操作 or ターミナル行入力）
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "z") {
+      },
+      undo: (e) => {
         // 入力要素 (rename input 等) にフォーカスがあるときは
         // ブラウザのテキスト Undo を尊重する。xterm の helper textarea は除外。
         const target = e.target as HTMLElement | null;
-        if (isEditableTarget(target)) {
-          return;
-        }
+        if (isEditableTarget(target)) return;
         // MarkdownEditor 内の Cmd+Z は CodeMirror の history に委譲する
-        if (isInsideMarkdownEditor(target)) {
-          return;
-        }
+        if (isInsideMarkdownEditor(target)) return;
         const sidebarState = useSidebarStore.getState();
         const fileOpsState = useFileOpsHistoryStore.getState();
         const sidebarHasUndo = fileOpsState.undoStack.length > 0;
@@ -341,19 +305,11 @@ const App: React.FC = () => {
         if (activeTerminalId) {
           terminalManager.undo(activeTerminalId);
         }
-        return;
-      }
-
-      // Cmd + Shift + Z: Redo（サイドバー or ターミナル）
-      if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
+      },
+      redo: (e) => {
         const target = e.target as HTMLElement | null;
-        if (isEditableTarget(target)) {
-          return;
-        }
-        // MarkdownEditor 内の Cmd+Shift+Z は CodeMirror の history に委譲する
-        if (isInsideMarkdownEditor(target)) {
-          return;
-        }
+        if (isEditableTarget(target)) return;
+        if (isInsideMarkdownEditor(target)) return;
         const sidebarState = useSidebarStore.getState();
         const fileOpsState = useFileOpsHistoryStore.getState();
         const sidebarHasRedo = fileOpsState.redoStack.length > 0;
@@ -368,38 +324,27 @@ const App: React.FC = () => {
         if (activeTerminalId) {
           terminalManager.redo(activeTerminalId);
         }
-        return;
-      }
-
-      // Cmd + . : サイドバーの開閉トグル
-      if (isMeta && !isShift && !isOption && e.key === ".") {
+      },
+      "toggle-sidebar": (e) => {
         e.preventDefault();
         e.stopPropagation();
         useSidebarStore.getState().toggleOpen();
-        return;
-      }
-
-      // Cmd + Delete: カーソル位置から行頭まで削除
-      if (isMeta && !isShift && !isOption && e.key === "Backspace") {
+      },
+      "kill-line-backward": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
-          terminalManager.writeWithHistory(activeTerminalId, "\x15"); // Ctrl+U: backward-kill-line
+          terminalManager.writeWithHistory(activeTerminalId, "\x15"); // Ctrl+U
         }
-        return;
-      }
-
-      // Cmd + K: カーソルから行末まで削除
-      if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "k") {
+      },
+      "kill-line-forward": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           terminalManager.writeWithHistory(activeTerminalId, "\x0b"); // Ctrl+K
         }
-        return;
-      }
-      // Cmd + ←: 行の先頭へ
-      if (isMeta && !isShift && !isOption && e.key === "ArrowLeft") {
+      },
+      "move-line-start": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (
@@ -408,11 +353,8 @@ const App: React.FC = () => {
         ) {
           window.api.pty.write(activeTerminalId, "\x01"); // Ctrl+A
         }
-        return;
-      }
-
-      // Cmd + →: 行の末尾へ
-      if (isMeta && !isShift && !isOption && e.key === "ArrowRight") {
+      },
+      "move-line-end": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (
@@ -421,31 +363,29 @@ const App: React.FC = () => {
         ) {
           window.api.pty.write(activeTerminalId, "\x05"); // Ctrl+E
         }
-        return;
-      }
-
-      // Shift + Enter: 改行を挿入
-      if (!isMeta && isShift && !isOption && e.key === "Enter") {
+      },
+      "insert-newline": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           terminalManager.writeWithHistory(activeTerminalId, "\n");
         }
-        return;
-      }
-
-      // Option + Delete: 単語を後方削除
-      if (!isMeta && !isShift && isOption && e.key === "Backspace") {
+      },
+      "kill-word-backward": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (activeTerminalId) {
           terminalManager.writeWithHistory(activeTerminalId, "\x17"); // Ctrl+W
         }
-        return;
-      }
-
-      // Option + ←: 単語単位で左へ移動（Cmd+Optionでない場合のみ）
-      if (!isMeta && !isShift && isOption && e.key === "ArrowLeft") {
+      },
+      "kill-word-forward": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeTerminalId) {
+          terminalManager.writeWithHistory(activeTerminalId, "\x1bd"); // ESC+d
+        }
+      },
+      "move-word-left": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (
@@ -454,11 +394,8 @@ const App: React.FC = () => {
         ) {
           window.api.pty.write(activeTerminalId, "\x1bb"); // ESC+b
         }
-        return;
-      }
-
-      // Option + →: 単語単位で右へ移動（Cmd+Optionでない場合のみ）
-      if (!isMeta && !isShift && isOption && e.key === "ArrowRight") {
+      },
+      "move-word-right": (e) => {
         e.preventDefault();
         e.stopPropagation();
         if (
@@ -467,38 +404,65 @@ const App: React.FC = () => {
         ) {
           window.api.pty.write(activeTerminalId, "\x1bf"); // ESC+f
         }
-        return;
-      }
-
-      // Option + D: 単語を前方削除（カーソル以降）
-      if (!isMeta && !isShift && isOption && e.key.toLowerCase() === "d") {
+      },
+      "focus-up": (e) => {
         e.preventDefault();
-        e.stopPropagation();
-        if (activeTerminalId) {
-          terminalManager.writeWithHistory(activeTerminalId, "\x1bd"); // ESC+d
+        moveFocus("up");
+      },
+      "focus-down": (e) => {
+        e.preventDefault();
+        moveFocus("down");
+      },
+      "focus-left": (e) => {
+        e.preventDefault();
+        moveFocus("left");
+      },
+      "focus-right": (e) => {
+        e.preventDefault();
+        moveFocus("right");
+      },
+      "open-settings": (e) => {
+        e.preventDefault();
+        useSettingsModalStore.getState().open();
+      },
+    };
+
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      // IME 変換中は処理をスキップ
+      if (e.isComposing || e.keyCode === 229) return;
+
+      // ショートカット録音中はディスパッチを抑制し、SettingsModal 側の
+      // 録音 listener にキー入力を委ねる。
+      if (useSettingsModalStore.getState().recordingShortcutId !== null) return;
+
+      // Cmd+Shift+ArrowLeft/Right/Up/Down: 行選択（Cmd+Shift+A の追加エイリアス）。
+      // 4 つのキーが同じアクションに飛ぶ特殊ケースは registry に乗せず、
+      // ここで先に処理する。registry には Cmd+Shift+A だけが登録されている。
+      if (e.metaKey && e.shiftKey && !e.altKey) {
+        if (
+          e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown"
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (activeTerminalId) {
+            terminalManager.selectCurrentLine(activeTerminalId);
+          }
+          return;
         }
-        return;
       }
 
-      // Cmd + Option + Arrow: フォーカス移動
-      if (isMeta && isOption && !isShift) {
-        switch (e.key) {
-          case "ArrowUp":
-            e.preventDefault();
-            moveFocus("up");
-            break;
-          case "ArrowDown":
-            e.preventDefault();
-            moveFocus("down");
-            break;
-          case "ArrowLeft":
-            e.preventDefault();
-            moveFocus("left");
-            break;
-          case "ArrowRight":
-            e.preventDefault();
-            moveFocus("right");
-            break;
+      // ユーザー設定で上書きされた shortcut bindings を適用。未設定の ID は
+      // resolveShortcutKey() の中でデフォルトキーにフォールバックする。
+      const bindings = useSettingsStore.getState().settings.shortcuts;
+
+      for (const def of SHORTCUT_DEFINITIONS) {
+        const resolved = resolveShortcutKey(def.id, bindings);
+        if (resolved && matchKey(e, resolved)) {
+          handlers[def.id]?.(e);
+          return;
         }
       }
     };
@@ -520,6 +484,17 @@ const App: React.FC = () => {
   // セッション永続化: レイアウト / CWD 変更を debounced に Main へ送る
   useEffect(() => {
     return startSessionPersist();
+  }, []);
+
+  // 起動時に settings をロードし、永続化された currentThemeId を themeStore に反映する。
+  // 各ウィンドウは起動時の 1 回だけ反映し、以降は独立してテーマを切り替え可能にする。
+  useEffect(() => {
+    void useSettingsStore
+      .getState()
+      .load()
+      .then((loaded) => {
+        useThemeStore.getState().setThemeIdLocal(loaded.theme.currentThemeId);
+      });
   }, []);
 
   return (
@@ -567,6 +542,7 @@ const App: React.FC = () => {
           onCancel={dismissDialog}
         />
       )}
+      <SettingsModal />
     </div>
   );
 };

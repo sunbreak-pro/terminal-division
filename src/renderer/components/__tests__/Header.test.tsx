@@ -84,7 +84,8 @@ describe("Header", () => {
     expect(screen.getByTitle("横に分割 (Cmd+Shift+D)")).toBeInTheDocument();
     expect(screen.getByTitle("閉じる (Cmd+W)")).toBeInTheDocument();
     expect(screen.getByTitle("ディレクトリを移動")).toBeInTheDocument();
-    expect(screen.getByTitle("ショートカットキー一覧")).toBeInTheDocument();
+    // ショートカット一覧表示は Settings モーダル内のタブに統合された
+    expect(screen.getByTitle("設定 (Cmd+,)")).toBeInTheDocument();
   });
 
   it("split buttons disabled when canSplit=false", () => {
@@ -167,31 +168,25 @@ describe("Header", () => {
     expect(mockSetTheme).toHaveBeenCalledWith("light");
   });
 
-  it("opens/closes shortcuts modal", () => {
+  it("opens settings modal store on settings button click", async () => {
     vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
+
+    // SettingsModal 自体は別ファイルでテストする方針。ここでは Header の
+    // 「設定ボタン → settingsModalStore.open()」配線のみを確認する。
+    const { useSettingsModalStore } =
+      await import("../../stores/settingsModalStore");
+    useSettingsModalStore.setState({
+      isOpen: false,
+      recordingShortcutId: null,
+    });
 
     render(<Header />);
 
-    // モーダルは初期状態で非表示
-    expect(
-      screen.queryByText("ショートカットキー一覧"),
-    ).not.toBeInTheDocument();
+    expect(useSettingsModalStore.getState().isOpen).toBe(false);
 
-    // ショートカットボタンをクリック
-    const shortcutsButton = screen.getByTitle("ショートカットキー一覧");
-    fireEvent.click(shortcutsButton);
+    fireEvent.click(screen.getByTitle("設定 (Cmd+,)"));
 
-    // モーダルが表示される
-    expect(screen.getByText("ショートカットキー一覧")).toBeInTheDocument();
-
-    // ×ボタンでモーダルを閉じる
-    const closeModalButton = screen.getByText("×");
-    fireEvent.click(closeModalButton);
-
-    // モーダルが非表示になる
-    expect(
-      screen.queryByText("ショートカットキー一覧"),
-    ).not.toBeInTheDocument();
+    expect(useSettingsModalStore.getState().isOpen).toBe(true);
   });
 
   it("calls directory selection dialog on directory button click", async () => {

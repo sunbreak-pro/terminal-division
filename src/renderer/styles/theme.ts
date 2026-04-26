@@ -1,49 +1,8 @@
-// テーマ型定義
-export interface XtermTheme {
-  background: string;
-  foreground: string;
-  cursor: string;
-  cursorAccent: string;
-  selectionBackground: string;
-  selectionForeground: string;
-  black: string;
-  red: string;
-  green: string;
-  yellow: string;
-  blue: string;
-  magenta: string;
-  cyan: string;
-  white: string;
-  brightBlack: string;
-  brightRed: string;
-  brightGreen: string;
-  brightYellow: string;
-  brightBlue: string;
-  brightMagenta: string;
-  brightCyan: string;
-  brightWhite: string;
-}
+// テーマ型は shared に集約されているため、ここから re-export する。
+// Main / Preload / Renderer 全てが同一の型定義を参照できる。
+export type { XtermTheme, AppColors, Theme } from "../../shared/theme-types";
 
-export interface AppColors {
-  background: string;
-  headerBackground: string;
-  terminalBackground: string;
-  text: string;
-  textSecondary: string;
-  accent: string;
-  activeTerminal: string;
-  border: string;
-  borderActive: string;
-  buttonHover: string;
-  danger: string;
-}
-
-export interface Theme {
-  id: string;
-  name: string;
-  colors: AppColors;
-  xterm: XtermTheme;
-}
+import type { Theme } from "../../shared/theme-types";
 
 export interface ThemeConfig {
   spacing: {

@@ -1,6 +1,7 @@
 ---
-Status: PLANNED
+Status: COMPLETED
 Created: 2026-04-26
+Completed: 2026-04-26
 Task: T2-9 Settings (Theme / Shortcuts / Opacity)
 Project: /Users/newlife/dev/apps/terminal-division
 ---

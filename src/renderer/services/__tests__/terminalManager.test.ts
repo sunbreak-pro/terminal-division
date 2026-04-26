@@ -409,6 +409,48 @@ describe("terminalManager", () => {
       expect(hiddenEl.style.display).toBe("none");
       expect(hiddenEl.textContent).toBe(""); // スタイル適用されず textContent も未設定
     });
+
+    // 回帰テスト: precmd → D;N で色付け → zle-line-init → A の流れで、
+    // A ハンドラが直前 decoration を dispose してしまうと、ユーザは成功/失敗色を
+    // 視認できないままグレー● に戻ってしまう。A は新マーカーへの差し替えのみ行い、
+    // 過去 decoration は破棄しないこと（dispose 呼び出し回数 0）を保証する。
+    it("preserves previous decoration when a new prompt (A) starts", () => {
+      const decorationMock = {
+        onRender: vi.fn(),
+        dispose: vi.fn(),
+      };
+
+      const instance = terminalManager.getOrCreate(
+        "test-osc-preserve-deco",
+        defaultOptions,
+        defaultCallbacks,
+      );
+
+      (
+        instance.terminal as unknown as {
+          registerDecoration: (opts: unknown) => unknown;
+        }
+      ).registerDecoration = vi.fn().mockReturnValue(decorationMock);
+
+      const registerOscHandlerMock = instance.terminal.parser
+        .registerOscHandler as unknown as ReturnType<typeof vi.fn>;
+      const osc7770Call = registerOscHandlerMock.mock.calls.find(
+        (call) => call[0] === 7770,
+      );
+      const oscHandler = osc7770Call![1] as (data: string) => boolean;
+
+      // 1 回目のプロンプト → コマンド完了で色付け
+      oscHandler("A");
+      oscHandler("D;0");
+      expect(instance.promptDot.decoration).toBe(decorationMock);
+      expect(decorationMock.dispose).not.toHaveBeenCalled();
+
+      // 2 回目のプロンプト開始: 過去 decoration を dispose しないこと
+      oscHandler("A");
+      expect(decorationMock.dispose).not.toHaveBeenCalled();
+      // promptDot は新しいマーカーに差し替わり、decoration 参照は捨てられている
+      expect(instance.promptDot.decoration).toBeNull();
+    });
   });
 
   describe("selection", () => {

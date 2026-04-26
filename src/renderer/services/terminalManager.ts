@@ -4,6 +4,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon, ISearchOptions } from "@xterm/addon-search";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { usePathHistoryStore } from "../stores/pathHistoryStore";
+import type { XtermTheme } from "../../shared/theme-types";
 
 // 行単位 Undo/Redo 履歴の最大保持数
 const MAX_UNDO_STACK_SIZE = 100;
@@ -261,11 +262,18 @@ export function getOrCreate(
           }
         } else if (command === "A") {
           // プロンプト開始 → 新しいマーカーを保存（デコレーションなし = シェルのグレー●がそのまま見える）
+          // 重要: 直前の marker / decoration は明示的に dispose しない。
+          //   precmd → D;N で打った色付き● の直後に zle-line-init → A が走るため、
+          //   ここで dispose すると「成功/失敗色が一瞬すらユーザに見えずグレーに戻る」
+          //   ように見えてしまう（実際にはコマンド完了瞬間に色が付き、新プロンプト
+          //   到達と同時に消える）。OSC 7770 の意図 (iTerm2/VSCode の semantic prompt
+          //   と同じく、過去プロンプトに成功/失敗を視覚的に残す) に沿うため、
+          //   過去 decoration はそのまま残し、参照だけ捨てる。
+          //   xterm.js は scrollback 上限到達で marker を自動 dispose し、
+          //   それに連動して decoration も破棄されるためメモリリークしない。
           const marker = terminal.registerMarker(0);
           const inst = registry.get(id);
           if (marker && inst) {
-            // 直前のマーカー / デコレーションは破棄して上書き
-            inst.promptDot.decoration?.dispose();
             inst.promptDot = { marker, decoration: null };
           }
           // 初回プロンプト到達 = readline がアクティブになった証 → ショートカット解禁
@@ -511,7 +519,7 @@ export function scrollToBottom(id: string): void {
 /**
  * ターミナルのテーマを更新
  */
-function updateTheme(id: string, xtermTheme: Record<string, string>): void {
+function updateTheme(id: string, xtermTheme: XtermTheme): void {
   const instance = registry.get(id);
   if (!instance) return;
 
@@ -521,7 +529,7 @@ function updateTheme(id: string, xtermTheme: Record<string, string>): void {
 /**
  * 全ターミナルのテーマを一括更新
  */
-export function updateAllThemes(xtermTheme: Record<string, string>): void {
+export function updateAllThemes(xtermTheme: XtermTheme): void {
   for (const [id] of registry) {
     updateTheme(id, xtermTheme);
   }

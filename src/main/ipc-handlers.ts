@@ -1,12 +1,16 @@
 import { ipcMain, BrowserWindow, app, dialog, shell } from "electron";
+import fs from "fs";
 import { ptyManager } from "./pty-manager";
 import { createWindow, canCreateWindow } from "./window-manager";
 import { recentDirectoryManager } from "./recent-directories";
 import { fileSystemManager } from "./file-system-handler";
 import { sidebarStateManager } from "./sidebar-state";
 import { sessionStateManager } from "./session-state";
+import { settingsManager } from "./settings";
+import { parseItermColors } from "./itermcolors-parser";
 import { validatePath, PATH_REJECTED_ERROR } from "./path-validator";
 import type { SerializedLayout } from "./types/session-state";
+import type { PartialAppSettings } from "../shared/settings";
 
 // IPCハンドラー登録（アプリ起動時に一度だけ呼ぶ）
 export function setupIpcHandlers(): void {
@@ -348,6 +352,82 @@ export function setupIpcHandlers(): void {
 
   ipcMain.on("session:clear", () => {
     sessionStateManager.clear();
+  });
+
+  // ========== Settings ==========
+
+  ipcMain.handle("settings:get", () => settingsManager.get());
+
+  ipcMain.handle("settings:update", (_, patch: PartialAppSettings) => {
+    return settingsManager.update(patch ?? {});
+  });
+
+  // .itermcolors ファイルを開いてテーマに変換。
+  // base には現在のテーマ（AppColors を流用するため）を renderer から受け取る。
+  ipcMain.handle(
+    "settings:importItermColors",
+    async (
+      event,
+      base: {
+        id: string;
+        name: string;
+        colors: import("../shared/theme-types").AppColors;
+        xterm: import("../shared/theme-types").XtermTheme;
+      },
+    ) => {
+      const parentWin = BrowserWindow.fromWebContents(event.sender);
+      const dialogOptions = {
+        properties: ["openFile" as const],
+        filters: [{ name: "iTerm Colors", extensions: ["itermcolors"] }],
+        title: "iTerm カラースキームを選択",
+        buttonLabel: "インポート",
+      };
+      const result = parentWin
+        ? await dialog.showOpenDialog(parentWin, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled || result.filePaths.length === 0) {
+        return { ok: false as const, canceled: true };
+      }
+      const filePath = result.filePaths[0];
+      try {
+        // サイズチェック (1MB 上限) — 健全な .itermcolors は数 KB
+        const stat = fs.statSync(filePath);
+        if (stat.size > 1024 * 1024) {
+          return {
+            ok: false as const,
+            error: "ファイルサイズが上限を超えています",
+          };
+        }
+        const xml = fs.readFileSync(filePath, "utf-8");
+        const fileName = filePath.split("/").pop() ?? "imported";
+        const theme = parseItermColors(xml, fileName, base);
+        if (!theme) {
+          return {
+            ok: false as const,
+            error: "ファイルを解析できませんでした",
+          };
+        }
+        return { ok: true as const, theme };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { ok: false as const, error: message };
+      }
+    },
+  );
+
+  // ウィンドウ不透明度を即時反映。再起動不要。
+  ipcMain.on("window:setOpacity", (event, value: number) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    if (typeof value !== "number" || !Number.isFinite(value)) return;
+    const clamped = Math.max(0.5, Math.min(1.0, value));
+    win.setOpacity(clamped);
+  });
+
+  // アプリ再起動（vibrancy 切替時に renderer から要求される）
+  ipcMain.on("app:relaunch", () => {
+    app.relaunch();
+    app.exit(0);
   });
 
   app.on("before-quit", () => {
