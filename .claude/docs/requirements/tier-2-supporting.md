@@ -120,3 +120,47 @@ Tier 1 のコア体験を補強する機能。実装済みだが中核ではな�
 - `src/renderer/main.tsx`（起動時復元呼び出し）
 - `src/renderer/stores/terminalStore.ts`（`hydrateLayout`）
 - `src/renderer/stores/terminalMetaStore.ts`（`hydrateMetas`）
+
+---
+
+## T2-8: ペイン内 Markdown エディタ
+
+### Purpose
+
+ターミナル作業の合間に README やメモを開いて編集する典型ワークフローを 1 アプリ内で完結させる。VSCode やエディタへ context-switch せず、CLI と Markdown を同じペイン内のタブで往復できるようにする。
+
+### Boundary
+
+- **含む**: `.md` / `.markdown` のみ対応、サイドバー右クリックの「編集する」起動、ペイン番号確認モーダル、ペイン内 CLI / MD タブ切替（PTY は MD 表示中も `display:none` で生存）、CodeMirror 6 ベースの生テキスト編集 + シンタックスハイライト + Cmd+Z / Cmd+Shift+Z 履歴、Cmd+S 明示保存、未保存時の警告モーダル（タブ切替・別ファイル・Cmd+W）、5MB 上限
+- **含まない**: Markdown プレビュー、画像インライン、リンク遷移、アウトライン、Mermaid / 数式、外部変更検知、MD 状態のセッション永続化、`.md` 以外の編集
+
+### Acceptance Criteria
+
+- [x] サイドバーで `.md` / `.markdown` を右クリックすると「編集する」項目が表示される（他拡張子では非表示）
+- [x] 「編集する」→ 確認モーダル（直近フォーカスペインの番号を強調表示）→ 「はい」でエディタが開く
+- [x] ペインヘッダーに `[CLI] [<ファイル名>●] [×]` 形式のタブ。dirty 時は ●、CLI <-> MD は無確認で表示切替（dirty 時のみ警告）
+- [x] CLI <-> MD 切替で xterm 側のバッファ・カーソル位置・スクロール位置が完全に保持される
+- [x] Cmd+S で `fs:writeFile` 経由保存。成功で dirty 解除
+- [x] Cmd+Z / Cmd+Shift+Z は MD pane focus 時に CodeMirror の history へ委譲（App.tsx capture-phase keydown を bypass）
+- [x] dirty 状態で次の操作時に未保存警告モーダル: ① CLI タブクリック ② 別 .md を「編集する」 ③ MD タブの × ④ Cmd+W
+- [x] モーダルの選択肢: 保存して続行 / 破棄して続行 / キャンセル（default focus はキャンセル）
+- [x] 5MB 超のファイル read は拒否（main 側 `validatePath` + size check）
+- [x] アプリ再起動時に MD 状態は復元せず、CLI として起動（レイアウト・CWD は従来通り復元）
+- [x] 同一ファイル再オープンでもエディタが re-mount される（`mdLoadedAt` を key に含める）
+
+### Dependencies
+
+- `src/main/ipc-handlers.ts`（`fs:readFile` / `fs:writeFile`）
+- `src/main/file-system-handler.ts`（`readTextFile` / `writeTextFile`）
+- `src/preload/index.ts`（`window.api.fs.readFile/writeFile`）
+- `src/renderer/components/MarkdownEditor.tsx`（CodeMirror 6 ラッパ）
+- `src/renderer/components/OpenMarkdownModal.tsx` / `UnsavedChangesModal.tsx`
+- `src/renderer/components/TerminalPane.tsx`（viewMode 分岐）
+- `src/renderer/components/TerminalSubHeader.tsx`（タブ UI）
+- `src/renderer/components/Sidebar/DirectoryTree.tsx`（コンテキストメニュー項目）
+- `src/renderer/stores/terminalMetaStore.ts`（viewMode + MD 状態）
+- `src/renderer/stores/markdownDialogStore.ts`（モーダル中央集約）
+- `src/renderer/services/markdownEditorRegistry.ts`（per-pane imperative API）
+- `src/renderer/utils/markdownFile.ts`（拡張子判定）
+- `src/renderer/utils/layoutUtils.ts`（`getPaneNumber`）
+- 依存パッケージ: `@uiw/react-codemirror` / `@codemirror/lang-markdown` / `@codemirror/commands` / `@codemirror/state` / `@codemirror/view`

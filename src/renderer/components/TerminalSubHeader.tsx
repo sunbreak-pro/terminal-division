@@ -1,8 +1,15 @@
 import React, { useCallback, useMemo } from "react";
-import { useTerminalMeta } from "../stores/terminalMetaStore";
+import {
+  useTerminalMeta,
+  useTerminalMetaStore,
+} from "../stores/terminalMetaStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { promptAndInsertFiles } from "../utils/insertFiles";
 import * as terminalManager from "../services/terminalManager";
+import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
+import { useMarkdownDialogStore } from "../stores/markdownDialogStore";
+import { getFileName } from "../utils/markdownFile";
+import { showErrorToast } from "./Sidebar/ErrorToast";
 
 interface TerminalSubHeaderProps {
   id: string;
@@ -57,6 +64,100 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         void promptAndInsertFiles(id);
       },
       [id],
+    );
+
+    // ===== Markdown タブ操作 =====
+    const hasMarkdown = !!meta?.mdFilePath;
+    const isMd = meta?.viewMode === "md";
+    const isDirty = meta?.mdDirty ?? false;
+    const mdFilePath = meta?.mdFilePath ?? null;
+
+    const switchToMode = useCallback(
+      (mode: "cli" | "md"): void => {
+        if (meta?.viewMode === mode) return;
+        useTerminalMetaStore.getState().setViewMode(id, mode);
+      },
+      [id, meta?.viewMode],
+    );
+
+    const handleClickCliTab = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        if (!isMd) return; // 既に CLI
+        if (isDirty && mdFilePath) {
+          // dirty な MD タブから CLI へ切替: 表示を隠すだけだが念のため警告
+          useMarkdownDialogStore.getState().showUnsaved({
+            filePath: mdFilePath,
+            paneId: id,
+            reason: "switch-to-cli",
+            onSave: async () => {
+              const api = markdownEditorRegistry.getApi(id);
+              const ok = api ? await api.save() : false;
+              if (!ok) {
+                showErrorToast("保存に失敗しました");
+                return;
+              }
+              useMarkdownDialogStore.getState().dismiss();
+              switchToMode("cli");
+            },
+            onDiscard: () => {
+              useMarkdownDialogStore.getState().dismiss();
+              switchToMode("cli");
+            },
+          });
+          return;
+        }
+        switchToMode("cli");
+      },
+      [id, isMd, isDirty, mdFilePath, switchToMode],
+    );
+
+    const handleClickMdTab = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        switchToMode("md");
+      },
+      [switchToMode],
+    );
+
+    // span / button いずれからも呼ばれるため、要素は HTMLElement に汎化する
+    const handleCloseMdTab = useCallback(
+      (e: React.MouseEvent<HTMLElement>) => {
+        e.stopPropagation();
+        if (!mdFilePath) return;
+        const close = (): void => {
+          useTerminalMetaStore.getState().clearMarkdown(id);
+        };
+        if (isDirty) {
+          useMarkdownDialogStore.getState().showUnsaved({
+            filePath: mdFilePath,
+            paneId: id,
+            reason: "open-other",
+            onSave: async () => {
+              const api = markdownEditorRegistry.getApi(id);
+              const ok = api ? await api.save() : false;
+              if (!ok) {
+                showErrorToast("保存に失敗しました");
+                return;
+              }
+              useMarkdownDialogStore.getState().dismiss();
+              close();
+            },
+            onDiscard: () => {
+              useMarkdownDialogStore.getState().dismiss();
+              close();
+            },
+          });
+          return;
+        }
+        close();
+      },
+      [id, mdFilePath, isDirty],
+    );
+
+    const mdFileName = useMemo(
+      () => (mdFilePath ? getFileName(mdFilePath) : ""),
+      [mdFilePath],
     );
 
     // スクロールバッファをクリア（プロンプト行は残す。シェル状態には触れない）
@@ -133,28 +234,140 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         >
           {paneNumber}
         </span>
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            flexShrink: 1,
-            minWidth: 0,
-          }}
-          title={displayCwd}
-        >
-          {folderName}
-        </span>
-        <span style={{ color: theme.colors.border, flexShrink: 0 }}>|</span>
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            flexShrink: 1,
-            minWidth: 0,
-          }}
-        >
-          {processDisplay}
-        </span>
+        {hasMarkdown ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "stretch",
+              gap: 0,
+              flexShrink: 1,
+              minWidth: 0,
+              height: "100%",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleClickCliTab}
+              title="ターミナル表示に切替"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: !isMd ? theme.colors.text : theme.colors.textSecondary,
+                fontSize: 11,
+                fontFamily: "inherit",
+                padding: "0 8px",
+                cursor: "pointer",
+                borderBottom: !isMd
+                  ? `2px solid ${theme.colors.accent}`
+                  : "2px solid transparent",
+                marginBottom: -1,
+                fontWeight: !isMd ? 600 : 400,
+              }}
+            >
+              CLI
+            </button>
+            <button
+              type="button"
+              onClick={handleClickMdTab}
+              title={mdFilePath ?? ""}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: isMd ? theme.colors.text : theme.colors.textSecondary,
+                fontSize: 11,
+                fontFamily: "inherit",
+                padding: "0 4px 0 8px",
+                cursor: "pointer",
+                borderBottom: isMd
+                  ? `2px solid ${theme.colors.accent}`
+                  : "2px solid transparent",
+                marginBottom: -1,
+                fontWeight: isMd ? 600 : 400,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                maxWidth: 220,
+                overflow: "hidden",
+              }}
+            >
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {mdFileName}
+              </span>
+              {isDirty && (
+                <span
+                  aria-label="未保存"
+                  style={{
+                    color: theme.colors.accent,
+                    fontSize: 14,
+                    lineHeight: 1,
+                  }}
+                >
+                  ●
+                </span>
+              )}
+              <span
+                role="button"
+                aria-label="Markdown タブを閉じる"
+                onClick={handleCloseMdTab}
+                style={{
+                  marginLeft: 2,
+                  width: 14,
+                  height: 14,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: 3,
+                  color: theme.colors.textSecondary,
+                  fontSize: 12,
+                  lineHeight: 1,
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor =
+                    theme.colors.buttonHover;
+                  e.currentTarget.style.color = theme.colors.text;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = "transparent";
+                  e.currentTarget.style.color = theme.colors.textSecondary;
+                }}
+              >
+                ×
+              </span>
+            </button>
+          </div>
+        ) : (
+          <>
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                flexShrink: 1,
+                minWidth: 0,
+              }}
+              title={displayCwd}
+            >
+              {folderName}
+            </span>
+            <span style={{ color: theme.colors.border, flexShrink: 0 }}>|</span>
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                flexShrink: 1,
+                minWidth: 0,
+              }}
+            >
+              {processDisplay}
+            </span>
+          </>
+        )}
         <div
           style={{
             marginLeft: "auto",

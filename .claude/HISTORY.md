@@ -1,5 +1,33 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-26 - ペイン内 Markdown エディタ（T2-8、CodeMirror 6）（計画書: archive/2026-04-26-markdown-editor.md）
+
+#### 概要
+
+サイドバーから `.md` / `.markdown` ファイルを開き、ターミナルペイン内で編集できる機能を追加。CLI と MD は同じ leaf の 2 ビューとして扱い、レイアウト型は変更せず `terminalMetaStore` に `viewMode: "cli" | "md"` と MD 状態（filePath / savedContent / dirty / loadedAt）を持たせる。MD 表示中も xterm/PTY は `display:none` で生存し、CLI に戻るとバッファ・カーソル位置・スクロール位置が完全に保たれる。CodeMirror 6（@uiw/react-codemirror + lang-markdown）を採用、Cmd+S 明示保存 / Cmd+Z・Cmd+Shift+Z による履歴は MD pane focus 時に App.tsx capture-phase keydown を bypass して CodeMirror に委譲。トリガはサイドバー右クリック → 「編集する」項目（`.md` / `.markdown` のみ表示）→ ペイン番号確認モーダル。dirty 状態でのタブ切替・別ファイル・MD タブ × ・Cmd+W には未保存警告モーダル（保存して続行 / 破棄して続行 / キャンセル、default focus はキャンセル）。MD 状態自体はセッション永続化対象外（再起動時は CLI に戻る）。
+
+#### 変更点
+
+- **依存追加**: `@uiw/react-codemirror` / `@codemirror/lang-markdown` / `@codemirror/commands` / `@codemirror/state` / `@codemirror/view`（@uiw 経由で basicSetup の history / searchKeymap / lineNumbers を有効化）
+- **IPC 追加**: `fs:readFile` / `fs:writeFile`（utf-8 固定、5MB 上限、`validatePath` 適用）。`file-system-handler.ts` に `readTextFile` / `writeTextFile`、preload に `window.api.fs.readFile/writeFile`
+- **terminalMetaStore 拡張**: `viewMode` / `mdFilePath` / `mdSavedContent` / `mdDirty` / `mdLoadedAt` フィールドと `openMarkdown` / `setViewMode` / `setMdDirty` / `markMdSaved` / `clearMarkdown` actions を追加。`initMeta` / `initLeafMeta` / `hydrateMetas` のデフォルトは `viewMode: "cli"`。`mdLoadedAt` は同一ファイル再オープン時の MarkdownEditor remount トリガ
+- **新規コンポーネント**: `MarkdownEditor.tsx`（CodeMirror 6 ラッパ、`Mod-s` keymap で内部 save、`data-md-editor-pane` 属性で焦点判定、テーマ追従の `EditorView.theme()`）/ `OpenMarkdownModal.tsx`（番号強調の確認モーダル、Enter 確定 / Esc キャンセル）/ `UnsavedChangesModal.tsx`（switch-to-cli / open-other / close-pane の 3 reason、default focus はキャンセル）
+- **新規 service / store**: `services/markdownEditorRegistry.ts`（per-pane imperative API: getContent / save / focus）/ `stores/markdownDialogStore.ts`（モーダル要求の中央集約 store、コールバックを request に格納する single-active モデル）
+- **新規 utility**: `utils/markdownFile.ts`（`isMarkdownPath` / `getFileName`、case-insensitive）。`utils/layoutUtils.ts` に `collectPaneIdsInOrder` / `getPaneNumber` を追加し、SplitContainer のローカル DFS 関数を共通化
+- **TerminalPane.tsx**: `viewMode === "md"` のとき MarkdownEditor を `position: absolute` で前面表示し xterm コンテナを `display: none` に。`key={mdFilePath}#${mdLoadedAt}` で remount をトリガ
+- **TerminalSubHeader.tsx**: `mdFilePath` 設定時にペイン番号の右隣に `[CLI] [<filename>●] [×]` のタブ風 UI。dirty 時は `●`、× ボタンと CLI タブクリックは dirty 時に未保存警告を経由。filePath 未設定時は従来の「フォルダ名 | プロセス」表示を維持
+- **DirectoryTree.tsx**: `buildMenuItems` に「編集する」項目を追加（`.md` / `.markdown` のみ条件表示）。`onRequestEditMarkdown` props を Sidebar 経由で App から受け取る
+- **App.tsx**: モーダル状態を `markdownDialogStore` 経由で render、`handleRequestEditMarkdown(filePath)` で `activeTerminalId` の dirty チェック → 必要なら未保存警告 → 確認モーダル → ファイル読込 → `openMarkdown`。Cmd+W ガードで MD pane の dirty 時に `UnsavedChangesModal (close-pane)` を表示。Cmd+Z / Cmd+Shift+Z は `data-md-editor-pane` 内 focus のとき `return` して CodeMirror history に委譲
+- **新規テスト**: `utils/__tests__/markdownFile.test.ts`（17 件、case-insensitive / 拡張子バリエーション / null/undefined ガード / ドット位置エッジケース）/ `utils/__tests__/layoutUtils.test.ts`（10 件、`collectPaneIdsInOrder` / `getPaneNumber` の DFS 順 / 不存在 ID）/ `stores/__tests__/markdownDialogStore.test.ts`（5 件、show / dismiss / single-active 置換）。テスト合計 22 ファイル / 285 件グリーン
+- **ドキュメント更新**: `CLAUDE.md` Tier 2 に T2-8 を追記、`docs/requirements/tier-2-supporting.md` に Purpose / Boundary / Acceptance Criteria / Dependencies を追加
+- **設計判断**:
+  - レイアウト型 (`TerminalPane`) は変更せず per-pane viewMode で表現することで、PTY ライフサイクル・SplitContainer の DFS / paneNumber 計算・セッション永続化への影響を最小化
+  - MarkdownEditor の content state は CodeMirror 内部に閉じ込め、外部からは `markdownEditorRegistry` の imperative API（save / getContent / focus）でのみアクセス。Zustand に doc を保持しないことで毎キー入力の再 render を回避
+  - モーダル要求の中央集約は context や prop drilling ではなく Zustand store にコールバックを格納する形を採用。Sidebar / TerminalSubHeader / Cmd+W ハンドラから配線レスで `showOpenConfirm` / `showUnsaved` を呼べる
+  - 同一ファイル再オープン時の stale doc 表示を避けるため、`mdLoadedAt` カウンタを key に含めて MarkdownEditor を remount。`useState(() => initialValue)` の初期値固定パターンと整合
+  - `isInsideMarkdownEditor()` は `target.closest('[data-md-editor-pane]')` で検出。activeTerminalId ベースだと editor focus 直前のフレームで判定がズレるため、DOM 親探索のほうが堅牢
+- **計画書アーカイブ**: `.claude/archive/2026-04-26-markdown-editor.md` に Status=COMPLETED で移動済み
+
 ### 2026-04-26 - ウィンドウごと独立テーマ（テーマ同期解除）
 
 #### 概要
@@ -101,28 +129,4 @@
   - splitTerminal の修正は既存の `initMeta` の idempotent 設計（既存なら no-op）を尊重したまま「呼ぶこと自体を必須化」する形に倒すことで、後方互換と保守性を両立
   - chokidar の windowIds 掃除は `unwatch` の通常経路にもガードを入れる二層防御。`unwatchAllForWindow` が既存にあるが、ウィンドウが先に destroy された race のフォロー
 
-### 2026-04-25 - セッション永続化（T2-7、レイアウトと CWD の復元）
-
-#### 概要
-
-アプリ再起動時に前回のペイン分割構成と各葉ペインの CWD を復元する機能を実装（T3-4 → T2-7 へ昇格）。レイアウト二分木（`nodes` + `rootId`）と各葉ペインの cwd のみを `userData/session-state.json` に永続化し、起動時に最初のウィンドウへ同期復元する。実行中プロセス・コマンド履歴・ウィンドウサイズ・multi-window はスコープ外。検証失敗（version 不一致 / ノード数超過 / ツリー整合性違反）時はサイレントフォールバックで単一ペイン起動。React マウント前に `await window.api.session.getRestoreData()` で同期取得し、`terminalStore.hydrateLayout()` / `terminalMetaStore.hydrateMetas()` でストアを差し替えるため、TerminalPane が PTY を生成するときには既に保存 CWD がメタストアに乗っており、追加の配線なしで復元 PTY が正しい CWD で起動する。
-
-#### 変更点
-
-- **新規ファイル (Main)**: `src/main/types/session-state.ts`（DTO: `SerializedLayout` / `SerializedNode` / `SerializedMeta`、`SESSION_STATE_VERSION=1`、`MAX_NODES=11`）/ `src/main/session-state.ts`（`SessionStateManager` シングルトン、250ms debounce、検証ロジック: version / ノード数 / rootId / parent-children 整合 / サイクル / 孤立ノード / direction / 葉数 ≤ 6、metas は葉のみに絞り込み）
-- **新規ファイル (Renderer)**: `services/sessionRestore.ts`（`serializeCurrentSession` / `deserializeLayout` / `restoreSession`、防衛的な再検証）/ `services/sessionPersist.ts`（store 購読 + 200ms debounced IPC 送信、レイアウト構造変化と CWD 変化のみ検出、同一スナップショット抑制）
-- **既存編集 (Main)**: `ipc-handlers.ts` に `session:getRestoreData` (handle、最初の 1 回のみ返却、`sessionRestoreConsumed` フラグ管理) / `session:save` / `session:clear` を追加。`window-manager.ts` は変更なし（initial 単一ウィンドウへの配線は invoke 方式で renderer 側に集約）
-- **既存編集 (Preload)**: `window.api.session.{ save, clear, getRestoreData }` を公開。`getRestoreData` は `Promise<SerializedLayout | null>`（buffer + on(...) push 方式は React マウント前のレースを誘発するため invoke ベースに統一）
-- **既存編集 (Renderer Stores)**: `terminalStore.hydrateLayout()` を追加（rootId 存在 / 葉数 ≤ 6 / activeTerminalId フォールバック）。`terminalMetaStore.hydrateMetas()` を追加（initMeta の上書き禁止ガードを尊重しつつ復元時のみ既存メタ置換可能）
-- **既存編集 (Renderer Entry)**: `main.tsx` で `await window.api.session.getRestoreData()` → `restoreSession()` を React マウント前に同期実行。`App.tsx` の `useEffect` で `startSessionPersist()` を購読開始
-- **新規テスト**: `main/__tests__/session-state.test.ts`（13 件、検証の正常系 + 各破損パターン）/ `renderer/services/__tests__/sessionRestore.test.ts`（11 件、serialize / deserialize / round-trip / restoreSession）。`stores/__tests__/terminalStore.test.ts` に `hydrateLayout` 4 件追加。合計 17 ファイル / 226 件グリーン
-- **設計判断**:
-  - 復元データの取得は push (webContents.send + buffer) ではなく pull (ipcMain.handle + invoke) にすることで「main.tsx より IPC 受信が遅れる race」を構造的に解消
-  - 保存トリガは「レイアウト構造変化」と「CWD 変化」のみ。フォーカス切替や processName 更新では IPC を起こさない（直前スナップショットとの JSON 文字列比較で重複保存も抑制）
-  - debounce は renderer 側 200ms + Main 側 250ms の二段（IPC 回数とファイル I/O 回数の両方を抑制）
-  - multi-window はスコープ外。`sessionRestoreConsumed` フラグで最初の getRestoreData 呼び出しだけが復元データを返す
-  - スキーマバージョニングを v1 から導入し、将来の互換性破壊を `version !== 1` で全体破棄に倒す
-  - CWD が起動時に存在しないケースは PTY 側の HOME フォールバックに委ね、レイアウト構造は維持
-- **ドキュメント更新**: `CLAUDE.md` §3.7 セッション永続化節を新設、Tier Map の T3-4 を T2-7 へ昇格。`docs/requirements/tier-2-supporting.md` に T2-7 の Acceptance Criteria を追加。`docs/requirements/tier-3-experimental.md` から T3-4 を削除し T3-5 を T3-4 に繰上げ
-
-> 2026-04-26 ローリングアーカイブ: これ以前の 22 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-26 ローリングアーカイブ: これ以前の 23 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

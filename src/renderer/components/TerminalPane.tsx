@@ -14,8 +14,12 @@ import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import * as terminalManager from "../services/terminalManager";
 import { rafDebounceWithDelay } from "../utils/rafDebounce";
 import { TerminalSubHeader } from "./TerminalSubHeader";
-import { useTerminalMetaStore } from "../stores/terminalMetaStore";
+import {
+  useTerminalMeta,
+  useTerminalMetaStore,
+} from "../stores/terminalMetaStore";
 import { useSidebarStore } from "../stores/sidebarStore";
+import { MarkdownEditor } from "./MarkdownEditor";
 import { formatPaths } from "../utils/insertFiles";
 import {
   useSearchOpenForPane,
@@ -240,6 +244,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       ],
     );
 
+    // viewMode === "md" のとき MarkdownEditor を前面に表示し、
+    // xterm のコンテナは display:none で残す。これにより PTY と xterm.js の
+    // バッファ・カーソル位置が完全に保たれ、CLI に戻るとそのまま再開できる。
+    const meta = useTerminalMeta(id);
+    const showMd = meta?.viewMode === "md" && !!meta.mdFilePath;
+    // 同一ファイルを再オープンした場合でも MarkdownEditor を remount するため、
+    // mdLoadedAt を key に含める。filePath だけだと、再ロード時にエディタが
+    // 古い doc を表示し続けてしまう。
+    const mdEditorKey = `${meta?.mdFilePath ?? ""}#${meta?.mdLoadedAt ?? 0}`;
+
     return (
       <div
         className="terminal-container"
@@ -250,15 +264,36 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       >
         <TerminalSubHeader id={id} paneNumber={paneNumber} />
         <div
-          ref={containerRef}
           style={{
             height: "calc(100% - 22px)",
             width: "100%",
+            position: "relative",
           }}
-        />
-        {isSearchOpen && (
-          <TerminalSearchOverlay paneId={id} onClose={closeSearch} />
-        )}
+        >
+          <div
+            ref={containerRef}
+            style={{
+              height: "100%",
+              width: "100%",
+              display: showMd ? "none" : "block",
+            }}
+          />
+          {showMd && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                height: "100%",
+                width: "100%",
+              }}
+            >
+              <MarkdownEditor key={mdEditorKey} id={id} />
+            </div>
+          )}
+          {isSearchOpen && !showMd && (
+            <TerminalSearchOverlay paneId={id} onClose={closeSearch} />
+          )}
+        </div>
       </div>
     );
   },

@@ -22,7 +22,11 @@ import { UndoRedoToolbar } from "./UndoRedoToolbar";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { showErrorToast } from "./ErrorToast";
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  onRequestEditMarkdown?: (filePath: string) => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
   const theme = useCurrentTheme();
   const isOpen = useSidebarOpen();
   const width = useSidebarWidth();
@@ -150,7 +154,12 @@ export const Sidebar: React.FC = () => {
             selectedCwd={selectedTabCwd}
             onSelectTab={handleSelectTab}
           />
-          {selectedTabCwd && <DirectoryTree rootPath={selectedTabCwd} />}
+          {selectedTabCwd && (
+            <DirectoryTree
+              rootPath={selectedTabCwd}
+              onRequestEditMarkdown={onRequestEditMarkdown}
+            />
+          )}
         </>
       )}
 

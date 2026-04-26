@@ -2,16 +2,22 @@ import React, { useEffect, useCallback, useMemo } from "react";
 import Header from "./components/Header";
 import SplitContainer from "./components/SplitContainer";
 import { Sidebar } from "./components/Sidebar/Sidebar";
-import { ErrorToastHost } from "./components/Sidebar/ErrorToast";
+import {
+  ErrorToastHost,
+  showErrorToast,
+} from "./components/Sidebar/ErrorToast";
+import { OpenMarkdownModal } from "./components/OpenMarkdownModal";
+import { UnsavedChangesModal } from "./components/UnsavedChangesModal";
 import {
   useActiveTerminalId,
   useTerminalCount,
   useCanSplit,
   useNodes,
+  useRootId,
   useTerminalActions,
 } from "./stores/terminalStore";
 import { useCurrentTheme, useThemeConfig } from "./stores/themeStore";
-import { getAllTerminalIds } from "./utils/layoutUtils";
+import { getAllTerminalIds, getPaneNumber } from "./utils/layoutUtils";
 import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
 import { useTerminalSearchStore } from "./stores/terminalSearchStore";
@@ -20,6 +26,10 @@ import { useSidebarStore } from "./stores/sidebarStore";
 import { useFileOpsHistoryStore } from "./stores/fileOpsHistoryStore";
 import { undoLast, redoLast } from "./services/fileOpsService";
 import { startSessionPersist } from "./services/sessionPersist";
+import { useTerminalMetaStore } from "./stores/terminalMetaStore";
+import { useMarkdownDialogStore } from "./stores/markdownDialogStore";
+import { isMarkdownPath } from "./utils/markdownFile";
+import * as markdownEditorRegistry from "./services/markdownEditorRegistry";
 
 // xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
 // 通常の input/textarea ではない。Cmd+Z 等を sidebar / terminal にディスパッチする
@@ -35,11 +45,19 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+// MarkdownEditor (CodeMirror) 内に focus があるかを判定。data-md-editor-pane を
+// MarkdownEditor の root に付けてあるので、closest() で検出する。
+function isInsideMarkdownEditor(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return !!target.closest("[data-md-editor-pane]");
+}
+
 const App: React.FC = () => {
   const activeTerminalId = useActiveTerminalId();
   const terminalCount = useTerminalCount();
   const canSplit = useCanSplit();
   const nodes = useNodes();
+  const rootId = useRootId();
   const { setActiveTerminal, splitTerminal, closeTerminal } =
     useTerminalActions();
 
@@ -50,6 +68,107 @@ const App: React.FC = () => {
   const canSplitNow = canSplit();
 
   const terminalIds = useMemo(() => getAllTerminalIds(nodes), [nodes]);
+
+  // Markdown ダイアログ要求は markdownDialogStore に集約。App 側で render する。
+  const dialogRequest = useMarkdownDialogStore((s) => s.current);
+  const dismissDialog = useMarkdownDialogStore((s) => s.dismiss);
+  const showOpenConfirm = useMarkdownDialogStore((s) => s.showOpenConfirm);
+  const showUnsaved = useMarkdownDialogStore((s) => s.showUnsaved);
+
+  // 「直近フォーカスペイン」を取得。activeTerminalId が null の場合は rootId が
+  // 葉なら rootId を使い、葉でなければ最初の葉にフォールバック。
+  const resolveTargetPaneId = useCallback((): string | null => {
+    if (activeTerminalId) return activeTerminalId;
+    if (terminalIds.length > 0) return terminalIds[0];
+    return null;
+  }, [activeTerminalId, terminalIds]);
+
+  // 指定ペインで Markdown を開くフロー: ファイル読込 → openMarkdown → タブ MD に切替
+  const openMarkdownInPane = useCallback(
+    async (paneId: string, filePath: string): Promise<void> => {
+      const result = await window.api.fs.readFile(filePath);
+      if (!result.ok) {
+        showErrorToast(`ファイル読込に失敗しました: ${result.error}`);
+        return;
+      }
+      useTerminalMetaStore
+        .getState()
+        .openMarkdown(paneId, filePath, result.content);
+      setActiveTerminal(paneId);
+    },
+    [setActiveTerminal],
+  );
+
+  // Sidebar からの「編集する」要求 → 確認モーダル → 開く
+  const handleRequestEditMarkdown = useCallback(
+    (filePath: string): void => {
+      if (!isMarkdownPath(filePath)) return; // 念のため
+      const paneId = resolveTargetPaneId();
+      if (!paneId) {
+        showErrorToast("対象ペインが見つかりません");
+        return;
+      }
+      const paneNumber = getPaneNumber(rootId, nodes, paneId) ?? 1;
+      const meta = useTerminalMetaStore.getState().metas.get(paneId);
+      // 既に dirty な MD を編集中なら、先に未保存警告を出す
+      if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
+        showUnsaved({
+          filePath: meta.mdFilePath,
+          paneId,
+          reason: "open-other",
+          onSave: async () => {
+            const api = markdownEditorRegistry.getApi(paneId);
+            const ok = api ? await api.save() : false;
+            if (!ok) {
+              showErrorToast("保存に失敗しました");
+              return;
+            }
+            dismissDialog();
+            showOpenConfirm({
+              filePath,
+              paneId,
+              paneNumber,
+              onConfirm: () => {
+                dismissDialog();
+                void openMarkdownInPane(paneId, filePath);
+              },
+            });
+          },
+          onDiscard: () => {
+            dismissDialog();
+            showOpenConfirm({
+              filePath,
+              paneId,
+              paneNumber,
+              onConfirm: () => {
+                dismissDialog();
+                void openMarkdownInPane(paneId, filePath);
+              },
+            });
+          },
+        });
+        return;
+      }
+      showOpenConfirm({
+        filePath,
+        paneId,
+        paneNumber,
+        onConfirm: () => {
+          dismissDialog();
+          void openMarkdownInPane(paneId, filePath);
+        },
+      });
+    },
+    [
+      resolveTargetPaneId,
+      rootId,
+      nodes,
+      showUnsaved,
+      showOpenConfirm,
+      dismissDialog,
+      openMarkdownInPane,
+    ],
+  );
 
   const moveFocus = useCallback(
     (direction: "up" | "down" | "left" | "right"): void => {
@@ -128,12 +247,38 @@ const App: React.FC = () => {
         return;
       }
 
-      // Cmd + W: 閉じる
+      // Cmd + W: 閉じる（MD で dirty なら未保存警告を挟む）
       if (isMeta && !isShift && !isOption && e.key.toLowerCase() === "w") {
         e.preventDefault();
-        if (activeTerminalId && terminalCount > 1) {
-          closeTerminal(activeTerminalId);
+        if (!activeTerminalId || terminalCount <= 1) return;
+        const meta = useTerminalMetaStore
+          .getState()
+          .metas.get(activeTerminalId);
+        if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
+          const targetId = activeTerminalId;
+          const filePath = meta.mdFilePath;
+          showUnsaved({
+            filePath,
+            paneId: targetId,
+            reason: "close-pane",
+            onSave: async () => {
+              const api = markdownEditorRegistry.getApi(targetId);
+              const ok = api ? await api.save() : false;
+              if (!ok) {
+                showErrorToast("保存に失敗しました");
+                return;
+              }
+              dismissDialog();
+              closeTerminal(targetId);
+            },
+            onDiscard: () => {
+              dismissDialog();
+              closeTerminal(targetId);
+            },
+          });
+          return;
         }
+        closeTerminal(activeTerminalId);
         return;
       }
 
@@ -178,6 +323,10 @@ const App: React.FC = () => {
         if (isEditableTarget(target)) {
           return;
         }
+        // MarkdownEditor 内の Cmd+Z は CodeMirror の history に委譲する
+        if (isInsideMarkdownEditor(target)) {
+          return;
+        }
         const sidebarState = useSidebarStore.getState();
         const fileOpsState = useFileOpsHistoryStore.getState();
         const sidebarHasUndo = fileOpsState.undoStack.length > 0;
@@ -199,6 +348,10 @@ const App: React.FC = () => {
       if (isMeta && isShift && !isOption && e.key.toLowerCase() === "z") {
         const target = e.target as HTMLElement | null;
         if (isEditableTarget(target)) {
+          return;
+        }
+        // MarkdownEditor 内の Cmd+Shift+Z は CodeMirror の history に委譲する
+        if (isInsideMarkdownEditor(target)) {
           return;
         }
         const sidebarState = useSidebarStore.getState();
@@ -360,6 +513,8 @@ const App: React.FC = () => {
     canSplitNow,
     terminalCount,
     moveFocus,
+    showUnsaved,
+    dismissDialog,
   ]);
 
   // セッション永続化: レイアウト / CWD 変更を debounced に Main へ送る
@@ -387,12 +542,31 @@ const App: React.FC = () => {
           overflow: "hidden",
         }}
       >
-        <Sidebar />
+        <Sidebar onRequestEditMarkdown={handleRequestEditMarkdown} />
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           <SplitContainer />
         </div>
       </div>
       <ErrorToastHost />
+      {dialogRequest?.kind === "open-confirm" && (
+        <OpenMarkdownModal
+          isOpen
+          filePath={dialogRequest.filePath}
+          paneNumber={dialogRequest.paneNumber}
+          onConfirm={dialogRequest.onConfirm}
+          onCancel={dismissDialog}
+        />
+      )}
+      {dialogRequest?.kind === "unsaved" && (
+        <UnsavedChangesModal
+          isOpen
+          filePath={dialogRequest.filePath}
+          reason={dialogRequest.reason}
+          onSave={dialogRequest.onSave}
+          onDiscard={dialogRequest.onDiscard}
+          onCancel={dismissDialog}
+        />
+      )}
     </div>
   );
 };

@@ -127,6 +127,15 @@ const api = {
       ipcRenderer.invoke("fs:copyPath", { srcPath, destDir }),
     openInVSCode: (targetPath: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke("fs:openInVSCode", targetPath),
+    readFile: (
+      filePath: string,
+    ): Promise<{ ok: true; content: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("fs:readFile", filePath),
+    writeFile: (
+      filePath: string,
+      content: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("fs:writeFile", { filePath, content }),
     // OS-native drag が drop された際、File から絶対パスを取り出す
     getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   },

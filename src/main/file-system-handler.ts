@@ -351,6 +351,39 @@ class FileSystemManager {
     return newPath;
   }
 
+  // utf-8 テキストファイルの読込。サイズ上限を超える場合はエラー。
+  // Markdown エディタが対象。バイナリ判定は呼び出し側 (拡張子判定) に任せる。
+  async readTextFile(
+    filePath: string,
+    maxBytes: number,
+  ): Promise<{ content: string; size: number }> {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) {
+      throw new Error("ファイルではありません");
+    }
+    if (stat.size > maxBytes) {
+      throw new Error(
+        `ファイルサイズが上限 (${Math.floor(maxBytes / 1024 / 1024)}MB) を超えています`,
+      );
+    }
+    const content = await fs.promises.readFile(filePath, { encoding: "utf-8" });
+    return { content, size: stat.size };
+  }
+
+  async writeTextFile(filePath: string, content: string): Promise<void> {
+    // 既存パスがディレクトリだった場合の事故を防ぐ
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile()) {
+        throw new Error("書き込み先がファイルではありません");
+      }
+    } catch (e) {
+      // ENOENT (新規作成) は許容するが、本機能では既存 .md の更新しか想定しない
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+    await fs.promises.writeFile(filePath, content, { encoding: "utf-8" });
+  }
+
   async openInVSCode(targetPath: string): Promise<boolean> {
     return new Promise((resolve) => {
       // shell:false + argv 配列で実行。targetPath にバッククオートや $() があっても

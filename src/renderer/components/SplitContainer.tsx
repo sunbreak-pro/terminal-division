@@ -4,26 +4,10 @@ import { useRootId, useNodes } from "../stores/terminalStore";
 import { useThemeConfig } from "../stores/themeStore";
 import type {
   SplitNode,
-  LayoutNode,
   TerminalPane as TerminalPaneType,
 } from "../types/layout";
+import { collectPaneIdsInOrder } from "../utils/layoutUtils";
 import TerminalPane from "./TerminalPane";
-
-// ツリー走査でターミナルIDの出現順を取得
-function collectTerminalIds(
-  nodeId: string,
-  nodes: Map<string, LayoutNode>,
-): string[] {
-  const node = nodes.get(nodeId);
-  if (!node) return [];
-  if ("type" in node && node.type === "split") {
-    const splitNode = node as SplitNode;
-    return splitNode.children.flatMap((childId) =>
-      collectTerminalIds(childId, nodes),
-    );
-  }
-  return [nodeId];
-}
 
 const SplitContainer: React.FC = React.memo(() => {
   const rootId = useRootId();
@@ -32,7 +16,7 @@ const SplitContainer: React.FC = React.memo(() => {
 
   // ペイン番号マップ（ツリー走査順で1から割り当て）
   const paneNumberMap = useMemo(() => {
-    const ids = collectTerminalIds(rootId, nodes);
+    const ids = collectPaneIdsInOrder(rootId, nodes);
     const map = new Map<string, number>();
     ids.forEach((id, index) => map.set(id, index + 1));
     return map;

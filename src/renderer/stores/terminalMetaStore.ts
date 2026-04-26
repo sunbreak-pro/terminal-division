@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+export type ViewMode = "cli" | "md";
+
 export interface TerminalMeta {
   cwd: string | null;
   processName: string | null;
@@ -8,6 +10,17 @@ export interface TerminalMeta {
   lastActiveAt: number;
   // ペインがレイアウトに追加された順を保持（タブの並び順に使用）
   createdAt: number;
+  // ペイン内の表示モード。MD 編集中も PTY は生存させ display:none で隠す。
+  viewMode: ViewMode;
+  // 編集中の Markdown ファイルパス。null = MD タブ未読込
+  mdFilePath: string | null;
+  // 最後に保存した内容（dirty 判定の基準）
+  mdSavedContent: string | null;
+  // エディタの現在内容と mdSavedContent の差分があるか
+  mdDirty: boolean;
+  // openMarkdown が呼ばれたタイミングのカウンタ。同一ファイルを再ロード
+  // した場合に MarkdownEditor を remount するための key 構成要素。
+  mdLoadedAt: number;
 }
 
 interface TerminalMetaStore {
@@ -24,6 +37,17 @@ interface TerminalMetaStore {
   // セッション復元時に各葉ペインの cwd を一括投入する。
   // initMeta の上書き禁止ガードを尊重しつつ、既存メタも cwd を上書きできる専用 action。
   hydrateMetas: (entries: Array<[string, { cwd: string | null }]>) => void;
+  // ===== Markdown editor =====
+  // ファイル読込後にペインへ MD コンテンツを紐付け、viewMode=md に切替
+  openMarkdown: (id: string, filePath: string, content: string) => void;
+  // viewMode のみ変更（CLI <-> MD タブ切替）
+  setViewMode: (id: string, mode: ViewMode) => void;
+  // エディタからの dirty 通知
+  setMdDirty: (id: string, dirty: boolean) => void;
+  // 保存成功時に savedContent を更新し dirty=false に戻す
+  markMdSaved: (id: string, content: string) => void;
+  // MD タブを閉じる（CLI に戻し、MD 関連フィールドをクリア）
+  clearMarkdown: (id: string) => void;
 }
 
 // セッション内で単調増加するカウンタ（initMeta / touchActive の両方で使用）
@@ -54,6 +78,11 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
         shellName: null,
         lastActiveAt: seq,
         createdAt: seq,
+        viewMode: "cli",
+        mdFilePath: null,
+        mdSavedContent: null,
+        mdDirty: false,
+        mdLoadedAt: 0,
       });
       set({ metas });
     },
@@ -68,6 +97,11 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
         shellName: null,
         lastActiveAt: seq,
         createdAt: seq,
+        viewMode: "cli",
+        mdFilePath: null,
+        mdSavedContent: null,
+        mdDirty: false,
+        mdLoadedAt: 0,
       });
       set({ metas });
     },
@@ -96,10 +130,40 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
           // 復元時は順序が決まらないため、エントリ順に createdAt を割り振る
           createdAt: existing?.createdAt ?? seq,
           lastActiveAt: existing?.lastActiveAt ?? seq,
+          viewMode: "cli",
+          mdFilePath: null,
+          mdSavedContent: null,
+          mdDirty: false,
+          mdLoadedAt: 0,
         });
       }
       set({ metas });
     },
+
+    openMarkdown: (id, filePath, content) =>
+      updateMeta(id, {
+        viewMode: "md",
+        mdFilePath: filePath,
+        mdSavedContent: content,
+        mdDirty: false,
+        mdLoadedAt: nextSeq(),
+      }),
+
+    setViewMode: (id, mode) => updateMeta(id, { viewMode: mode }),
+
+    setMdDirty: (id, dirty) => updateMeta(id, { mdDirty: dirty }),
+
+    markMdSaved: (id, content) =>
+      updateMeta(id, { mdSavedContent: content, mdDirty: false }),
+
+    clearMarkdown: (id) =>
+      updateMeta(id, {
+        viewMode: "cli",
+        mdFilePath: null,
+        mdSavedContent: null,
+        mdDirty: false,
+        mdLoadedAt: 0,
+      }),
   };
 });
 

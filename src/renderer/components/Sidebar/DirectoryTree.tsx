@@ -22,14 +22,21 @@ import {
   performCopy,
 } from "../../services/fileOpsService";
 import { useFileOpsHistoryStore } from "../../stores/fileOpsHistoryStore";
+import { isMarkdownPath } from "../../utils/markdownFile";
 
 const TD_PATH_MIME = "application/x-td-path";
 
 interface DirectoryTreeProps {
   rootPath: string;
+  // .md / .markdown ファイルのコンテキストメニュー「編集する」が押された際の通知。
+  // 親 (Sidebar → App) で確認モーダル → ペインへ反映する流れに使う。
+  onRequestEditMarkdown?: (filePath: string) => void;
 }
 
-export const DirectoryTree: React.FC<DirectoryTreeProps> = ({ rootPath }) => {
+export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
+  rootPath,
+  onRequestEditMarkdown,
+}) => {
   const theme = useCurrentTheme();
   const config = useThemeConfig();
   const dirState = useDirState(rootPath);
@@ -137,6 +144,19 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({ rootPath }) => {
         },
       });
 
+      // .md / .markdown だけアプリ内エディタで開く選択肢を表示。
+      // それ以外の拡張子では項目自体を出さない（コンテキストメニュー肥大化を避ける）。
+      if (!node.isDirectory && isMarkdownPath(node.path)) {
+        items.push({
+          label: "編集する",
+          onClick: () => {
+            if (onRequestEditMarkdown) {
+              onRequestEditMarkdown(node.path);
+            }
+          },
+        });
+      }
+
       // ===== セクション 3: 編集 =====
       items.push({
         label: "名称変更",
@@ -174,7 +194,13 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({ rootPath }) => {
       });
       return items;
     },
-    [activeTerminalId, activeCwd, setEditingPath, homeDir],
+    [
+      activeTerminalId,
+      activeCwd,
+      setEditingPath,
+      homeDir,
+      onRequestEditMarkdown,
+    ],
   );
 
   // ルートディレクトリへの D&D ドロップ

@@ -271,6 +271,41 @@ export function setupIpcHandlers(): void {
     },
   );
 
+  // Markdown エディタ用: utf-8 テキストファイル読み書き。5MB 上限。
+  // それ以外の用途を想定していないため、サイズ・エンコーディングは固定。
+  ipcMain.handle("fs:readFile", async (_, filePath: string) => {
+    const safe = validatePath(filePath);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    try {
+      const result = await fileSystemManager.readTextFile(
+        safe,
+        5 * 1024 * 1024,
+      );
+      return { ok: true as const, content: result.content };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { ok: false as const, error: message };
+    }
+  });
+
+  ipcMain.handle(
+    "fs:writeFile",
+    async (_, { filePath, content }: { filePath: string; content: string }) => {
+      const safe = validatePath(filePath);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      if (typeof content !== "string") {
+        return { ok: false as const, error: "内容が文字列ではありません" };
+      }
+      try {
+        await fileSystemManager.writeTextFile(safe, content);
+        return { ok: true as const };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { ok: false as const, error: message };
+      }
+    },
+  );
+
   ipcMain.handle("fs:openInVSCode", async (_, targetPath: string) => {
     const safe = validatePath(targetPath);
     if (!safe) return { ok: false as const };
