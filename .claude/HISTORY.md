@@ -1,5 +1,21 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-26 - プロンプトドット成功/失敗カラー反映バグ修正
+
+#### 概要
+
+「(base) の左横の丸マーク（プロンプトドット）でコマンド成功/失敗の色変化が機能していない」バグを修正。根本原因は `terminalManager.ts` の OSC 7770 `A` ハンドラが、precmd → `D;N` で打ったばかりの色付き● decoration を直後の zle-line-init → `A` で即 `dispose()` していたこと。zsh の発火順序が「precmd → 新プロンプト描画 → zle-line-init」なため、ユーザ視点では「コマンド完了瞬間に一瞬だけ色付き → 新プロンプト到達と同時にグレーに戻る」となり、視覚上は色が一切変化しないように見えていた。修正は `A` ハンドラの `decoration?.dispose()` 呼び出しを削除し、過去 decoration はそのまま残して xterm.js の scrollback 上限到達時の自動 dispose に委ねる方式に変更。これにより iTerm2 / VSCode の semantic prompt 慣習通り、過去プロンプトの ● が成功=緑 / 失敗=赤 で視覚的に保持される。
+
+#### 変更点
+
+- **terminalManager.ts (OSC 7770 A ハンドラ)**: `inst.promptDot.decoration?.dispose()` 行を削除し、新マーカー差し替え時に過去 decoration の参照だけ捨てる動作に変更。理由を 7 行のコメントで明記（precmd → A の発火順序、ユーザに色変化が見えなくなる症状、xterm.js の scrollback 連動 dispose に委ねる根拠）
+- **terminalManager.test.ts (回帰テスト追加)**: 「`A` ハンドラが直前 decoration を破棄しないこと」を保証する it ブロックを追加。`oscHandler("A")` → `oscHandler("D;0")` で decoration を打ったあと、再度 `oscHandler("A")` を呼んでも `decorationMock.dispose` が呼ばれないこと、`promptDot.decoration` 参照だけが null に差し替わることを検証
+- **テスト合計**: 22 ファイル / 290 件グリーン（terminalManager.test.ts は 41 → 42 件に）
+- **設計判断**:
+  - 過去 decoration を明示 dispose しない方針への切替: メモリリークは発生しない。xterm.js は scrollback 上限超過で marker を自動 dispose し、それに連動して decoration も破棄される。明示管理する利得より、ユーザが成功/失敗色を視認できないバグの方が遥かに大きい
+  - シェル側の `__td_prompt_status`（zsh）/ `__td_prompt_command`（bash）はグレー● の常時表示を担当する役割で変更不要。Renderer 側 decoration が「グレー●の上に色付き●を被せる」レイヤーモデルは維持
+  - 同セッションで Settings UI 関連の WIP（`terminalManager.ts` の `XtermTheme` 型 import / `updateTheme`/`updateAllThemes` シグネチャ変更等、計画書 `2026-04-26-settings-feature.md`）と本バグ修正が同一ファイルに混在。task-tracker は計画書アーカイブなしのため `.claude/` のみコミット、コード変更は Settings UI 完了時にまとめて or 個別 fix コミットでユーザーが判断する方針
+
 ### 2026-04-26 - ペインヘッダー強調 + スクロールバック削除メニュー（T2-9）（計画書: archive/2026-04-26-clear-scrollback-options.md）
 
 #### 概要
@@ -95,30 +111,4 @@
   - クリアボタンは `terminal.clear()` のみではなく `clearTextureAtlas()` も併用。「バッファ肥大化に伴う表示バグ」要件と xterm.js が公式ワークアラウンドとして提示する canvas 復元処理が一致するため
   - クリア操作は PTY / シェル履歴に触れない。実行中コマンドを保持したまま画面だけリセットする UX が macOS Terminal の Cmd+K 標準と整合
 
-### 2026-04-25 - Follow-up Improvements（起動ログ補強 / 可用性通知 / リファクタ）（計画書: archive/2026-04-25-followup-improvements.md）
-
-#### 概要
-
-直前のコミット `1bef705` 監査で挙げた中規模・大規模タスクのうち、起動ログ問題の補強（A-2/A-5）、可用性通知（B-R2/B-R3/B-R5）、コード整理（B-Q2/B-B2/B-Q1）の 8 件をまとめて実装。`TerminalPane` を `useLayoutEffect` 化して `setTimeout(0)` 依存を排除し、attach → fit → pty.create を同期で確定させる構造に置換。session save 失敗と chokidar watcher 連続エラーは renderer に IPC で通知して toast 表示。multi-window 起動時の復元データ race は `sessionStateManager.consumeRestoreData()` を mutex 化して構造的に解消。`promptDotStates` の二元管理を `TerminalInstance` に統合、`splitTerminal` の metaStore 二度更新を `initLeafMeta` で 1 set にまとめて中間状態のサブスクライバ通知を解消。session-state の検証ロジックを `src/shared/session-state-validator.ts` に SSOT 化し main / preload / renderer から共通参照する形に整理。
-
-#### 変更点
-
-- **A-2 (terminalManager idempotency テスト)**: `terminalManager.test.ts` に「同一 id の `getOrCreate` 二度呼びでもリスナー / OSC ハンドラ / IPC subscriber が重複登録されない」テストを追加（StrictMode 二重マウント耐性の固定化）
-- **A-5 (TerminalPane の useLayoutEffect 化)**: `TerminalPane.tsx` の effect を `useEffect` → `useLayoutEffect` に変更。`setTimeout(0)` 経由の attach / fit / pty.create を排除し DOM 反映後・paint 前の同期実行に。テストの fakeTimers 依存も解消
-- **B-R2 (session save 失敗 toast)**: `session-state.ts:writeNow` の catch で `BrowserWindow.getAllWindows()` 経由の `session:saveFailed` ブロードキャストを追加。`preload/index.ts` に `session.onSaveFailed` listener、`sessionPersist.ts` で 30 秒 dedup 付き `showErrorToast` を購読。テスト 2 件追加（writeFile throw / 破棄ウィンドウスキップ）
-- **B-R3 (chokidar error 閾値通知)**: `file-system-handler.ts` の `WatchEntry` に `errorCount` / `errorWindowStart` を追加し、5 分間で 5 件超えたとき `fs:watcherError` を 1 度だけ送信。`preload/index.ts` に `fs.onWatcherError` listener、`Sidebar.tsx` で toast 表示
-- **B-R5 (multi-window restore race の堅牢化)**: `ipc-handlers.ts` のクロージャで管理していた `sessionRestoreConsumed` を `sessionStateManager.consumeRestoreData()` メソッドに移管し同期 mutex 化。テスト 2 件追加
-- **B-Q2 (promptDotStates 統合)**: `terminalManager.ts` の module-scope `promptDotStates: Map` を `TerminalInstance.promptDot` に吸収。OSC 7770 ハンドラと `destroy()` を `instance.promptDot` 参照に統一
-- **B-B2 (splitTerminal の atomic 化)**: `terminalMetaStore` に `initLeafMeta(id, cwd)` を新設（init + cwd 設定を 1 回の set にまとめる）。`splitTerminal` から `initMeta + setCwd` の二度更新を `initLeafMeta` に置換し、metaStore のサブスクライバ通知が 1 回に。テスト 1 件追加（通知回数の検証）
-- **B-Q1 (session-state validator SSOT 化)**: `src/shared/session-state-validator.ts` を新設して型・定数・検証関数を集約。`main/types/session-state.ts` は shared から re-export、`main/session-state.ts` の重複 validation 関数を削除、renderer 側 `sessionRestore.ts` の `deserializeLayout` も shared 関数経由に。`tsconfig.web.json` / `tsconfig.node.json` の include に `src/shared/**/*` を追加、`vitest.config.ts` を shared テスト対応に更新。validation 13 件のテストを `shared/__tests__/session-state-validator.test.ts` に移行
-- **テスト合計**: 19 ファイル / 257 件グリーン（修正前 18 / 251 から +1 file / +6 件）
-- **設計判断**:
-  - `useLayoutEffect` 化は最小修正路線。xterm のリアクティブ DOM 管理化は規模が大きいため将来計画として温存
-  - session save 失敗の dedup は renderer 側で 30 秒、エラーメッセージ単位で抑制（メモリ消費は実用上 5-10 件以内で問題なし）
-  - chokidar の閾値通知は 5 分 / 5 件。エラーが収束したら次のウィンドウから再カウント（連投で toast が嵐にならない設計）
-  - `consumeRestoreData` の mutex は同期 read+write のため race フリー。Dock 経由の追加ウィンドウは `initialCwd` 優先のため呼ばない（既存設計）
-  - `initLeafMeta` は `initMeta` の上書き禁止ガードを尊重（既存なら no-op）
-  - validator SSOT 化は型互換のため `main/types/session-state.ts` を re-export ファイルに留め、既存 import 経路を維持
-- **計画書アーカイブ**: `.claude/archive/2026-04-25-followup-improvements.md` に Status=COMPLETED で移動
-
-> 2026-04-26 ローリングアーカイブ: これ以前の 24 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-26 ローリングアーカイブ: これ以前の 25 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

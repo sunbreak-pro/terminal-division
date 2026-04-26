@@ -2,6 +2,32 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-25 - Follow-up Improvements（起動ログ補強 / 可用性通知 / リファクタ）（計画書: archive/2026-04-25-followup-improvements.md）
+
+#### 概要
+
+直前のコミット `1bef705` 監査で挙げた中規模・大規模タスクのうち、起動ログ問題の補強（A-2/A-5）、可用性通知（B-R2/B-R3/B-R5）、コード整理（B-Q2/B-B2/B-Q1）の 8 件をまとめて実装。`TerminalPane` を `useLayoutEffect` 化して `setTimeout(0)` 依存を排除し、attach → fit → pty.create を同期で確定させる構造に置換。session save 失敗と chokidar watcher 連続エラーは renderer に IPC で通知して toast 表示。multi-window 起動時の復元データ race は `sessionStateManager.consumeRestoreData()` を mutex 化して構造的に解消。`promptDotStates` の二元管理を `TerminalInstance` に統合、`splitTerminal` の metaStore 二度更新を `initLeafMeta` で 1 set にまとめて中間状態のサブスクライバ通知を解消。session-state の検証ロジックを `src/shared/session-state-validator.ts` に SSOT 化し main / preload / renderer から共通参照する形に整理。
+
+#### 変更点
+
+- **A-2 (terminalManager idempotency テスト)**: `terminalManager.test.ts` に「同一 id の `getOrCreate` 二度呼びでもリスナー / OSC ハンドラ / IPC subscriber が重複登録されない」テストを追加（StrictMode 二重マウント耐性の固定化）
+- **A-5 (TerminalPane の useLayoutEffect 化)**: `TerminalPane.tsx` の effect を `useEffect` → `useLayoutEffect` に変更。`setTimeout(0)` 経由の attach / fit / pty.create を排除し DOM 反映後・paint 前の同期実行に。テストの fakeTimers 依存も解消
+- **B-R2 (session save 失敗 toast)**: `session-state.ts:writeNow` の catch で `BrowserWindow.getAllWindows()` 経由の `session:saveFailed` ブロードキャストを追加。`preload/index.ts` に `session.onSaveFailed` listener、`sessionPersist.ts` で 30 秒 dedup 付き `showErrorToast` を購読。テスト 2 件追加（writeFile throw / 破棄ウィンドウスキップ）
+- **B-R3 (chokidar error 閾値通知)**: `file-system-handler.ts` の `WatchEntry` に `errorCount` / `errorWindowStart` を追加し、5 分間で 5 件超えたとき `fs:watcherError` を 1 度だけ送信。`preload/index.ts` に `fs.onWatcherError` listener、`Sidebar.tsx` で toast 表示
+- **B-R5 (multi-window restore race の堅牢化)**: `ipc-handlers.ts` のクロージャで管理していた `sessionRestoreConsumed` を `sessionStateManager.consumeRestoreData()` メソッドに移管し同期 mutex 化。テスト 2 件追加
+- **B-Q2 (promptDotStates 統合)**: `terminalManager.ts` の module-scope `promptDotStates: Map` を `TerminalInstance.promptDot` に吸収。OSC 7770 ハンドラと `destroy()` を `instance.promptDot` 参照に統一
+- **B-B2 (splitTerminal の atomic 化)**: `terminalMetaStore` に `initLeafMeta(id, cwd)` を新設（init + cwd 設定を 1 回の set にまとめる）。`splitTerminal` から `initMeta + setCwd` の二度更新を `initLeafMeta` に置換し、metaStore のサブスクライバ通知が 1 回に。テスト 1 件追加（通知回数の検証）
+- **B-Q1 (session-state validator SSOT 化)**: `src/shared/session-state-validator.ts` を新設して型・定数・検証関数を集約。`main/types/session-state.ts` は shared から re-export、`main/session-state.ts` の重複 validation 関数を削除、renderer 側 `sessionRestore.ts` の `deserializeLayout` も shared 関数経由に。`tsconfig.web.json` / `tsconfig.node.json` の include に `src/shared/**/*` を追加、`vitest.config.ts` を shared テスト対応に更新。validation 13 件のテストを `shared/__tests__/session-state-validator.test.ts` に移行
+- **テスト合計**: 19 ファイル / 257 件グリーン（修正前 18 / 251 から +1 file / +6 件）
+- **設計判断**:
+  - `useLayoutEffect` 化は最小修正路線。xterm のリアクティブ DOM 管理化は規模が大きいため将来計画として温存
+  - session save 失敗の dedup は renderer 側で 30 秒、エラーメッセージ単位で抑制（メモリ消費は実用上 5-10 件以内で問題なし）
+  - chokidar の閾値通知は 5 分 / 5 件。エラーが収束したら次のウィンドウから再カウント（連投で toast が嵐にならない設計）
+  - `consumeRestoreData` の mutex は同期 read+write のため race フリー。Dock 経由の追加ウィンドウは `initialCwd` 優先のため呼ばない（既存設計）
+  - `initLeafMeta` は `initMeta` の上書き禁止ガードを尊重（既存なら no-op）
+  - validator SSOT 化は型互換のため `main/types/session-state.ts` を re-export ファイルに留め、既存 import 経路を維持
+- **計画書アーカイブ**: `.claude/archive/2026-04-25-followup-improvements.md` に Status=COMPLETED で移動
+
 ### 2026-04-25 - PTY 起動ログ安定化 + IPC セキュリティ強化 + 既知の小バグ修正
 
 #### 概要
