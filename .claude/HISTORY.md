@@ -1,5 +1,28 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-27 - サイドバーのファイル名アイコンずれ修正 + 検索フィールド追加
+
+#### 概要
+
+ディレクトリツリーで長いファイル名のとき、サイドバーを最小幅にスライドするとファイル/フォルダアイコンが微妙に左へずれる現象を修正。原因は `TreeNode.tsx` の chevron / icon span が `display: inline-flex` + 固定 `width` のみで `flex-shrink: 0` を持たず、親 flex コンテナの幅不足時に flex 子要素として自動圧縮されていたこと。あわせて、サイドバー上部の「タブ下＋ツリー上」に表示していたルートディレクトリ名（`terminal-division · ~/dev/...`）行を撤去し、代わりに `<input type="search">` を設置。`sidebarStore` に `searchQuery` を追加し、トップレベル（`DirectoryTree`）と子階層（`ChildList`）の双方で `name` の case-insensitive 部分一致フィルタを適用する。検索フィールド行は `minHeight: 36` でルート行（11px・xs パディング）より縦に余裕を持たせ、フォーカス時に `borderColor` を `borderActive` にハイライトする UX を採用。
+
+#### 変更点
+
+- **TreeNode.tsx (アイコン圧縮バグ修正)**: chevron 用 `<span>`（`width: 12`）と folder/file アイコン用 `<span>`（`width: 14`）の両方に `flexShrink: 0` を追加。親 `<div role="treeitem">` が `display: flex` + `overflow: hidden` で、長いファイル名のとき flex 子要素として圧縮されアイコン位置が左にずれていたのを根絶
+- **TreeNode.tsx (検索フィルタ + 子階層対応)**: `ChildList` に `useSidebarStore((s) => s.searchQuery)` 購読を追加し、`dirState.entries` を新規ヘルパ `filterEntriesByQuery` で絞り込み。フィルタ結果が空の場合は「一致なし」（イタリック）を表示し、本来の「（空）」と区別。`filterEntriesByQuery(entries, query)` を named export として切り出し（純粋関数: 空 / whitespace-only クエリは元配列を即返、それ以外は trim → toLowerCase → `name.includes` でフィルタ）
+- **DirectoryTree.tsx (ルート行 → 検索フィールド置換)**: 旧ルート表示（`{basenameOf(rootPath)} · {displayPath}`、padding xs/sm、fontSize 11、textSecondary）を削除し、`<input type="search">` を設置。コンテナは padding `sm/sm`、`minHeight: 36`、`display: flex`、`gap: 6`、`borderBottom`。input は `flex: 1` + `minWidth: 0`（flex overflow 対策）、padding `5px/8px`、border 1px、`borderRadius: 4`、placeholder「ファイル名で検索」、`spellCheck={false}`、aria-label 付き。`onFocus` / `onBlur` で `borderColor` を `borderActive` ⇄ `border` に切替（style.border 同値再レンダ時は React style diff で DOM 操作されないため focus 表示は保持）
+- **DirectoryTree.tsx (トップレベルフィルタ + 状態別メッセージ)**: `useMemo` で `visibleEntries = dirState.status === "ready" ? filterEntriesByQuery(dirState.entries, searchQuery) : []` を導出。レンダリングを `dirState.entries` から `visibleEntries` に切替。状態別メッセージは 3 分岐: (a) `entries.length === 0` → 「（空のディレクトリ）」、(b) `entries > 0 && visible === 0` → 「一致するファイルがありません」、(c) `visible > 0` → エントリ列挙。検索クエリと真の空ディレクトリを UI 上で区別
+- **sidebarStore.ts (state 拡張)**: `searchQuery: string` フィールドと `setSearchQuery(query)` action を `SidebarStore` interface に追加。初期値 `""`、setter は同値スキップ（`get().searchQuery === query` で early return）して再レンダ抑制。永続化対象には含めない（タブ切替やセッション間で持ち越さない方針、明示的にユーザーがクリアできる UX に委ねる）
+- **新規テスト**: `Sidebar/__tests__/filterEntriesByQuery.test.ts`（7 件、空 / whitespace-only クエリで元配列を返す参照同一性 / case-insensitive substring / mixed case / 空マッチ / trim / files+dirs を区別なく match）。`stores/__tests__/sidebarStore.test.ts` に `setSearchQuery` の更新 / 同値時の state 参照同一性 / 空文字復帰の 3 アサーション追加。`beforeEach` の reset state にも `searchQuery: ""` を追加
+- **テスト合計**: 25 ファイル / 368 件グリーン（修正前 361 から +7 件）
+- **設計判断**:
+  - **flex 子要素の圧縮防止は `flexShrink: 0` が正解**: アイコン span は意味的に「固定サイズの装飾」であり flex 計算で縮められたくない。`min-width` の代わりに `flex-shrink: 0` を使う方が、ベース幅 (`width: 12/14`) と圧縮ポリシーが分離されて意図が明確
+  - **フィルタは全階層に適用**: 「root だけフィルタ」案も検討したが、サブフォルダを展開した瞬間に検索クエリが効かなくなるのは予測不能で混乱を招く。「クエリが空でない間はどの階層でも `name` で絞る」という単純で予測可能なルールを優先。トレードオフとして `.claude` がマッチして展開しても中身は `name` でさらに絞られるが、ユーザーがクリアすれば全ツリーが戻る前提で許容
+  - **検索クエリを sidebarStore に置く**: `DirectoryTree` と `TreeNode/ChildList` の両方が同じクエリに反応する必要があるため context や props drilling より store が自然。selectedTabCwd 切替時のクリアは現時点で実装せず、ユーザーが明示的に消す挙動（input value 表示があるので状態は可視）に委ねる
+  - **`filterEntriesByQuery` を export**: 純粋関数で再利用性とテスタビリティが高い。`TreeNode.tsx` 内で完結させてもよかったが、`DirectoryTree.tsx` のトップレベルフィルタからも参照するため一箇所に集約。テストも書きやすい
+  - **input border のフォーカス UX**: state を増やさず DOM mutation で完結。React の style diff は同値プロパティを再適用しないため、`searchQuery` 変化のたびの再レンダでもフォーカス枠は保持される（`border` shorthand を使っているが、文字列が同一なので React は触らない）
+  - **空ディレクトリ vs 検索ヒット 0 の区別**: 同じ「（空）」表示だと「ディレクトリが空なのか」「検索でフィルタされたのか」が判別不能。ユーザーが検索中だと自明なケースでも、UI 側で明示するほうが説明コストが低い
+
 ### 2026-04-26 - Markdown エディタのテーマ対応 UI/UX リデザイン
 
 #### 概要
