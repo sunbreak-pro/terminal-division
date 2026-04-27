@@ -35,6 +35,81 @@ const WATCHER_ERROR_WINDOW_MS = 5 * 60 * 1000;
 class FileSystemManager {
   private watchers: Map<string, WatchEntry> = new Map();
 
+  /**
+   * ルート配下を再帰探索し、ファイル/ディレクトリ名にクエリ(部分一致, 大文字小文字無視)
+   * を含むエントリを返す。サイドバー検索フィールドからのみ呼ばれる。
+   *
+   * 上限とスキップ:
+   * - maxResults: 結果件数上限（既定 500）。超過時は walk を打ち切る
+   * - maxDepth: 走査深度上限（既定 10）
+   * - スキップ対象: node_modules / .git のみ。`.claude` 等の dotfile は探索対象に含む
+   * - シンボリックリンクのディレクトリは再帰しない（ループ回避）
+   */
+  async searchTree(
+    rootPath: string,
+    query: string,
+    options?: { maxResults?: number; maxDepth?: number },
+  ): Promise<{ entries: DirEntry[]; truncated: boolean }> {
+    const trimmed = query.trim();
+    if (!trimmed) return { entries: [], truncated: false };
+    const q = trimmed.toLowerCase();
+    const maxResults = options?.maxResults ?? 500;
+    const maxDepth = options?.maxDepth ?? 10;
+    const SKIP_DIRS = new Set(["node_modules", ".git"]);
+
+    const results: DirEntry[] = [];
+    let truncated = false;
+
+    const walk = async (dirPath: string, depth: number): Promise<void> => {
+      if (truncated) return;
+      if (depth > maxDepth) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      // 結果順を安定化させるため、ディレクトリ → ファイル順 + ロケール順で走査
+      entries.sort((a, b) => {
+        const aDir = a.isDirectory();
+        const bDir = b.isDirectory();
+        if (aDir !== bDir) return aDir ? -1 : 1;
+        return a.name.localeCompare(b.name, "ja");
+      });
+      for (const entry of entries) {
+        if (truncated) return;
+        const full = path.join(dirPath, entry.name);
+        const isSymlink = entry.isSymbolicLink();
+        let isDir = entry.isDirectory();
+        if (isSymlink) {
+          try {
+            const stat = await fs.promises.stat(full);
+            isDir = stat.isDirectory();
+          } catch {
+            isDir = false;
+          }
+        }
+        if (entry.name.toLowerCase().includes(q)) {
+          if (results.length >= maxResults) {
+            truncated = true;
+            return;
+          }
+          results.push({
+            name: entry.name,
+            path: full,
+            isDirectory: isDir,
+            isSymlink,
+          });
+        }
+        if (isDir && !isSymlink && !SKIP_DIRS.has(entry.name)) {
+          await walk(full, depth + 1);
+        }
+      }
+    };
+    await walk(rootPath, 0);
+    return { entries: results, truncated };
+  }
+
   async readDir(dirPath: string): Promise<DirEntry[]> {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
     const results: DirEntry[] = [];

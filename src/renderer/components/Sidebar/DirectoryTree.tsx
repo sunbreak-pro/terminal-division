@@ -1,11 +1,12 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useCurrentTheme, useThemeConfig } from "../../stores/themeStore";
 import {
   useFileTreeStore,
   useDirState,
   type FileNode,
 } from "../../stores/fileTreeStore";
-import { TreeNode } from "./TreeNode";
+import { TreeNode, filterEntriesByQuery } from "./TreeNode";
+import { FolderIcon, FileIcon } from "./icons";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { showErrorToast } from "./ErrorToast";
 import { useSidebarStore } from "../../stores/sidebarStore";
@@ -48,6 +49,8 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
     activeTerminalId ? (s.metas.get(activeTerminalId)?.cwd ?? null) : null,
   );
   const setEditingPath = useSidebarStore((s) => s.setEditingPath);
+  const searchQuery = useSidebarStore((s) => s.searchQuery);
+  const setSearchQuery = useSidebarStore((s) => s.setSearchQuery);
 
   const [menu, setMenu] = useState<{
     x: number;
@@ -83,7 +86,55 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
   const closeMenu = useCallback(() => setMenu(null), []);
 
   const homeDir = window.api.system.getHomeDir();
-  const displayPath = homeRelativePath(rootPath, homeDir);
+
+  const visibleEntries = useMemo(
+    () =>
+      dirState.status === "ready"
+        ? filterEntriesByQuery(dirState.entries, searchQuery)
+        : [],
+    [dirState, searchQuery],
+  );
+
+  // ===== 再帰検索 =====
+  // searchQuery が非空のときは、サブディレクトリも含めてルート配下を再帰探索した
+  // フラットな結果リストをツリーの代わりに表示する。150ms デバウンスで連続入力時の
+  // IPC 呼び出しを抑制する。
+  type SearchState =
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "ready"; entries: FileNode[]; truncated: boolean }
+    | { status: "error"; message: string };
+  const [searchState, setSearchState] = useState<SearchState>({
+    status: "idle",
+  });
+  const trimmedQuery = searchQuery.trim();
+  const isSearching = trimmedQuery.length > 0;
+  useEffect(() => {
+    if (!isSearching) {
+      setSearchState({ status: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setSearchState({ status: "loading" });
+    const timer = window.setTimeout(() => {
+      void window.api.fs.searchTree(rootPath, trimmedQuery).then((res) => {
+        if (cancelled) return;
+        if (res.ok) {
+          setSearchState({
+            status: "ready",
+            entries: res.entries,
+            truncated: res.truncated,
+          });
+        } else {
+          setSearchState({ status: "error", message: res.error });
+        }
+      });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [rootPath, trimmedQuery, isSearching]);
 
   const buildMenuItems = useCallback(
     (node: FileNode): ContextMenuItem[] => {
@@ -257,65 +308,101 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
       }}
     >
       <div
-        title={rootPath}
         style={{
-          padding: `${config.spacing.xs} ${config.spacing.sm}`,
-          fontSize: 11,
-          color: theme.colors.textSecondary,
+          padding: `${config.spacing.sm} ${config.spacing.sm}`,
           borderBottom: `1px solid ${theme.colors.border}`,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
           flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          minHeight: 36,
+          boxSizing: "border-box",
         }}
       >
-        {basenameOf(rootPath)}{" "}
-        <span style={{ opacity: 0.7 }}>· {displayPath}</span>
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="ファイル名で検索"
+          aria-label="ファイル名で検索"
+          spellCheck={false}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            backgroundColor: theme.colors.background,
+            color: theme.colors.text,
+            border: `1px solid ${theme.colors.border}`,
+            borderRadius: 4,
+            padding: "5px 8px",
+            fontSize: 12,
+            fontFamily: "inherit",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = theme.colors.borderActive;
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = theme.colors.border;
+          }}
+        />
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "4px 0" }}>
-        {dirState.status === "loading" && (
-          <div
-            style={{
-              padding: config.spacing.sm,
-              fontSize: 11,
-              color: theme.colors.textSecondary,
-            }}
-          >
-            読み込み中…
-          </div>
-        )}
-        {dirState.status === "error" && (
-          <div
-            style={{
-              padding: config.spacing.sm,
-              fontSize: 11,
-              color: theme.colors.danger,
-            }}
-          >
-            {dirState.message}
-          </div>
-        )}
-        {dirState.status === "ready" &&
-          dirState.entries.map((entry) => (
-            <TreeNode
-              key={entry.path}
-              node={entry}
-              depth={0}
-              onContextMenu={handleContextMenu}
-            />
-          ))}
-        {dirState.status === "ready" && dirState.entries.length === 0 && (
-          <div
-            style={{
-              padding: config.spacing.sm,
-              fontSize: 11,
-              color: theme.colors.textSecondary,
-              fontStyle: "italic",
-            }}
-          >
-            （空のディレクトリ）
-          </div>
+        {isSearching ? (
+          <SearchResultsPanel
+            state={searchState}
+            rootPath={rootPath}
+            onContextMenu={handleContextMenu}
+            onRequestEditMarkdown={onRequestEditMarkdown}
+          />
+        ) : (
+          <>
+            {dirState.status === "loading" && (
+              <div
+                style={{
+                  padding: config.spacing.sm,
+                  fontSize: 11,
+                  color: theme.colors.textSecondary,
+                }}
+              >
+                読み込み中…
+              </div>
+            )}
+            {dirState.status === "error" && (
+              <div
+                style={{
+                  padding: config.spacing.sm,
+                  fontSize: 11,
+                  color: theme.colors.danger,
+                }}
+              >
+                {dirState.message}
+              </div>
+            )}
+            {dirState.status === "ready" &&
+              visibleEntries.map((entry) => (
+                <TreeNode
+                  key={entry.path}
+                  node={entry}
+                  depth={0}
+                  onContextMenu={handleContextMenu}
+                  onRequestEditMarkdown={onRequestEditMarkdown}
+                />
+              ))}
+            {dirState.status === "ready" && dirState.entries.length === 0 && (
+              <div
+                style={{
+                  padding: config.spacing.sm,
+                  fontSize: 11,
+                  color: theme.colors.textSecondary,
+                  fontStyle: "italic",
+                }}
+              >
+                （空のディレクトリ）
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -327,6 +414,231 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
           onClose={closeMenu}
         />
       )}
+    </div>
+  );
+};
+
+// ===== 検索結果リスト =====
+// 検索クエリ入力時にツリーの代わりに表示するフラットな結果リスト。各行は
+// クリックで選択、.md ファイルはシングルクリックで Markdown エディタを起動、
+// 右クリックで既存のコンテキストメニューを表示する。
+type SearchPanelState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; entries: FileNode[]; truncated: boolean }
+  | { status: "error"; message: string };
+
+interface SearchResultsPanelProps {
+  state: SearchPanelState;
+  rootPath: string;
+  onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  onRequestEditMarkdown?: (filePath: string) => void;
+}
+
+const SearchResultsPanel: React.FC<SearchResultsPanelProps> = ({
+  state,
+  rootPath,
+  onContextMenu,
+  onRequestEditMarkdown,
+}) => {
+  const theme = useCurrentTheme();
+  const config = useThemeConfig();
+
+  if (state.status === "loading") {
+    return (
+      <div
+        style={{
+          padding: config.spacing.sm,
+          fontSize: 11,
+          color: theme.colors.textSecondary,
+        }}
+      >
+        検索中…
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <div
+        style={{
+          padding: config.spacing.sm,
+          fontSize: 11,
+          color: theme.colors.danger,
+        }}
+      >
+        {state.message}
+      </div>
+    );
+  }
+  if (state.status !== "ready") return null;
+
+  if (state.entries.length === 0) {
+    return (
+      <div
+        style={{
+          padding: config.spacing.sm,
+          fontSize: 11,
+          color: theme.colors.textSecondary,
+          fontStyle: "italic",
+        }}
+      >
+        一致するファイルがありません
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {state.entries.map((entry) => (
+        <SearchResultRow
+          key={entry.path}
+          node={entry}
+          rootPath={rootPath}
+          onContextMenu={onContextMenu}
+          onRequestEditMarkdown={onRequestEditMarkdown}
+        />
+      ))}
+      {state.truncated && (
+        <div
+          style={{
+            padding: config.spacing.sm,
+            fontSize: 11,
+            color: theme.colors.textSecondary,
+            fontStyle: "italic",
+          }}
+        >
+          結果が多すぎるため上限で打ち切りました（クエリを絞り込んでください）
+        </div>
+      )}
+    </>
+  );
+};
+
+interface SearchResultRowProps {
+  node: FileNode;
+  rootPath: string;
+  onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  onRequestEditMarkdown?: (filePath: string) => void;
+}
+
+const SearchResultRow: React.FC<SearchResultRowProps> = ({
+  node,
+  rootPath,
+  onContextMenu,
+  onRequestEditMarkdown,
+}) => {
+  const theme = useCurrentTheme();
+  const isSelected = useSidebarStore((s) => s.selectedNodePath === node.path);
+  const setSelectedNodePath = useSidebarStore((s) => s.setSelectedNodePath);
+
+  // ルートからの相対パスを 2 行目に表示（ファイル名 + 親ディレクトリの可視化）
+  const relativeDir = useMemo(() => {
+    const prefix = rootPath.endsWith("/") ? rootPath : rootPath + "/";
+    if (!node.path.startsWith(prefix)) return "";
+    const rel = node.path.slice(prefix.length);
+    const lastSlash = rel.lastIndexOf("/");
+    return lastSlash >= 0 ? rel.slice(0, lastSlash) : "";
+  }, [node.path, rootPath]);
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setSelectedNodePath(node.path);
+      if (
+        !node.isDirectory &&
+        e.detail <= 1 &&
+        isMarkdownPath(node.path) &&
+        onRequestEditMarkdown
+      ) {
+        onRequestEditMarkdown(node.path);
+      }
+    },
+    [node.path, node.isDirectory, setSelectedNodePath, onRequestEditMarkdown],
+  );
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setSelectedNodePath(node.path);
+      onContextMenu(e, node);
+    },
+    [node, setSelectedNodePath, onContextMenu],
+  );
+
+  return (
+    <div
+      role="treeitem"
+      aria-selected={isSelected}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "3px 6px",
+        cursor: "pointer",
+        color: theme.colors.text,
+        backgroundColor: isSelected ? theme.colors.buttonHover : "transparent",
+        fontSize: 12,
+        userSelect: "none",
+        minHeight: 22,
+      }}
+      onMouseEnter={(e) => {
+        if (!isSelected) {
+          e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!isSelected) {
+          e.currentTarget.style.backgroundColor = "transparent";
+        }
+      }}
+    >
+      <span
+        style={{
+          display: "inline-flex",
+          width: 14,
+          flexShrink: 0,
+          justifyContent: "center",
+          color: theme.colors.textSecondary,
+        }}
+      >
+        {node.isDirectory ? <FolderIcon /> : <FileIcon />}
+      </span>
+      <div
+        style={{
+          minWidth: 0,
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          lineHeight: 1.2,
+        }}
+      >
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontStyle: node.isSymlink ? "italic" : "normal",
+          }}
+        >
+          {node.name}
+        </span>
+        {relativeDir && (
+          <span
+            style={{
+              fontSize: 10,
+              color: theme.colors.textSecondary,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {relativeDir}
+          </span>
+        )}
+      </div>
     </div>
   );
 };

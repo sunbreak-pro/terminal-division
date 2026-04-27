@@ -1,5 +1,29 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-27 - サイドバー再帰検索 + 検索フィールド内ショートカット passthrough
+
+#### 概要
+
+サイドバーの検索フィールドが「展開中ディレクトリの兄弟ノードのみ」をフィルタする実装になっていたため、`.claude/MEMORY.md` のように展開していないサブディレクトリ内のファイルが検索クエリ「MEMORY」で全くヒットせず、`ME` まで打っても直下の `README.md` しか出ない問題を修正。Main プロセスに `searchTree(rootPath, query)` を追加し、ルート配下を再帰探索（最大 500 件 / 深度 10、`node_modules` と `.git` のみスキップ、symlink ディレクトリは再帰せずループ回避、`.claude` 等の dotfile は探索対象）。Renderer 側は検索クエリが非空のときに既存ツリー描画を `SearchResultsPanel` のフラットリストに切り替え、150ms デバウンス + cancelled フラグで race condition 回避。各結果行は「ファイル名 + ルートからの相対ディレクトリ」を 2 行表示し、クリック選択 / `.md` シングルクリックで Markdown エディタ起動 / 右クリックで既存コンテキストメニュー（コピー / VSCode / 名称変更 / 移動 / 削除）を提供。あわせて、検索フィールド内で `cmd+delete` `cmd+←` `cmd+→` `cmd+z` `cmd+shift+z` 等のテキスト編集ショートカットが効かない問題も修正。`App.tsx` の capture-phase keydown ハンドラがこれらを横取りして端末に送っていたため、`EDITABLE_PASSTHROUGH_IDS` を導入し editable target にフォーカスがある場合はマッチしてもブラウザ標準動作へ委譲する。
+
+#### 変更点
+
+- **file-system-handler.ts**: `searchTree(rootPath, query, options?)` を新規追加。`fs.promises.readdir(withFileTypes)` で再帰探索し、ファイル名の case-insensitive 部分一致で `DirEntry[]` を返す。探索順はディレクトリ優先 + ロケール順で安定化、symlink は `fs.promises.stat` で実体解決し isDirectory を正しく判定。シンボリックリンクのディレクトリは再帰しない（ループ回避）。`{ entries, truncated }` を返し、上限到達は呼び出し側で警告表示できるようにした
+- **ipc-handlers.ts**: `fs:searchTree` IPC ハンドラ登録。`validatePath` でルートパスを検証してから `searchTree` を呼ぶ既存パターン踏襲。返却型は `{ ok: true, entries, truncated } | { ok: false, error }`
+- **preload/index.ts**: `window.api.fs.searchTree(rootPath, query)` を公開。型シグネチャを明示し renderer 側で型補完が効くようにした
+- **DirectoryTree.tsx (検索 UI)**: 検索クエリ非空のとき `SearchResultsPanel` をツリーの代わりに描画。`SearchState = idle/loading/ready/error` の discriminated union で状態管理。150ms `setTimeout` + `cancelled` フラグでデバウンス + race condition 対策（unmount や次回入力時に古い結果が state を上書きしない）。`SearchResultRow` は `{ name, relativeDir }` の 2 行表示、`isMarkdownPath` 判定で `.md` シングルクリック → `onRequestEditMarkdown`、右クリックで既存 `handleContextMenu` 経由のコンテキストメニュー（buildMenuItems で構築される 8 項目）を発火
+- **App.tsx (editable passthrough)**: `EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId>` を新設し、`kill-line-backward` / `kill-line-forward` / `move-line-start` / `move-line-end` / `kill-word-backward` / `kill-word-forward` / `move-word-left` / `move-word-right` / `undo` / `redo` を含めた。`handleKeyDown` のディスパッチループで `inEditable && EDITABLE_PASSTHROUGH_IDS.has(def.id)` のとき preventDefault せずに早期 return し、ブラウザ標準のテキスト編集動作（cmd+delete で行頭まで削除、cmd+←/→ で行頭/行末移動、cmd+z で undo 等）が input 要素に届くようにした。`isEditableTarget` は xterm の helper textarea を除外する既存実装をそのまま流用（端末側のショートカット動作は不変）
+- **新規テスト**: `main/__tests__/searchTree.test.ts`（9 件）— 一時ディレクトリで実ファイルツリーを構築してテスト。検証項目: ルート直下マッチ / サブディレクトリ再帰マッチ（`.claude/MEMORY.md`）/ 大文字小文字無視 / `node_modules` スキップ / 深い階層 / 空クエリ・whitespace-only クエリ / `maxResults` 超過時の `truncated=true` / `maxDepth` 制限 / `isDirectory`・`isSymlink` フラグ
+- **テスト合計**: 28 ファイル / 388 件グリーン（修正前 379 から +9 件）
+- **設計判断**:
+  - **検索クエリ時はツリー描画ではなくフラットリスト**: 既存の「兄弟ノード絞り込み」を再帰版に拡張する案も検討したが、サブディレクトリの自動展開ロジックが複雑化し、ヒットしたファイルの居場所も視覚化しづらい。VS Code の Cmd+P 風に「全マッチをフラットに、相対パスを 2 行目に」する方が探索 UX として直感的
+  - **150ms デバウンス + cancelled フラグの両方**: タイマー clear だけでは「タイマー発火後 → IPC 中に新クエリ」のレースで古い結果が state を上書きする。closure の `cancelled` 変数を effect cleanup で立てることで、IPC レスポンス到着時にも自分が古いものか判定できる。`setSearchState({ status: "loading" })` をタイマー発火前に立てるか後に立てるかは UX の好みで、即時 loading 表示で「反応している」感を出すため発火前に置いた
+  - **node_modules / .git のみスキップ**: ユーザーの不満は `.claude/MEMORY.md` が見つからないこと。`.claude` は dotfile だが探索対象に含まれている必要がある。一方で `node_modules` は数万ファイル単位で結果を埋め尽くすので明示除外。`.git` は内部オブジェクトファイルが大量にある同種の問題。`dist`・`build` はプロジェクト依存なので除外せず、ユーザーが `maxResults` 上限警告を見たらクエリを絞る運用に
+  - **symlink ディレクトリの非再帰**: 自分自身を含むディレクトリへの symlink でも無限ループしない。`fs.promises.stat` で実体解決して isDirectory を正しく返すが、再帰自体はスキップ。symlink ファイル自体（`.md` 等）はマッチ対象に含まれる
+  - **EDITABLE_PASSTHROUGH_IDS 集合方式**: 「ハンドラ内で個別に `isEditableTarget` チェック」する旧アプローチ（`undo`/`redo` のみ実装済み）を全展開すると重複が増える。ディスパッチャレベルで「該当 ID + editable」なら早期 return する形にすれば、新規ショートカット追加時も「テキスト編集に該当するか」の 1 行追加で済む。passthrough 対象は line/word 移動・削除・undo/redo に限定（`split-vertical` の Cmd+D 等はテキスト編集動作と競合しないので包含しない）
+  - **xterm helper textarea は editable target ではない**: `isEditableTarget` の既存判定（`tag === "TEXTAREA" && !classList.contains("xterm-helper-textarea")`）を流用。これにより端末ペインがフォーカス時の Cmd+Backspace 等は従来通り `terminalManager.writeWithHistory(...)` で PTY に届く
+  - **再帰探索を Renderer 側ではなく Main 側に置く**: Renderer 側で `fileTreeStore` のキャッシュを再帰的に走査する案もあったが、未展開ディレクトリは未ロードなので結局 IPC `fs:readDir` を多発させる必要がある。Main で一発走査するほうが round-trip コストが小さく、`fs:readDir` 経由のキャッシュを乱さずに済む
+
 ### 2026-04-27 - Settings カラー編集の簡略化（セマンティック 6 色化）
 
 #### 概要
@@ -113,21 +137,4 @@ Settings モーダル（800×600、左カテゴリ + 右タブ）を新設し、
   - **registry の Space バグ**: テスト駆動で発見。length-1 ブランチで先 return する設計を「" " を先に special-case」に変更。同種のバグはテストの存在意義そのもの
 - **計画書アーカイブ**: `.claude/archive/2026-04-26-settings-feature.md` に Status=COMPLETED で移動済み
 
-### 2026-04-26 - プロンプトドット成功/失敗カラー反映バグ修正
-
-#### 概要
-
-「(base) の左横の丸マーク（プロンプトドット）でコマンド成功/失敗の色変化が機能していない」バグを修正。根本原因は `terminalManager.ts` の OSC 7770 `A` ハンドラが、precmd → `D;N` で打ったばかりの色付き● decoration を直後の zle-line-init → `A` で即 `dispose()` していたこと。zsh の発火順序が「precmd → 新プロンプト描画 → zle-line-init」なため、ユーザ視点では「コマンド完了瞬間に一瞬だけ色付き → 新プロンプト到達と同時にグレーに戻る」となり、視覚上は色が一切変化しないように見えていた。修正は `A` ハンドラの `decoration?.dispose()` 呼び出しを削除し、過去 decoration はそのまま残して xterm.js の scrollback 上限到達時の自動 dispose に委ねる方式に変更。これにより iTerm2 / VSCode の semantic prompt 慣習通り、過去プロンプトの ● が成功=緑 / 失敗=赤 で視覚的に保持される。
-
-#### 変更点
-
-- **terminalManager.ts (OSC 7770 A ハンドラ)**: `inst.promptDot.decoration?.dispose()` 行を削除し、新マーカー差し替え時に過去 decoration の参照だけ捨てる動作に変更。理由を 7 行のコメントで明記（precmd → A の発火順序、ユーザに色変化が見えなくなる症状、xterm.js の scrollback 連動 dispose に委ねる根拠）
-- **terminalManager.test.ts (回帰テスト追加)**: 「`A` ハンドラが直前 decoration を破棄しないこと」を保証する it ブロックを追加。`oscHandler("A")` → `oscHandler("D;0")` で decoration を打ったあと、再度 `oscHandler("A")` を呼んでも `decorationMock.dispose` が呼ばれないこと、`promptDot.decoration` 参照だけが null に差し替わることを検証
-- **テスト合計**: 22 ファイル / 290 件グリーン（terminalManager.test.ts は 41 → 42 件に）
-- **設計判断**:
-  - 過去 decoration を明示 dispose しない方針への切替: メモリリークは発生しない。xterm.js は scrollback 上限超過で marker を自動 dispose し、それに連動して decoration も破棄される。明示管理する利得より、ユーザが成功/失敗色を視認できないバグの方が遥かに大きい
-  - シェル側の `__td_prompt_status`（zsh）/ `__td_prompt_command`（bash）はグレー● の常時表示を担当する役割で変更不要。Renderer 側 decoration が「グレー●の上に色付き●を被せる」レイヤーモデルは維持
-  - 同セッションで Settings UI 関連の WIP（`terminalManager.ts` の `XtermTheme` 型 import / `updateTheme`/`updateAllThemes` シグネチャ変更等、計画書 `2026-04-26-settings-feature.md`）と本バグ修正が同一ファイルに混在。task-tracker は計画書アーカイブなしのため `.claude/` のみコミット、コード変更は Settings UI 完了時にまとめて or 個別 fix コミットでユーザーが判断する方針
-
-
-> 2026-04-27 ローリングアーカイブ: これ以前の 29 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-27 ローリングアーカイブ: これ以前の 30 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

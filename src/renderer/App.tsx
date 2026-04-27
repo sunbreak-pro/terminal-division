@@ -24,7 +24,7 @@ import {
 import { useSettingsStore } from "./stores/settingsStore";
 import { useSettingsModalStore } from "./stores/settingsModalStore";
 import { SettingsModal } from "./components/SettingsModal";
-import { getAllTerminalIds, getPaneNumber } from "./utils/layoutUtils";
+import { getAllTerminalIds, collectPaneIdsInOrder } from "./utils/layoutUtils";
 import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
 import { useTerminalSearchStore } from "./stores/terminalSearchStore";
@@ -64,6 +64,23 @@ function isInsideMarkdownEditor(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return !!target.closest("[data-md-editor-pane]");
 }
+
+// 通常の input/textarea にフォーカスがあるときは、ブラウザ標準のテキスト編集
+// 動作 (Cmd+Backspace で行頭まで削除 / Cmd+ArrowLeft で行頭移動 / Cmd+Z で undo 等)
+// を尊重する必要があるショートカット。これらは capture phase で横取りせず、
+// イベントをそのまま input に通す。
+const EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId> = new Set([
+  "kill-line-backward",
+  "kill-line-forward",
+  "move-line-start",
+  "move-line-end",
+  "kill-word-backward",
+  "kill-word-forward",
+  "move-word-left",
+  "move-word-right",
+  "undo",
+  "redo",
+]);
 
 const App: React.FC = () => {
   const activeTerminalId = useActiveTerminalId();
@@ -116,61 +133,53 @@ const App: React.FC = () => {
   const handleRequestEditMarkdown = useCallback(
     (filePath: string): void => {
       if (!isMarkdownPath(filePath)) return; // 念のため
-      const paneId = resolveTargetPaneId();
-      if (!paneId) {
+      const defaultPaneId = resolveTargetPaneId();
+      if (!defaultPaneId) {
         showErrorToast("対象ペインが見つかりません");
         return;
       }
-      const paneNumber = getPaneNumber(rootId, nodes, paneId) ?? 1;
-      const meta = useTerminalMetaStore.getState().metas.get(paneId);
-      // 既に dirty な MD を編集中なら、先に未保存警告を出す
+      // ダイアログで切替できる候補。ペイン番号付与は DFS 順 (= getPaneNumber と同じ)
+      const orderedIds = rootId ? collectPaneIdsInOrder(rootId, nodes) : [];
+      const availablePanes = orderedIds.map((paneId, idx) => ({
+        paneId,
+        paneNumber: idx + 1,
+      }));
+      const meta = useTerminalMetaStore.getState().metas.get(defaultPaneId);
+      // 選択ペインが dirty な MD を編集中なら、先に未保存警告を出す
+      const openConfirm = (): void => {
+        showOpenConfirm({
+          filePath,
+          availablePanes,
+          defaultPaneId,
+          onConfirm: (chosenPaneId) => {
+            dismissDialog();
+            void openMarkdownInPane(chosenPaneId, filePath);
+          },
+        });
+      };
       if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
         showUnsaved({
           filePath: meta.mdFilePath,
-          paneId,
+          paneId: defaultPaneId,
           reason: "open-other",
           onSave: async () => {
-            const api = markdownEditorRegistry.getApi(paneId);
+            const api = markdownEditorRegistry.getApi(defaultPaneId);
             const ok = api ? await api.save() : false;
             if (!ok) {
               showErrorToast("保存に失敗しました");
               return;
             }
             dismissDialog();
-            showOpenConfirm({
-              filePath,
-              paneId,
-              paneNumber,
-              onConfirm: () => {
-                dismissDialog();
-                void openMarkdownInPane(paneId, filePath);
-              },
-            });
+            openConfirm();
           },
           onDiscard: () => {
             dismissDialog();
-            showOpenConfirm({
-              filePath,
-              paneId,
-              paneNumber,
-              onConfirm: () => {
-                dismissDialog();
-                void openMarkdownInPane(paneId, filePath);
-              },
-            });
+            openConfirm();
           },
         });
         return;
       }
-      showOpenConfirm({
-        filePath,
-        paneId,
-        paneNumber,
-        onConfirm: () => {
-          dismissDialog();
-          void openMarkdownInPane(paneId, filePath);
-        },
-      });
+      openConfirm();
     },
     [
       resolveTargetPaneId,
@@ -458,9 +467,15 @@ const App: React.FC = () => {
       // resolveShortcutKey() の中でデフォルトキーにフォールバックする。
       const bindings = useSettingsStore.getState().settings.shortcuts;
 
+      // input 等の編集可能要素にフォーカスがあり、テキスト編集系ショートカットが
+      // マッチした場合は capture phase で横取りせずブラウザ標準動作を維持する。
+      // (xterm の helper textarea は isEditableTarget で false 扱い)
+      const inEditable = isEditableTarget(e.target);
+
       for (const def of SHORTCUT_DEFINITIONS) {
         const resolved = resolveShortcutKey(def.id, bindings);
         if (resolved && matchKey(e, resolved)) {
+          if (inEditable && EDITABLE_PASSTHROUGH_IDS.has(def.id)) return;
           handlers[def.id]?.(e);
           return;
         }
@@ -527,7 +542,8 @@ const App: React.FC = () => {
         <OpenMarkdownModal
           isOpen
           filePath={dialogRequest.filePath}
-          paneNumber={dialogRequest.paneNumber}
+          availablePanes={dialogRequest.availablePanes}
+          defaultPaneId={dialogRequest.defaultPaneId}
           onConfirm={dialogRequest.onConfirm}
           onCancel={dismissDialog}
         />

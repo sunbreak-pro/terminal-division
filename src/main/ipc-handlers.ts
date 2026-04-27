@@ -132,6 +132,24 @@ export function setupIpcHandlers(): void {
     }
   });
 
+  ipcMain.handle(
+    "fs:searchTree",
+    async (_, { rootPath, query }: { rootPath: string; query: string }) => {
+      const safe = validatePath(rootPath);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      try {
+        const { entries, truncated } = await fileSystemManager.searchTree(
+          safe,
+          query,
+        );
+        return { ok: true as const, entries, truncated };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        return { ok: false as const, error: message };
+      }
+    },
+  );
+
   ipcMain.on("fs:watch", (event, dirPath: string) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;

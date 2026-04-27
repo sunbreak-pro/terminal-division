@@ -103,6 +103,23 @@ const api = {
         }
       | { ok: false; error: string }
     > => ipcRenderer.invoke("fs:readDir", dirPath),
+    // ルート配下を再帰検索してファイル名がクエリを含むものを最大 500 件返す
+    searchTree: (
+      rootPath: string,
+      query: string,
+    ): Promise<
+      | {
+          ok: true;
+          entries: {
+            name: string;
+            path: string;
+            isDirectory: boolean;
+            isSymlink: boolean;
+          }[];
+          truncated: boolean;
+        }
+      | { ok: false; error: string }
+    > => ipcRenderer.invoke("fs:searchTree", { rootPath, query }),
     watch: (dirPath: string): void => ipcRenderer.send("fs:watch", dirPath),
     unwatch: (dirPath: string): void => ipcRenderer.send("fs:unwatch", dirPath),
     onChange: createIpcListener<{
