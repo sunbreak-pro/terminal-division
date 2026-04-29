@@ -110,7 +110,7 @@ const registry = new Map<string, TerminalInstance>();
 
 export interface TerminalCallbacks {
   onData: (data: string) => void;
-  onExit: () => void;
+  onExit: (exitCode: number) => void;
   onFocus: () => void;
 }
 
@@ -197,7 +197,7 @@ export function getOrCreate(
 
   const exitListenerRemover = window.api.pty.onExit((event) => {
     if (event.id === id) {
-      callbacks.onExit();
+      callbacks.onExit(event.exitCode);
     }
   });
 
@@ -464,6 +464,15 @@ export function resize(id: string, cols: number, rows: number): void {
 const lastSizes = new Map<string, { cols: number; rows: number }>();
 
 /**
+ * fit() のサイズキャッシュを破棄する。
+ * viewMode 切替や Panel.onResize の経路など「PTY 側の cols が古いまま」になり得る
+ * 場面で呼ぶと、次回 fit() が同サイズでも必ず新しいサイズを返し pty.resize が走る。
+ */
+export function invalidateLastSize(id: string): void {
+  lastSizes.delete(id);
+}
+
+/**
  * Fit terminal to its container
  * @returns サイズが変更された場合は新しいサイズ、変更がない場合はnull
  */
@@ -471,28 +480,56 @@ export function fit(id: string): { cols: number; rows: number } | null {
   const instance = registry.get(id);
   if (!instance) return null;
 
-  try {
-    instance.fitAddon.fit();
-    const newSize = {
-      cols: instance.terminal.cols,
-      rows: instance.terminal.rows,
-    };
-
-    // サイズが変わっていない場合はnullを返す（IPCを節約）
-    const lastSize = lastSizes.get(id);
-    if (
-      lastSize &&
-      lastSize.cols === newSize.cols &&
-      lastSize.rows === newSize.rows
-    ) {
+  const tryFit = (): { cols: number; rows: number } | null => {
+    try {
+      instance.fitAddon.fit();
+      const cols = instance.terminal.cols;
+      const rows = instance.terminal.rows;
+      // 0 / NaN は DOM サイズ不定の兆候。呼び出し側でリトライさせるため null。
+      if (!Number.isFinite(cols) || !Number.isFinite(rows)) return null;
+      if (cols <= 0 || rows <= 0) return null;
+      return { cols, rows };
+    } catch {
       return null;
     }
+  };
 
-    lastSizes.set(id, newSize);
-    return newSize;
-  } catch {
+  let newSize = tryFit();
+  // 1 回目失敗時は次の rAF で 1 度だけリトライ。
+  // 主に display:none → block 直後の offsetWidth=0 を救う。
+  if (!newSize) {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        const retried = tryFit();
+        if (!retried) return;
+        const last = lastSizes.get(id);
+        if (last && last.cols === retried.cols && last.rows === retried.rows) {
+          return;
+        }
+        lastSizes.set(id, retried);
+        // リトライ成功時は呼び出し側に直接返せないので、ここで pty.resize を直接送る
+        try {
+          window.api.pty.resize(id, retried.cols, retried.rows);
+        } catch {
+          // window.api 未注入のテスト環境などで失敗しても致命ではない
+        }
+      });
+    }
     return null;
   }
+
+  // サイズが変わっていない場合はnullを返す（IPCを節約）
+  const lastSize = lastSizes.get(id);
+  if (
+    lastSize &&
+    lastSize.cols === newSize.cols &&
+    lastSize.rows === newSize.rows
+  ) {
+    return null;
+  }
+
+  lastSizes.set(id, newSize);
+  return newSize;
 }
 
 /**
@@ -701,6 +738,57 @@ export function trimScrollback(id: string, keepLines: number): void {
     if (registry.get(id) !== instance) return;
     instance.terminal.options.scrollback = original;
   });
+}
+
+/**
+ * xterm の Bell イベントを購読する。シェルが \a (BEL) を出すと呼ばれる。
+ * 戻り値の関数で unsubscribe する。
+ */
+export function subscribeBell(id: string, listener: () => void): () => void {
+  const instance = registry.get(id);
+  if (!instance) return () => {};
+  const disposable = instance.terminal.onBell(listener);
+  return () => disposable.dispose();
+}
+
+/**
+ * xterm のオプションを部分的に更新する。fontSize / lineHeight / fontFamily 等
+ * セルサイズに影響するキーを変更した場合は fit() を実行して PTY 側にもリサイズを伝える。
+ *
+ * @returns fit() でサイズが変わった場合は新しい cols/rows、それ以外は null
+ */
+export function applyOptions(
+  id: string,
+  options: Partial<ITerminalOptions>,
+): { cols: number; rows: number } | null {
+  const instance = registry.get(id);
+  if (!instance) return null;
+  const t = instance.terminal;
+
+  // セルサイズに影響するキー
+  const SIZE_AFFECTING: ReadonlySet<keyof ITerminalOptions> = new Set([
+    "fontSize",
+    "fontFamily",
+    "fontWeight",
+    "fontWeightBold",
+    "letterSpacing",
+    "lineHeight",
+  ]);
+  let needsResize = false;
+
+  for (const key of Object.keys(options) as (keyof ITerminalOptions)[]) {
+    const value = options[key];
+    if (value === undefined) continue;
+    // ITerminalOptions の動的代入は型的にユニオンで弾かれるため、unknown 経由で代入
+    (t.options as unknown as Record<string, unknown>)[key] = value as unknown;
+    if (SIZE_AFFECTING.has(key)) needsResize = true;
+  }
+
+  if (needsResize) {
+    invalidateLastSize(id);
+    return fit(id);
+  }
+  return null;
 }
 
 /**

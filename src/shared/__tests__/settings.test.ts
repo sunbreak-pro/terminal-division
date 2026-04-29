@@ -137,6 +137,9 @@ describe("mergeSettings", () => {
     theme: { currentThemeId: "dark", customThemes: [] },
     shortcuts: { "split-vertical": "Cmd+1" },
     window: { opacity: 1.0, vibrancyEnabled: false },
+    terminal: { ...DEFAULT_SETTINGS.terminal },
+    editor: { ...DEFAULT_SETTINGS.editor },
+    general: { ...DEFAULT_SETTINGS.general },
   };
 
   it("returns a base copy when patch is empty", () => {
@@ -181,6 +184,59 @@ describe("mergeSettings", () => {
       mergeSettings(base, { window: { vibrancyEnabled: "yes" } }).window
         .vibrancyEnabled,
     ).toBe(false);
+  });
+
+  it("merges terminal patch with field-level fallback (clamps fontSize)", () => {
+    const result = mergeSettings(base, {
+      terminal: { fontSize: 100 }, // 上限超過 → クランプ
+    });
+    expect(result.terminal.fontSize).toBe(32); // FONT_SIZE_MAX
+    expect(result.terminal.fontFamily).toBe(base.terminal.fontFamily); // 他は維持
+  });
+
+  it("merges terminal patch and validates lineHeight clamp", () => {
+    const lo = mergeSettings(base, { terminal: { lineHeight: 0.5 } });
+    const hi = mergeSettings(base, { terminal: { lineHeight: 5 } });
+    expect(lo.terminal.lineHeight).toBe(1.0); // LINE_HEIGHT_MIN
+    expect(hi.terminal.lineHeight).toBe(2.0); // LINE_HEIGHT_MAX
+  });
+
+  it("falls back invalid cursorStyle / bellStyle to defaults", () => {
+    // @ts-expect-error: 不正値で fallback を確認
+    const r1 = mergeSettings(base, { terminal: { cursorStyle: "spaceship" } });
+    expect(r1.terminal.cursorStyle).toBe(DEFAULT_SETTINGS.terminal.cursorStyle);
+    // @ts-expect-error: 不正値で fallback を確認
+    const r2 = mergeSettings(base, { terminal: { bellStyle: "loud" } });
+    expect(r2.terminal.bellStyle).toBe(DEFAULT_SETTINGS.terminal.bellStyle);
+  });
+
+  it("merges editor patch (fontSize clamp)", () => {
+    const result = mergeSettings(base, {
+      editor: { fontSize: 5 }, // 下限超過 → クランプ
+    });
+    expect(result.editor.fontSize).toBe(10); // EDITOR_FONT_SIZE_MIN
+  });
+
+  it("only treats explicit boolean as general settings flags", () => {
+    const r1 = mergeSettings(base, {
+      general: { restoreSessionOnLaunch: false },
+    });
+    expect(r1.general.restoreSessionOnLaunch).toBe(false);
+    // @ts-expect-error: 不正値で fallback を確認
+    const r2 = mergeSettings(base, {
+      general: { ptyExitNotification: "yes" },
+    });
+    expect(r2.general.ptyExitNotification).toBe(
+      DEFAULT_SETTINGS.general.ptyExitNotification,
+    );
+  });
+
+  it("validateAppSettings restores defaults for malformed terminal block", () => {
+    const result = validateAppSettings({
+      version: SETTINGS_VERSION,
+      terminal: "garbage",
+    });
+    expect(result.terminal).toEqual(DEFAULT_SETTINGS.terminal);
   });
 
   it("filters invalid customThemes in patch", () => {

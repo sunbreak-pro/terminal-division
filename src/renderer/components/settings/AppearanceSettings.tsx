@@ -9,7 +9,6 @@ import {
 import { useCustomThemes } from "../../stores/settingsStore";
 import { themes as builtInThemes } from "../../styles/theme";
 import {
-  APP_COLOR_KEYS,
   XTERM_THEME_KEYS,
   type AppColors,
   type Theme,
@@ -17,27 +16,130 @@ import {
 } from "../../../shared/theme-types";
 import { ColorField } from "./ColorField";
 
-// 基本色（よく触る 6 項目）と詳細 ANSI 16 色を分けて表示
-const BASIC_XTERM_KEYS: (keyof XtermTheme)[] = [
-  "background",
-  "foreground",
-  "cursor",
-  "cursorAccent",
-  "selectionBackground",
-  "selectionForeground",
+// セマンティック 6 色: ユーザーが直接触るのはこれだけ。
+// xterm/AppColors の重複フィールドは onChange 内で同時に更新する。
+export type SemanticKey =
+  | "background"
+  | "foreground"
+  | "accent"
+  | "textSecondary"
+  | "border"
+  | "danger";
+
+interface SemanticDef {
+  key: SemanticKey;
+  label: string;
+  description: string;
+}
+
+const SEMANTIC_DEFS: SemanticDef[] = [
+  {
+    key: "background",
+    label: "背景",
+    description: "ターミナル / アプリ全体の背景",
+  },
+  {
+    key: "foreground",
+    label: "前景（テキスト）",
+    description: "ターミナル文字色 / 主要テキスト",
+  },
+  {
+    key: "accent",
+    label: "アクセント",
+    description: "アクティブペイン枠 / カーソル / 選択",
+  },
+  {
+    key: "textSecondary",
+    label: "サブテキスト",
+    description: "弱め / 補助情報の文字色",
+  },
+  {
+    key: "border",
+    label: "ボーダー",
+    description: "境界線 / ボタンホバー",
+  },
+  {
+    key: "danger",
+    label: "Danger",
+    description: "削除 / エラーの強調色",
+  },
 ];
 
+// セマンティック色 → 実フィールドのマッピング。各セマンティックは互いに排他的。
+type ThemeUpdate = {
+  colors?: Partial<AppColors>;
+  xterm?: Partial<XtermTheme>;
+};
+
+export function semanticUpdate(key: SemanticKey, value: string): ThemeUpdate {
+  switch (key) {
+    case "background":
+      return {
+        colors: {
+          background: value,
+          headerBackground: value,
+          terminalBackground: value,
+        },
+        xterm: {
+          background: value,
+          cursorAccent: value,
+          selectionForeground: value,
+        },
+      };
+    case "foreground":
+      return {
+        colors: { text: value },
+        xterm: { foreground: value },
+      };
+    case "accent":
+      return {
+        colors: {
+          accent: value,
+          activeTerminal: value,
+          borderActive: value,
+        },
+        xterm: { cursor: value, selectionBackground: value },
+      };
+    case "textSecondary":
+      return { colors: { textSecondary: value } };
+    case "border":
+      return { colors: { border: value, buttonHover: value } };
+    case "danger":
+      return { colors: { danger: value } };
+  }
+}
+
+// 表示用に現在のセマンティック値を抽出（代表フィールドを 1 つ参照）。
+export function readSemantic(theme: Theme, key: SemanticKey): string {
+  switch (key) {
+    case "background":
+      return theme.xterm.background;
+    case "foreground":
+      return theme.xterm.foreground;
+    case "accent":
+      return theme.colors.accent;
+    case "textSecondary":
+      return theme.colors.textSecondary;
+    case "border":
+      return theme.colors.border;
+    case "danger":
+      return theme.colors.danger;
+  }
+}
+
 const ANSI_KEYS: (keyof XtermTheme)[] = XTERM_THEME_KEYS.filter(
-  (k) => !BASIC_XTERM_KEYS.includes(k),
+  (k) =>
+    ![
+      "background",
+      "foreground",
+      "cursor",
+      "cursorAccent",
+      "selectionBackground",
+      "selectionForeground",
+    ].includes(k),
 );
 
-const XTERM_LABELS: Record<keyof XtermTheme, string> = {
-  background: "Background（背景）",
-  foreground: "Foreground（前景）",
-  cursor: "Cursor",
-  cursorAccent: "Cursor Accent",
-  selectionBackground: "Selection Background",
-  selectionForeground: "Selection Foreground",
+const ANSI_LABELS: Record<string, string> = {
   black: "ANSI Black",
   red: "ANSI Red",
   green: "ANSI Green",
@@ -54,20 +156,6 @@ const XTERM_LABELS: Record<keyof XtermTheme, string> = {
   brightMagenta: "Bright Magenta",
   brightCyan: "Bright Cyan",
   brightWhite: "Bright White",
-};
-
-const APP_LABELS: Record<keyof AppColors, string> = {
-  background: "App 背景",
-  headerBackground: "ヘッダー背景",
-  terminalBackground: "ターミナル背景",
-  text: "テキスト",
-  textSecondary: "サブテキスト",
-  accent: "アクセント",
-  activeTerminal: "アクティブペイン枠",
-  border: "ボーダー",
-  borderActive: "ボーダー（アクティブ）",
-  buttonHover: "ボタンホバー",
-  danger: "Danger（赤系）",
 };
 
 export const AppearanceSettings: React.FC = () => {
@@ -154,7 +242,8 @@ export const AppearanceSettings: React.FC = () => {
     [overrideTheme, setOverride],
   );
 
-  const handleXtermColor = useCallback(
+  // ANSI 16 色は xterm のフィールドを直接更新する（セマンティック対象外）
+  const handleAnsiColor = useCallback(
     (key: keyof XtermTheme, value: string) => {
       if (!overrideTheme) return;
       setOverride({
@@ -165,12 +254,17 @@ export const AppearanceSettings: React.FC = () => {
     [overrideTheme, setOverride],
   );
 
-  const handleAppColor = useCallback(
-    (key: keyof AppColors, value: string) => {
+  // セマンティック 6 色: 代表フィールドだけ受け取り、関連する全フィールドを一括更新する。
+  // これにより xterm.background と colors.terminalBackground のような重複が同時に動き、
+  // 「片方だけ動いて干渉」のバグが起きない。
+  const handleSemanticColor = useCallback(
+    (key: SemanticKey, value: string) => {
       if (!overrideTheme) return;
+      const update = semanticUpdate(key, value);
       setOverride({
         ...overrideTheme,
-        colors: { ...overrideTheme.colors, [key]: value },
+        colors: { ...overrideTheme.colors, ...(update.colors ?? {}) },
+        xterm: { ...overrideTheme.xterm, ...(update.xterm ?? {}) },
       });
     },
     [overrideTheme, setOverride],
@@ -347,38 +441,43 @@ export const AppearanceSettings: React.FC = () => {
         </Section>
       )}
 
-      <Accordion title="基本色（ターミナル）" defaultOpen={isCustom}>
-        {BASIC_XTERM_KEYS.map((key) => (
-          <ColorField
-            key={key}
-            label={XTERM_LABELS[key]}
-            value={currentTheme.xterm[key]}
-            onChange={(v) => handleXtermColor(key, v)}
-          />
-        ))}
-      </Accordion>
+      {isCustom && (
+        <Section title="カラー">
+          {SEMANTIC_DEFS.map((def) => (
+            <ColorField
+              key={def.key}
+              label={def.label}
+              value={readSemantic(currentTheme, def.key)}
+              onChange={(v) => handleSemanticColor(def.key, v)}
+            />
+          ))}
+          <p
+            style={{
+              margin: 0,
+              marginTop: theme.spacing.xs,
+              color: theme.colors.textSecondary,
+              fontSize: "11px",
+              lineHeight: 1.5,
+            }}
+          >
+            各色は関連する複数のフィールド（例: 背景 → ターミナル背景 +
+            ヘッダー背景 + カーソル文字色）にまとめて反映されます。
+          </p>
+        </Section>
+      )}
 
-      <Accordion title="ANSI 16 色">
-        {ANSI_KEYS.map((key) => (
-          <ColorField
-            key={key}
-            label={XTERM_LABELS[key]}
-            value={currentTheme.xterm[key]}
-            onChange={(v) => handleXtermColor(key, v)}
-          />
-        ))}
-      </Accordion>
-
-      <Accordion title="App UI カラー">
-        {APP_COLOR_KEYS.map((key) => (
-          <ColorField
-            key={key}
-            label={APP_LABELS[key]}
-            value={currentTheme.colors[key]}
-            onChange={(v) => handleAppColor(key, v)}
-          />
-        ))}
-      </Accordion>
+      {isCustom && (
+        <Accordion title="ANSI 16 色（上級）">
+          {ANSI_KEYS.map((key) => (
+            <ColorField
+              key={key}
+              label={ANSI_LABELS[key] ?? key}
+              value={currentTheme.xterm[key]}
+              onChange={(v) => handleAnsiColor(key, v)}
+            />
+          ))}
+        </Accordion>
+      )}
 
       <Section title="インポート / エクスポート">
         <div

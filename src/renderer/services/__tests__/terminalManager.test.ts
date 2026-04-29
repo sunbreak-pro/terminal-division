@@ -319,6 +319,72 @@ describe("terminalManager", () => {
       const result = terminalManager.fit("non-existent-5");
       expect(result).toBeNull();
     });
+
+    it("invalidateLastSize forces fit() to return size again on same dimensions", () => {
+      terminalManager.getOrCreate(
+        "test-fit-invalidate",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const first = terminalManager.fit("test-fit-invalidate");
+      expect(first).toEqual({ cols: 80, rows: 24 });
+      // キャッシュにより 2 回目は null
+      expect(terminalManager.fit("test-fit-invalidate")).toBeNull();
+      // invalidate するとサイズ変化なしでも再度値を返す
+      terminalManager.invalidateLastSize("test-fit-invalidate");
+      const after = terminalManager.fit("test-fit-invalidate");
+      expect(after).toEqual({ cols: 80, rows: 24 });
+    });
+
+    it("invalidateLastSize is a no-op for unknown id", () => {
+      // 例外を投げずに静かに完了
+      expect(() =>
+        terminalManager.invalidateLastSize("never-created"),
+      ).not.toThrow();
+    });
+
+    it("returns null and schedules rAF retry when fitAddon throws once", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-fit-retry",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const fitMock = instance.fitAddon.fit as unknown as ReturnType<
+        typeof vi.fn
+      >;
+      // 1 回目だけ例外を投げ、2 回目以降は通常成功する mock 動作
+      fitMock.mockImplementationOnce(() => {
+        throw new Error("offsetWidth=0");
+      });
+
+      // rAF を同期実行する mock を仕込む
+      const rafSpy = vi
+        .spyOn(globalThis, "requestAnimationFrame")
+        .mockImplementation((cb: FrameRequestCallback) => {
+          cb(0);
+          return 0 as unknown as number;
+        });
+
+      mockPtyApi.resize.mockClear();
+      const result = terminalManager.fit("test-fit-retry");
+      // 1 回目は例外で null
+      expect(result).toBeNull();
+      // rAF リトライで pty.resize が直接呼ばれている
+      expect(mockPtyApi.resize).toHaveBeenCalledWith("test-fit-retry", 80, 24);
+      rafSpy.mockRestore();
+    });
+
+    it("returns null when terminal cols is 0 (DOM not ready)", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-fit-zero",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      // fit() は何もせず、cols は MockTerminal のフィールドで上書き
+      (instance.terminal as unknown as { cols: number; rows: number }).cols = 0;
+      const result = terminalManager.fit("test-fit-zero");
+      expect(result).toBeNull();
+    });
   });
 
   describe("focus", () => {
@@ -538,6 +604,77 @@ describe("terminalManager", () => {
       expect(() => {
         terminalManager.trimScrollback("non-existent-pane", 100);
       }).not.toThrow();
+    });
+  });
+
+  describe("applyOptions", () => {
+    it("writes through non-size-affecting keys without re-fitting", () => {
+      const instance = terminalManager.getOrCreate(
+        "apply-1",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const fitSpy = vi.spyOn(instance.fitAddon, "fit");
+      fitSpy.mockClear();
+
+      const result = terminalManager.applyOptions("apply-1", {
+        cursorStyle: "underline",
+        cursorBlink: false,
+        scrollback: 5000,
+      });
+
+      expect(result).toBeNull(); // 非セルサイズキーは fit を起動しない
+      expect(fitSpy).not.toHaveBeenCalled();
+      // option は xterm 側へ反映されている（Mock の options に直接書かれる）
+      const opts = instance.terminal.options as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(opts.cursorStyle).toBe("underline");
+      expect(opts.cursorBlink).toBe(false);
+      expect(opts.scrollback).toBe(5000);
+    });
+
+    it("re-fits when size-affecting keys (fontSize / fontFamily / lineHeight) change", () => {
+      const instance = terminalManager.getOrCreate(
+        "apply-2",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const fitSpy = vi.spyOn(instance.fitAddon, "fit");
+      // モックの fitAddon.fit は通常 cols/rows を変えないので applyOptions の戻り値は
+      // null になる可能性があるが、fit() の呼び出し自体は確認できる。
+      fitSpy.mockClear();
+
+      terminalManager.applyOptions("apply-2", { fontSize: 18 });
+      expect(fitSpy).toHaveBeenCalled();
+
+      const opts = instance.terminal.options as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(opts.fontSize).toBe(18);
+    });
+
+    it("ignores undefined values in the patch", () => {
+      const instance = terminalManager.getOrCreate(
+        "apply-3",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const opts = instance.terminal.options as unknown as Record<
+        string,
+        unknown
+      >;
+      const before = opts.fontSize;
+      terminalManager.applyOptions("apply-3", { fontSize: undefined });
+      expect(opts.fontSize).toBe(before);
+    });
+
+    it("returns null for unknown id (safe no-op)", () => {
+      expect(
+        terminalManager.applyOptions("ghost", { fontSize: 18 }),
+      ).toBeNull();
     });
   });
 

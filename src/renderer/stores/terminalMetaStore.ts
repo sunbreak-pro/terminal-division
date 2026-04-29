@@ -21,6 +21,11 @@ export interface TerminalMeta {
   // openMarkdown が呼ばれたタイミングのカウンタ。同一ファイルを再ロード
   // した場合に MarkdownEditor を remount するための key 構成要素。
   mdLoadedAt: number;
+  // ペイン固有のフォントサイズ上書き（Cmd+= / Cmd+- / Cmd+0 で揮発的に変動）。
+  // null = グローバル settings.terminal.fontSize に従う。session-persist 対象外。
+  fontSizeOverride: number | null;
+  // 手動 rename されたペインタイトル。null = CWD 由来の自動表示。
+  customTitle: string | null;
 }
 
 interface TerminalMetaStore {
@@ -29,6 +34,8 @@ interface TerminalMetaStore {
   setProcessName: (id: string, processName: string) => void;
   setShellName: (id: string, shellName: string) => void;
   initMeta: (id: string) => void;
+  setFontSizeOverride: (id: string, value: number | null) => void;
+  setCustomTitle: (id: string, value: string | null) => void;
   // 分割直後の新ペインに対し、init と cwd 設定を 1 回の set で行う。
   // サブスクライバが「meta だけある / cwd だけある」中間状態を観測しないことを保証する。
   initLeafMeta: (id: string, cwd: string | null) => void;
@@ -83,6 +90,8 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
         mdSavedContent: null,
         mdDirty: false,
         mdLoadedAt: 0,
+        fontSizeOverride: null,
+        customTitle: null,
       });
       set({ metas });
     },
@@ -102,6 +111,8 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
         mdSavedContent: null,
         mdDirty: false,
         mdLoadedAt: 0,
+        fontSizeOverride: null,
+        customTitle: null,
       });
       set({ metas });
     },
@@ -135,10 +146,16 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
           mdSavedContent: null,
           mdDirty: false,
           mdLoadedAt: 0,
+          fontSizeOverride: null,
+          customTitle: null,
         });
       }
       set({ metas });
     },
+
+    setFontSizeOverride: (id, value) =>
+      updateMeta(id, { fontSizeOverride: value }),
+    setCustomTitle: (id, value) => updateMeta(id, { customTitle: value }),
 
     openMarkdown: (id, filePath, content) =>
       updateMeta(id, {

@@ -11,13 +11,16 @@ describe("markdownDialogStore", () => {
   });
 
   it("showOpenConfirm sets a request with kind='open-confirm'", () => {
-    let confirmed = false;
+    let confirmedPaneId: string | null = null;
     useMarkdownDialogStore.getState().showOpenConfirm({
       filePath: "/foo/bar.md",
-      paneId: "p1",
-      paneNumber: 2,
-      onConfirm: () => {
-        confirmed = true;
+      availablePanes: [
+        { paneId: "p1", paneNumber: 1 },
+        { paneId: "p2", paneNumber: 2 },
+      ],
+      defaultPaneId: "p2",
+      onConfirm: (paneId) => {
+        confirmedPaneId = paneId;
       },
     });
     const state = useMarkdownDialogStore.getState().current;
@@ -25,10 +28,10 @@ describe("markdownDialogStore", () => {
     expect(state?.kind).toBe("open-confirm");
     if (state?.kind === "open-confirm") {
       expect(state.filePath).toBe("/foo/bar.md");
-      expect(state.paneId).toBe("p1");
-      expect(state.paneNumber).toBe(2);
-      state.onConfirm();
-      expect(confirmed).toBe(true);
+      expect(state.availablePanes).toHaveLength(2);
+      expect(state.defaultPaneId).toBe("p2");
+      state.onConfirm("p1");
+      expect(confirmedPaneId).toBe("p1");
     }
   });
 
@@ -60,8 +63,8 @@ describe("markdownDialogStore", () => {
   it("dismiss clears the current request", () => {
     useMarkdownDialogStore.getState().showOpenConfirm({
       filePath: "/foo/bar.md",
-      paneId: "p1",
-      paneNumber: 1,
+      availablePanes: [{ paneId: "p1", paneNumber: 1 }],
+      defaultPaneId: "p1",
       onConfirm: () => {},
     });
     expect(useMarkdownDialogStore.getState().current).not.toBeNull();
@@ -72,8 +75,8 @@ describe("markdownDialogStore", () => {
   it("subsequent show* replaces the prior request (single-active model)", () => {
     useMarkdownDialogStore.getState().showOpenConfirm({
       filePath: "/foo/a.md",
-      paneId: "p1",
-      paneNumber: 1,
+      availablePanes: [{ paneId: "p1", paneNumber: 1 }],
+      defaultPaneId: "p1",
       onConfirm: () => {},
     });
     useMarkdownDialogStore.getState().showUnsaved({

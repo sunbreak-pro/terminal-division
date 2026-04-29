@@ -43,6 +43,23 @@ import {
   resolveShortcutKey,
   type ShortcutId,
 } from "./shortcuts/registry";
+import { FONT_SIZE_MIN, FONT_SIZE_MAX, clampNumber } from "../shared/settings";
+
+// アクティブペインのフォントサイズを delta だけ動かす（Cmd+= / Cmd+-）。
+// 現在の有効サイズ（override or グローバル）を起点に ±1px、クランプ範囲を適用。
+function adjustActivePaneFontSize(paneId: string, delta: number): void {
+  const meta = useTerminalMetaStore.getState().metas.get(paneId);
+  const settings = useSettingsStore.getState().settings.terminal;
+  const current = meta?.fontSizeOverride ?? settings.fontSize;
+  const next = clampNumber(
+    current + delta,
+    FONT_SIZE_MIN,
+    FONT_SIZE_MAX,
+    current,
+  );
+  if (next === current) return;
+  useTerminalMetaStore.getState().setFontSizeOverride(paneId, next);
+}
 
 // xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
 // 通常の input/textarea ではない。Cmd+Z 等を sidebar / terminal にディスパッチする
@@ -433,6 +450,26 @@ const App: React.FC = () => {
       "open-settings": (e) => {
         e.preventDefault();
         useSettingsModalStore.getState().open();
+      },
+      "font-zoom-in": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!activeTerminalId) return;
+        adjustActivePaneFontSize(activeTerminalId, +1);
+      },
+      "font-zoom-out": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!activeTerminalId) return;
+        adjustActivePaneFontSize(activeTerminalId, -1);
+      },
+      "font-zoom-reset": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!activeTerminalId) return;
+        useTerminalMetaStore
+          .getState()
+          .setFontSizeOverride(activeTerminalId, null);
       },
     };
 

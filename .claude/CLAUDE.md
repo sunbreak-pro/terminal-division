@@ -260,6 +260,7 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 - **T2-7**: セッション永続化（レイアウト二分木 + 各ペインの CWD のみ JSON 永続化、起動時に最初のウィンドウへ復元、検証失敗時はサイレントフォールバック、multi-window はスコープ外）
 - **T2-8**: ペイン内 Markdown エディタ（CodeMirror 6、`.md` / `.markdown` のみ、サイドバー右クリック → 「編集する」起動、ペインヘッダーに CLI / MD タブ、Cmd+S 保存・Cmd+Z/Cmd+Shift+Z で履歴、未保存時のタブ切替・別ファイル・Cmd+W で警告モーダル、`viewMode=md` の間も PTY は `display:none` で生存し CLI 復帰時に状態保持。MD 状態自体はセッション永続化対象外）
 - **T2-9**: スクロールバック削除メニュー（ヘッダーのゴミ箱アイコン → ポップオーバーで「全消去 / 直近 100・500・1000 行残す / 完全リセット」を選択。部分削除は `terminal.options.scrollback` の一時的な引き下げで trim を発火、microtask で元値復帰）
+- **T2-10**: カスタマイズ拡張（`AppSettings` に `terminal` / `editor` / `general` を追加して永続化。タブ「ターミナル」「エディタ」「一般」で UI 提供。ターミナル: フォントサイズ / ファミリー / 行間 / カーソルスタイル + blink / scrollback / Bell（none/visual/sound）/ 単語区切り / デフォルトシェル / デフォルト CWD。エディタ: フォントサイズ / ファミリー / softWrap。一般: セッション復元 ON/OFF / PTY 異常終了通知。フォントズーム: `Cmd+=` / `Cmd+-` / `Cmd+0` がアクティブペインの揮発オーバーライドを操作（per-pane delta、session-persist 対象外）。ペインタイトル: SubHeader をダブルクリックで rename、空文字列確定で自動表示（CWD 由来）に戻る）
 
 ### Tier 3: 実験 / 凍結候補
 

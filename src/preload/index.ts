@@ -22,8 +22,12 @@ ipcRenderer.on("window:initialCwd", (_, cwd: string) => {
 
 const api = {
   pty: {
-    create: (id: string, initialCwd?: string): Promise<boolean> =>
-      ipcRenderer.invoke("pty:create", id, initialCwd),
+    create: (
+      id: string,
+      initialCwd?: string,
+      options?: { shell?: string; defaultCwd?: string },
+    ): Promise<boolean> =>
+      ipcRenderer.invoke("pty:create", id, initialCwd, options),
     write: (id: string, data: string): void =>
       ipcRenderer.send("pty:write", { id, data }),
     resize: (id: string, cols: number, rows: number): void =>

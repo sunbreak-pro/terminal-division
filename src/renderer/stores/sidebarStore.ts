@@ -9,6 +9,8 @@ interface SidebarStore {
   selectedTabCwd: string | null;
   selectedNodePath: string | null;
   editingPath: string | null;
+  // ディレクトリツリーのファイル名フィルタ。空文字なら無効。
+  searchQuery: string;
   // Cmd+Z / Cmd+Shift+Z をサイドバーとターミナルどちらに振り分けるかの判定材料。
   // mousedown / focus 時に更新する。
   lastInteractedArea: InteractionArea;
@@ -21,6 +23,7 @@ interface SidebarStore {
   setSelectedTabCwd: (cwd: string | null) => void;
   setSelectedNodePath: (path: string | null) => void;
   setEditingPath: (path: string | null) => void;
+  setSearchQuery: (query: string) => void;
   resetExpansionForCwd: (cwd: string) => void;
   setLastInteractedArea: (area: InteractionArea) => void;
 }
@@ -47,6 +50,7 @@ export const useSidebarStore = create<SidebarStore>((set, get) => ({
   selectedTabCwd: null,
   selectedNodePath: null,
   editingPath: null,
+  searchQuery: "",
   lastInteractedArea: "terminal",
 
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
@@ -71,6 +75,11 @@ export const useSidebarStore = create<SidebarStore>((set, get) => ({
   setSelectedTabCwd: (cwd) => set({ selectedTabCwd: cwd }),
   setSelectedNodePath: (path) => set({ selectedNodePath: path }),
   setEditingPath: (path) => set({ editingPath: path }),
+
+  setSearchQuery: (query) => {
+    if (get().searchQuery === query) return;
+    set({ searchQuery: query });
+  },
 
   // タブ切替時に他タブの展開状態を保持しないオプション（今回は呼び出さないが API として用意）
   resetExpansionForCwd: (cwd) => {

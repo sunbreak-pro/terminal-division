@@ -8,6 +8,8 @@ const mockAttachToContainer = vi.fn();
 const mockFocus = vi.fn();
 const mockScrollToBottom = vi.fn();
 const mockFit = vi.fn();
+const mockInvalidateLastSize = vi.fn();
+const mockApplyOptions = vi.fn(() => null);
 
 vi.mock("../../services/terminalManager", () => ({
   getOrCreate: (...args: unknown[]) => mockGetOrCreate(...args),
@@ -15,6 +17,8 @@ vi.mock("../../services/terminalManager", () => ({
   focus: (...args: unknown[]) => mockFocus(...args),
   scrollToBottom: (...args: unknown[]) => mockScrollToBottom(...args),
   fit: (...args: unknown[]) => mockFit(...args),
+  invalidateLastSize: (...args: unknown[]) => mockInvalidateLastSize(...args),
+  applyOptions: (...args: unknown[]) => mockApplyOptions(...args),
 }));
 
 // terminalStoreモック
@@ -73,15 +77,42 @@ vi.mock("../../utils/rafDebounce", () => ({
   }),
 }));
 
-// terminalMetaStoreモック
-vi.mock("../../stores/terminalMetaStore", () => ({
-  useTerminalMetaStore: {
-    getState: () => ({
-      metas: new Map(),
+// terminalMetaStoreモック。useTerminalMeta は viewMode 切替テストで上書き可能に
+const mockUseTerminalMeta = vi.fn(() => undefined as unknown);
+vi.mock("../../stores/terminalMetaStore", () => {
+  const useTerminalMetaStore = Object.assign(
+    // 呼び出し時（zustand selector フック）は selector に空 metas を渡して評価
+    (selector: (s: { metas: Map<string, unknown> }) => unknown) =>
+      selector({ metas: new Map() }),
+    {
+      getState: () => ({
+        metas: new Map(),
+        setFontSizeOverride: () => {},
+        setCustomTitle: () => {},
+      }),
+    },
+  );
+  return {
+    useTerminalMetaStore,
+    useTerminalMeta: (...args: unknown[]) => mockUseTerminalMeta(...args),
+  };
+});
+
+// settingsStoreモック（terminal 設定購読用）
+vi.mock("../../stores/settingsStore", async () => {
+  const { DEFAULT_SETTINGS } = await import("../../../shared/settings");
+  return {
+    useTerminalSettings: () => DEFAULT_SETTINGS.terminal,
+    useEditorSettings: () => DEFAULT_SETTINGS.editor,
+    useGeneralSettings: () => DEFAULT_SETTINGS.general,
+    useSettingsStore: Object.assign(() => DEFAULT_SETTINGS, {
+      getState: () => ({ settings: DEFAULT_SETTINGS }),
     }),
-  },
-  useTerminalMeta: () => undefined,
-}));
+    useShortcutBindings: () => ({}),
+    useWindowSettings: () => DEFAULT_SETTINGS.window,
+    useCustomThemes: () => DEFAULT_SETTINGS.theme.customThemes,
+  };
+});
 
 import * as terminalStore from "../../stores/terminalStore";
 
@@ -211,7 +242,12 @@ describe("TerminalPane", () => {
     render(<TerminalPane id="terminal-1" paneNumber={1} />);
 
     // useLayoutEffect で同期発火するため setTimeout 待ち不要
-    expect(window.api.pty.create).toHaveBeenCalledWith("terminal-1", undefined);
+    expect(window.api.pty.create).toHaveBeenCalledWith(
+      "terminal-1",
+      undefined,
+      // settings.terminal の defaultShell / defaultCwd（既定は空 → undefined）
+      { shell: undefined, defaultCwd: undefined },
+    );
   });
 
   it("does not create PTY if already created", () => {
@@ -225,5 +261,51 @@ describe("TerminalPane", () => {
 
     // createは呼ばれない（fit は handleFit 経由で同期実行される）
     expect(window.api.pty.create).not.toHaveBeenCalled();
+  });
+
+  it("invalidates and re-fits on md → cli viewMode transition", () => {
+    // 初回マウント時は md 状態
+    mockUseTerminalMeta.mockReturnValue({
+      viewMode: "md",
+      mdFilePath: "/foo.md",
+    });
+    mockGetOrCreate.mockReturnValue({
+      ...mockTerminalInstance,
+      ptyCreated: true,
+    });
+
+    const { rerender } = render(
+      <TerminalPane id="terminal-1" paneNumber={1} />,
+    );
+
+    // 初期マウント分の呼び出しをクリアし、md→cli 遷移だけを観察
+    mockInvalidateLastSize.mockClear();
+    mockFit.mockClear();
+    vi.mocked(window.api.pty.resize).mockClear();
+
+    // cli に戻す。React.memo を bypass するため paneNumber も変える
+    mockUseTerminalMeta.mockReturnValue(undefined);
+    rerender(<TerminalPane id="terminal-1" paneNumber={2} />);
+
+    expect(mockInvalidateLastSize).toHaveBeenCalledWith("terminal-1");
+    expect(mockFit).toHaveBeenCalledWith("terminal-1");
+    expect(window.api.pty.resize).toHaveBeenCalledWith("terminal-1", 80, 24);
+  });
+
+  it("does not invalidate when staying in cli mode", () => {
+    mockUseTerminalMeta.mockReturnValue(undefined);
+    mockGetOrCreate.mockReturnValue({
+      ...mockTerminalInstance,
+      ptyCreated: true,
+    });
+
+    const { rerender } = render(
+      <TerminalPane id="terminal-1" paneNumber={1} />,
+    );
+    mockInvalidateLastSize.mockClear();
+
+    rerender(<TerminalPane id="terminal-1" paneNumber={2} />);
+
+    expect(mockInvalidateLastSize).not.toHaveBeenCalled();
   });
 });

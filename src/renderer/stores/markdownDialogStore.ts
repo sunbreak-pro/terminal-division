@@ -6,13 +6,21 @@ import type { UnsavedReason } from "../components/UnsavedChangesModal";
 // からは showXxx() を呼ぶだけで良い構成にする。コールバックを state に持つのは
 // 異色だが、prop drilling や Context 配線を避けてコード量を抑える狙い。
 
+export interface PaneChoice {
+  paneId: string;
+  paneNumber: number;
+}
+
 export interface OpenConfirmRequest {
   kind: "open-confirm";
   filePath: string;
-  paneId: string;
-  paneNumber: number;
-  // モーダルで「はい」が押された時の処理 (ファイル読込 + openMarkdown)
-  onConfirm: () => void;
+  // ダイアログで選択可能なペイン一覧（ペイン番号順）
+  availablePanes: PaneChoice[];
+  // ダイアログ初期選択ペイン
+  defaultPaneId: string;
+  // モーダルで「はい」が押された時の処理 (ファイル読込 + openMarkdown)。
+  // ユーザーがダイアログ内で変更したペイン ID を受け取る。
+  onConfirm: (paneId: string) => void;
 }
 
 export interface UnsavedRequest {

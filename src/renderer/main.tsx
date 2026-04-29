@@ -10,8 +10,13 @@ import { restoreSession } from "./services/sessionRestore";
 // IPC は invoke ベースで取得し、解決後に React マウントすることでタイミング競合を回避。
 async function bootstrap(): Promise<void> {
   try {
-    const restoreData = await window.api.session.getRestoreData();
-    if (restoreData) {
+    // 設定の general.restoreSessionOnLaunch が false なら復元をスキップ。
+    // settings の get と restore data の get は並列に実行して起動時間への影響を最小化する。
+    const [settings, restoreData] = await Promise.all([
+      window.api.settings.get(),
+      window.api.session.getRestoreData(),
+    ]);
+    if (settings.general.restoreSessionOnLaunch && restoreData) {
       restoreSession(restoreData);
     }
   } catch (e) {

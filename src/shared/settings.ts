@@ -23,15 +23,83 @@ export interface ThemeSettings {
   customThemes: Theme[];
 }
 
+// ===== Terminal カスタマイズ =====
+
+export type CursorStyle = "block" | "underline" | "bar";
+export type BellStyle = "none" | "visual" | "sound";
+
+export interface TerminalSettings {
+  // フォントサイズ（px）。Cmd+= / Cmd+- は per-pane の揮発オーバーライドだが
+  // この値は新規ペイン作成時のグローバルなデフォルトとして永続化される。
+  fontSize: number;
+  // CSS font-family。複数フォールバック可（,区切り）。
+  fontFamily: string;
+  // xterm の lineHeight。1.0〜2.0。
+  lineHeight: number;
+  // カーソル形状
+  cursorStyle: CursorStyle;
+  // カーソル点滅
+  cursorBlink: boolean;
+  // 履歴行数
+  scrollback: number;
+  // ベル動作
+  bellStyle: BellStyle;
+  // ダブルクリック単語選択時の区切り文字
+  wordSeparator: string;
+  // PTY 起動シェル。空文字列 = $SHELL に従う（既定）
+  defaultShell: string;
+  // 新規ウィンドウのデフォルト CWD。空文字列 = $HOME（既定）
+  defaultCwd: string;
+}
+
+// ===== Markdown エディタ カスタマイズ =====
+
+export interface EditorSettings {
+  fontSize: number;
+  fontFamily: string;
+  // ソフトラップ（折り返し）
+  softWrap: boolean;
+}
+
+// ===== 一般 =====
+
+export interface GeneralSettings {
+  // 起動時にレイアウト + CWD を復元するか
+  restoreSessionOnLaunch: boolean;
+  // PTY が異常終了したときに macOS 通知を出すか
+  ptyExitNotification: boolean;
+}
+
 export interface AppSettings {
   version: typeof SETTINGS_VERSION;
   theme: ThemeSettings;
   shortcuts: ShortcutBindings;
   window: WindowSettings;
+  terminal: TerminalSettings;
+  editor: EditorSettings;
+  general: GeneralSettings;
 }
 
 export const OPACITY_MIN = 0.5;
 export const OPACITY_MAX = 1.0;
+
+// クランプ範囲（UI / validate 双方で参照）
+export const FONT_SIZE_MIN = 8;
+export const FONT_SIZE_MAX = 32;
+export const LINE_HEIGHT_MIN = 1.0;
+export const LINE_HEIGHT_MAX = 2.0;
+export const SCROLLBACK_MIN = 1000;
+export const SCROLLBACK_MAX = 100000;
+export const EDITOR_FONT_SIZE_MIN = 10;
+export const EDITOR_FONT_SIZE_MAX = 32;
+
+// 既定値（freeze で書換ガード）
+export const DEFAULT_TERMINAL_FONT_FAMILY =
+  'Menlo, Monaco, "Courier New", monospace';
+export const DEFAULT_EDITOR_FONT_FAMILY =
+  '-apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Helvetica Neue", Arial, sans-serif';
+// xterm の wordSeparator 既定（空白 + よくある区切り記号）
+export const DEFAULT_WORD_SEPARATOR = " ()[]{}',\"`";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   version: SETTINGS_VERSION,
@@ -44,14 +112,38 @@ export const DEFAULT_SETTINGS: AppSettings = {
     opacity: 1.0,
     vibrancyEnabled: false,
   },
+  terminal: {
+    fontSize: 13,
+    fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
+    lineHeight: 1.2,
+    cursorStyle: "block",
+    cursorBlink: true,
+    scrollback: 10000,
+    bellStyle: "none",
+    wordSeparator: DEFAULT_WORD_SEPARATOR,
+    defaultShell: "",
+    defaultCwd: "",
+  },
+  editor: {
+    fontSize: 13.5,
+    fontFamily: DEFAULT_EDITOR_FONT_FAMILY,
+    softWrap: true,
+  },
+  general: {
+    restoreSessionOnLaunch: true,
+    ptyExitNotification: false,
+  },
 };
 
-// 部分更新用のディープな Partial 型。renderer から「window.opacity だけ更新」
+// 部分更新用のディープな Partial 型。renderer から「terminal.fontSize だけ更新」
 // のような部分パッチを送れるようにする。
 export type PartialAppSettings = {
   theme?: Partial<ThemeSettings>;
   shortcuts?: ShortcutBindings;
   window?: Partial<WindowSettings>;
+  terminal?: Partial<TerminalSettings>;
+  editor?: Partial<EditorSettings>;
+  general?: Partial<GeneralSettings>;
 };
 
 function clampOpacity(value: unknown): number {
@@ -60,6 +152,18 @@ function clampOpacity(value: unknown): number {
   }
   if (value < OPACITY_MIN) return OPACITY_MIN;
   if (value > OPACITY_MAX) return OPACITY_MAX;
+  return value;
+}
+
+export function clampNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < min) return min;
+  if (value > max) return max;
   return value;
 }
 
@@ -90,6 +194,118 @@ function validateCustomThemes(raw: unknown): Theme[] {
   return valid;
 }
 
+function validateString(raw: unknown, fallback: string, maxLen = 1024): string {
+  if (typeof raw !== "string") return fallback;
+  if (raw.length > maxLen) return fallback;
+  return raw;
+}
+
+function validateCursorStyle(raw: unknown): CursorStyle {
+  if (raw === "block" || raw === "underline" || raw === "bar") return raw;
+  return DEFAULT_SETTINGS.terminal.cursorStyle;
+}
+
+function validateBellStyle(raw: unknown): BellStyle {
+  if (raw === "none" || raw === "visual" || raw === "sound") return raw;
+  return DEFAULT_SETTINGS.terminal.bellStyle;
+}
+
+function validateTerminalSettings(raw: unknown): TerminalSettings {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    fontSize: clampNumber(
+      obj.fontSize,
+      FONT_SIZE_MIN,
+      FONT_SIZE_MAX,
+      DEFAULT_SETTINGS.terminal.fontSize,
+    ),
+    fontFamily: validateString(
+      obj.fontFamily,
+      DEFAULT_SETTINGS.terminal.fontFamily,
+      512,
+    ),
+    lineHeight: clampNumber(
+      obj.lineHeight,
+      LINE_HEIGHT_MIN,
+      LINE_HEIGHT_MAX,
+      DEFAULT_SETTINGS.terminal.lineHeight,
+    ),
+    cursorStyle: validateCursorStyle(obj.cursorStyle),
+    cursorBlink:
+      typeof obj.cursorBlink === "boolean"
+        ? obj.cursorBlink
+        : DEFAULT_SETTINGS.terminal.cursorBlink,
+    scrollback: Math.floor(
+      clampNumber(
+        obj.scrollback,
+        SCROLLBACK_MIN,
+        SCROLLBACK_MAX,
+        DEFAULT_SETTINGS.terminal.scrollback,
+      ),
+    ),
+    bellStyle: validateBellStyle(obj.bellStyle),
+    wordSeparator: validateString(
+      obj.wordSeparator,
+      DEFAULT_SETTINGS.terminal.wordSeparator,
+      64,
+    ),
+    defaultShell: validateString(
+      obj.defaultShell,
+      DEFAULT_SETTINGS.terminal.defaultShell,
+      512,
+    ),
+    defaultCwd: validateString(
+      obj.defaultCwd,
+      DEFAULT_SETTINGS.terminal.defaultCwd,
+      1024,
+    ),
+  };
+}
+
+function validateEditorSettings(raw: unknown): EditorSettings {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    fontSize: clampNumber(
+      obj.fontSize,
+      EDITOR_FONT_SIZE_MIN,
+      EDITOR_FONT_SIZE_MAX,
+      DEFAULT_SETTINGS.editor.fontSize,
+    ),
+    fontFamily: validateString(
+      obj.fontFamily,
+      DEFAULT_SETTINGS.editor.fontFamily,
+      512,
+    ),
+    softWrap:
+      typeof obj.softWrap === "boolean"
+        ? obj.softWrap
+        : DEFAULT_SETTINGS.editor.softWrap,
+  };
+}
+
+function validateGeneralSettings(raw: unknown): GeneralSettings {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    restoreSessionOnLaunch:
+      typeof obj.restoreSessionOnLaunch === "boolean"
+        ? obj.restoreSessionOnLaunch
+        : DEFAULT_SETTINGS.general.restoreSessionOnLaunch,
+    ptyExitNotification:
+      typeof obj.ptyExitNotification === "boolean"
+        ? obj.ptyExitNotification
+        : DEFAULT_SETTINGS.general.ptyExitNotification,
+  };
+}
+
 // 設定全体を検証して、違反フィールドはデフォルトに置換した正規化済み設定を返す。
 // セッション永続化（全否定）と異なり、設定はフィールド単位でフォールバックする。
 // ユーザーの大半の設定を救えた方がストレスが少ないため。
@@ -118,12 +334,18 @@ export function validateAppSettings(raw: unknown): AppSettings {
   };
 
   const shortcuts = validateShortcutBindings(obj.shortcuts);
+  const terminal = validateTerminalSettings(obj.terminal);
+  const editor = validateEditorSettings(obj.editor);
+  const general = validateGeneralSettings(obj.general);
 
   return {
     version: SETTINGS_VERSION,
     theme: { currentThemeId, customThemes },
     shortcuts,
     window,
+    terminal,
+    editor,
+    general,
   };
 }
 
@@ -137,6 +359,9 @@ export function mergeSettings(
     theme: { ...base.theme },
     shortcuts: { ...base.shortcuts },
     window: { ...base.window },
+    terminal: { ...base.terminal },
+    editor: { ...base.editor },
+    general: { ...base.general },
   };
 
   if (patch.theme) {
@@ -163,6 +388,27 @@ export function mergeSettings(
     }
   }
 
+  if (patch.terminal) {
+    next.terminal = validateTerminalSettings({
+      ...base.terminal,
+      ...patch.terminal,
+    });
+  }
+
+  if (patch.editor) {
+    next.editor = validateEditorSettings({
+      ...base.editor,
+      ...patch.editor,
+    });
+  }
+
+  if (patch.general) {
+    next.general = validateGeneralSettings({
+      ...base.general,
+      ...patch.general,
+    });
+  }
+
   return next;
 }
 
@@ -175,5 +421,8 @@ function cloneDefaults(): AppSettings {
     },
     shortcuts: {},
     window: { ...DEFAULT_SETTINGS.window },
+    terminal: { ...DEFAULT_SETTINGS.terminal },
+    editor: { ...DEFAULT_SETTINGS.editor },
+    general: { ...DEFAULT_SETTINGS.general },
   };
 }

@@ -39,6 +39,7 @@ describe("sidebarStore", () => {
       selectedTabCwd: null,
       selectedNodePath: null,
       editingPath: null,
+      searchQuery: "",
       lastInteractedArea: "terminal",
     });
   });
@@ -102,6 +103,18 @@ describe("sidebarStore", () => {
     expect(useSidebarStore.getState().selectedTabCwd).toBe("/x");
     useSidebarStore.getState().setSelectedTabCwd(null);
     expect(useSidebarStore.getState().selectedTabCwd).toBeNull();
+  });
+
+  it("setSearchQuery updates and is idempotent for unchanged value", () => {
+    expect(useSidebarStore.getState().searchQuery).toBe("");
+    useSidebarStore.getState().setSearchQuery("foo");
+    expect(useSidebarStore.getState().searchQuery).toBe("foo");
+    const before = useSidebarStore.getState();
+    useSidebarStore.getState().setSearchQuery("foo");
+    const after = useSidebarStore.getState();
+    expect(after).toBe(before);
+    useSidebarStore.getState().setSearchQuery("");
+    expect(useSidebarStore.getState().searchQuery).toBe("");
   });
 
   it("setEditingPath updates the editing target", () => {

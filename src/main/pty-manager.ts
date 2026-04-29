@@ -57,12 +57,22 @@ class PtyManager {
     }
   }
 
-  createPty(id: string, windowId: number, initialCwd?: string): boolean {
+  createPty(
+    id: string,
+    windowId: number,
+    initialCwd?: string,
+    customShell?: string,
+  ): boolean {
     if (this.processes.has(id)) {
       return false;
     }
 
-    const shell = process.env.SHELL || "/bin/zsh";
+    // ユーザー設定でシェルが指定されていて、実在する実行ファイルならそれを使う。
+    // 存在しない場合は $SHELL → /bin/zsh の順でフォールバック（黒画面回避）。
+    const shell =
+      customShell && fs.existsSync(customShell)
+        ? customShell
+        : process.env.SHELL || "/bin/zsh";
     const homeDir = os.homedir();
 
     // initialCwdが指定されていてディレクトリが存在する場合はそれを使用

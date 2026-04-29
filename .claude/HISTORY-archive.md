@@ -2,6 +2,50 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-26 - Markdown エディタのテーマ対応 UI/UX リデザイン
+
+#### 概要
+
+T2-8 で導入したペイン内 Markdown エディタが light テーマで「真っ白で見づらい」問題に対し、CodeMirror 設定をテーマ駆動に作り直した。原因は `EditorView.theme(..., { dark: true })` がハードコードされており（light テーマでも CodeMirror が dark モードとして動作）、かつ markdown 構文用の `HighlightStyle` が未定義で見出し / リンク / コード等が pale な default 色のままだったこと。修正は (a) 背景色の輝度から light/dark を自動判定して `dark` フラグを切替、(b) 見出し / 強調 / リンク / リストマーク / 引用 / 区切り線 / コード等を `theme.colors.accent` / `text` / `textSecondary` / `border` から派生させた `HighlightStyle` を新設、(c) 不透明だった選択背景を `withAlpha(accent, 0.28)` のセミトランスペアレントに、active line も `accent` 6–9% alpha に置換、(d) light テーマの editor 部分のみ `#fbfbf9` のオフホワイトに（xterm 側の light 設定には触れない）、(e) ファイルパスバーを `[MD]` バッジ + ディレクトリ淡色 + ファイル名強調に再設計。色操作ヘルパは `colorUtils.ts` に切り出して 25 件の単体テストを追加。
+
+#### 変更点
+
+- **MarkdownEditor.tsx**: `EditorView.theme()` の `{ dark: true }` ハードコードを `{ dark: !isLightBackground(theme.colors.terminalBackground) }` に変更（カスタムテーマも輝度判定で自動分岐）。`editorChrome` を `useMemo` で派生させ editorBg / gutterBg / codeBg / codeFg / ruleColor を一元管理。`.cm-selectionBackground` を `borderActive` ベタ塗り → `withAlpha(accent, 0.28)` に、`.cm-activeLine` / `.cm-activeLineGutter` を `buttonHover` → `withAlpha(accent, 0.06–0.16)` に置換。`.cm-content` に padding 14/6/32/6、`.cm-scroller` に lineHeight 1.65、フォントサイズ 13→13.5px、cursor 線幅 2px、`.cm-gutters` に `borderRight: 1px solid border` を追加。light テーマ時は editor 背景を pure white から `#fbfbf9` のオフホワイトに置換
+- **HighlightStyle 新設**: `@codemirror/language` の `syntaxHighlighting` + `HighlightStyle.define` で markdown 用構文ハイライトを定義。heading1–6 / strong / emphasis / strikethrough / link / url / monospace / quote / processingInstruction (= ListMark / HeaderMark) / contentSeparator / meta を `theme.colors.accent` / `text` / `textSecondary` / `border` および inline code 専用色（light=`#a3274a`、dark=`#e6a26a`）から派生
+- **ファイルパスバー再設計**: 単純な path 表示から `[MD]` バッジ（accent 12% alpha 背景 + 55% alpha ボーダー）+ ディレクトリ淡色 70% opacity + ファイル名 fontWeight 600 + `direction: rtl` で省略時もファイル名が見える形に変更
+- **新規 utility**: `src/renderer/utils/colorUtils.ts` に `withAlpha(hex, 0..1)` と `isLightBackground(hex)` を切り出し（`#rrggbb` 専用、不正形式・非対応形式は素通し / false 返し）。MarkdownEditor 内のインライン定義から外出しして再利用可能化
+- **新規テスト**: `utils/__tests__/colorUtils.test.ts` (25 件)
+- **テスト合計**: 25 ファイル / 361 件グリーン（修正前 336 から +25 件）
+- **設計判断**:
+  - **dark フラグ判定を `theme.id` ではなく輝度ベース**: カスタムテーマ（Settings UI で追加可能）を考慮すると id ベース判定はカバーしきれない
+  - **light テーマだけ editor 背景を `#fbfbf9` に**: pure white は長時間編集で疲れるが、テーマ全体を変えると影響が大きい
+  - **選択 / アクティブ行に alpha**: 旧実装は `borderActive` 不透明で選択文字が読めない致命的な UX 問題があった
+  - **HighlightStyle を別 useMemo に**: editorTheme と分離することで責務を明確化
+  - **ファイルパスの `direction: rtl`**: 長い絶対パスでも常に末尾（ファイル名）が見える
+
+### 2026-04-26 - Settings モーダル新設（テーマ / ショートカット / ウィンドウ統合）
+
+#### 概要
+
+Settings モーダル（800×600、左カテゴリ + 右タブ）を新設し、xterm.js `ITheme` 全 30 プロパティのカスタマイズ、ショートカット 24 ID の record-key 再割当（競合検出付き）、ウィンドウ不透明度スライダー + vibrancy トグルを 1 画面に統合。設計は VS Code / Zed 方式の「GUI first + JSON SSOT」で、`userData/settings.json` を Single Source of Truth にし、Renderer は `useSettingsStore` (Zustand) 経由で main からブロードキャストされる `settings:changed` を購読。テーマ編集は **「ライブプレビュー + 明示的保存」** モデルを採用：`themeStore.overrideTheme` に draft を保持して後ろのターミナル本体（xterm.js）にもリアルタイム反映、フッターの「保存」ボタンで `updateCustomTheme()` を呼び settings に永続化、「キャンセル」/× / ESC / 背景クリックで draft 破棄。`react-colorful` の HexColorPicker をポップオーバー化した `ColorField` 共通コンポーネントが、内部に draft state を持って **「タイプ中の不完全な HEX を親に流さない」** ことでテーマが消える致命バグを構造的に防ぐ。`.itermcolors`（XML plist）パーサを外部依存ゼロで実装し、`mbadolato/iTerm2-Color-Schemes` の 450+ プリセットをインポート可能。
+
+#### 変更点
+
+- **shared SSOT 化**: `src/shared/theme-types.ts` に `XtermTheme` / `AppColors` / `Theme` 型と `validateTheme` / `isHexColor` を集約。`src/shared/settings.ts` に `AppSettings` / `validateAppSettings` / `mergeSettings` を SSOT 化、検証はフィールド単位フォールバック
+- **main 永続化**: `src/main/settings.ts` に `SettingsManager`（`userData/settings.json`、debounce 250ms、broadcast 即時、サイレントフォールバック）。`src/main/itermcolors-parser.ts` で plist XML を正規表現パース（外部依存なし、1MB 上限）
+- **IPC 5 チャネル追加**: `settings:get` / `settings:update` / `settings:importItermColors` / `settings:changed` / `window:setOpacity` / `app:relaunch`
+- **shortcuts レジストリ化**: `src/renderer/shortcuts/registry.ts` に 24 ID を SSOT 化。`parseKey` / `matchKey` / `formatKey` / `canonicalize` / `resolveShortcutKey` / `findConflictingIds` を提供
+- **settingsStore + settingsModalStore**: `useSettingsStore`（load / update / `settings:changed` 購読 / 楽観更新）+ セレクタ群
+- **themeStore リファクタ**: `useAvailableThemes` / `useCurrentTheme` をリアクティブフック化。`overrideTheme` 追加、`addCustomTheme` / `updateCustomTheme` / `deleteCustomTheme` で全ウィンドウ broadcast
+- **SettingsModal + 4 サブコンポーネント**: `AppearanceSettings` / `ShortcutSettings` / `WindowSettings` / `ColorField`
+- **ColorField 致命バグ修正**: 旧実装は HEX 入力欄の onChange で常に親に通知 → 不完全 HEX で validateTheme が null 返却 → カスタムテーマが消える現象を draft state で解決
+- **保存モデル変更**: テーマ編集中の override は `themeStore` に保持してライブ反映、「保存」ボタンで永続化。Opacity / Vibrancy / ショートカットは即時保存
+- **Header 整理**: 「ショートカット」ボタンを削除、「設定 (Cmd+,)」ボタンに置換。`ShortcutsModal.tsx` 撤去
+- **新規テスト 53 件**: `registry.test.ts` (24) / `theme-types.test.ts` (10) / `settings.test.ts` (19)
+- **テスト合計**: 24 ファイル / 335 件グリーン
+- **依存追加**: `react-colorful`（軽量 ~2.8kB）
+- **計画書アーカイブ**: `.claude/archive/2026-04-26-settings-feature.md` に Status=COMPLETED で移動済み
+
 ### 2026-04-26 - プロンプトドット成功/失敗カラー反映バグ修正
 
 #### 概要

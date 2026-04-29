@@ -18,17 +18,21 @@ import {
   performMove,
   performCopy,
 } from "../../services/fileOpsService";
+import { isMarkdownPath } from "../../utils/markdownFile";
 
 interface TreeNodeProps {
   node: FileNode;
   depth: number;
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  // Markdown ファイルのシングルクリック時に呼ぶ。未指定なら従来通り選択のみ。
+  onRequestEditMarkdown?: (filePath: string) => void;
 }
 
 export const TreeNode: React.FC<TreeNodeProps> = ({
   node,
   depth,
   onContextMenu,
+  onRequestEditMarkdown,
 }) => {
   const theme = useCurrentTheme();
   const config = useThemeConfig();
@@ -84,9 +88,26 @@ export const TreeNode: React.FC<TreeNodeProps> = ({
       // detail >= 2 はダブルクリックの 2 回目以降。トグルを 2 回実行して打ち消し合うのを防ぐ
       if (node.isDirectory && e.detail <= 1) {
         setExpanded(node.path, !isExpanded);
+        return;
+      }
+      // Markdown ファイルはシングルクリックで編集ダイアログ起動
+      if (
+        !node.isDirectory &&
+        e.detail <= 1 &&
+        isMarkdownPath(node.path) &&
+        onRequestEditMarkdown
+      ) {
+        onRequestEditMarkdown(node.path);
       }
     },
-    [node.path, node.isDirectory, isExpanded, setExpanded, setSelectedNodePath],
+    [
+      node.path,
+      node.isDirectory,
+      isExpanded,
+      setExpanded,
+      setSelectedNodePath,
+      onRequestEditMarkdown,
+    ],
   );
 
   const handleDoubleClick = useCallback(
@@ -94,7 +115,10 @@ export const TreeNode: React.FC<TreeNodeProps> = ({
       e.stopPropagation();
       // ディレクトリは handleClick の 1 回目だけがトグルを行うので、ここでは何もしない
       if (node.isDirectory) return;
-      // ファイルはコンテキストメニュー表示
+      // Markdown ファイルはシングルクリック側で既にダイアログを開いているのでスキップ。
+      // 「編集する」コンテキストメニュー (パネル) は右クリックで引き続き利用可能。
+      if (isMarkdownPath(node.path)) return;
+      // それ以外のファイルは従来通りコンテキストメニュー表示
       onContextMenu(e, node);
     },
     [node, onContextMenu],
@@ -227,6 +251,7 @@ export const TreeNode: React.FC<TreeNodeProps> = ({
           style={{
             display: "inline-flex",
             width: 12,
+            flexShrink: 0,
             justifyContent: "center",
             color: theme.colors.textSecondary,
           }}
@@ -243,6 +268,7 @@ export const TreeNode: React.FC<TreeNodeProps> = ({
           style={{
             display: "inline-flex",
             width: 14,
+            flexShrink: 0,
             justifyContent: "center",
             color: theme.colors.textSecondary,
           }}
@@ -278,6 +304,7 @@ export const TreeNode: React.FC<TreeNodeProps> = ({
           dirState={dirState}
           depth={depth + 1}
           onContextMenu={onContextMenu}
+          onRequestEditMarkdown={onRequestEditMarkdown}
         />
       )}
     </div>
@@ -288,14 +315,17 @@ interface ChildListProps {
   dirState: ReturnType<typeof useDirState>;
   depth: number;
   onContextMenu: (e: React.MouseEvent, node: FileNode) => void;
+  onRequestEditMarkdown?: (filePath: string) => void;
 }
 
 const ChildList: React.FC<ChildListProps> = ({
   dirState,
   depth,
   onContextMenu,
+  onRequestEditMarkdown,
 }) => {
   const theme = useCurrentTheme();
+  const searchQuery = useSidebarStore((s) => s.searchQuery);
   if (dirState.status === "loading") {
     return (
       <div
@@ -340,19 +370,46 @@ const ChildList: React.FC<ChildListProps> = ({
       </div>
     );
   }
+  const visible = filterEntriesByQuery(dirState.entries, searchQuery);
+  if (visible.length === 0) {
+    return (
+      <div
+        style={{
+          paddingLeft: 6 + depth * 12,
+          fontSize: 11,
+          color: theme.colors.textSecondary,
+          fontStyle: "italic",
+          padding: "2px 6px",
+        }}
+      >
+        一致なし
+      </div>
+    );
+  }
   return (
     <>
-      {dirState.entries.map((child) => (
+      {visible.map((child) => (
         <TreeNode
           key={child.path}
           node={child}
           depth={depth}
           onContextMenu={onContextMenu}
+          onRequestEditMarkdown={onRequestEditMarkdown}
         />
       ))}
     </>
   );
 };
+
+export function filterEntriesByQuery(
+  entries: FileNode[],
+  query: string,
+): FileNode[] {
+  const trimmed = query.trim();
+  if (!trimmed) return entries;
+  const q = trimmed.toLowerCase();
+  return entries.filter((entry) => entry.name.toLowerCase().includes(q));
+}
 
 interface RenameInputProps {
   initial: string;

@@ -9,13 +9,25 @@ import { useSettingsModalStore } from "../stores/settingsModalStore";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
 import { WindowSettings } from "./settings/WindowSettings";
+import { TerminalSettings } from "./settings/TerminalSettings";
+import { EditorSettings } from "./settings/EditorSettings";
+import { GeneralSettings } from "./settings/GeneralSettings";
 
-type Tab = "appearance" | "shortcuts" | "window";
+type Tab =
+  | "appearance"
+  | "terminal"
+  | "editor"
+  | "shortcuts"
+  | "window"
+  | "general";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "appearance", label: "外観" },
+  { id: "terminal", label: "ターミナル" },
+  { id: "editor", label: "エディタ" },
   { id: "shortcuts", label: "ショートカット" },
   { id: "window", label: "ウィンドウ" },
+  { id: "general", label: "一般" },
 ];
 
 // 設定モーダル本体。ShortcutsModal と同じ overlay パターンを踏襲しつつ、
@@ -223,8 +235,11 @@ export const SettingsModal: React.FC = () => {
             }}
           >
             {tab === "appearance" && <AppearanceSettings />}
+            {tab === "terminal" && <TerminalSettings />}
+            {tab === "editor" && <EditorSettings />}
             {tab === "shortcuts" && <ShortcutSettings />}
             {tab === "window" && <WindowSettings />}
+            {tab === "general" && <GeneralSettings />}
           </div>
         </div>
 

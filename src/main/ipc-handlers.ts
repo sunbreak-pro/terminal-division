@@ -14,13 +14,31 @@ import type { PartialAppSettings } from "../shared/settings";
 
 // IPCハンドラー登録（アプリ起動時に一度だけ呼ぶ）
 export function setupIpcHandlers(): void {
-  ipcMain.handle("pty:create", (event, id: string, initialCwd?: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win) return false;
-    // initialCwd は任意。許可境界外なら無視して homedir フォールバックさせる
-    const safeCwd = initialCwd ? validatePath(initialCwd) : null;
-    return ptyManager.createPty(id, win.id, safeCwd ?? undefined);
-  });
+  ipcMain.handle(
+    "pty:create",
+    (
+      event,
+      id: string,
+      initialCwd?: string,
+      options?: { shell?: string; defaultCwd?: string },
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return false;
+      // initialCwd は任意。許可境界外なら無視して homedir フォールバックさせる
+      const safeCwd = initialCwd ? validatePath(initialCwd) : null;
+      // 設定で指定されたデフォルト CWD（initialCwd 未指定時のフォールバック）。
+      // これも path-validator を通す。
+      const safeDefault = options?.defaultCwd
+        ? validatePath(options.defaultCwd)
+        : null;
+      return ptyManager.createPty(
+        id,
+        win.id,
+        safeCwd ?? safeDefault ?? undefined,
+        options?.shell,
+      );
+    },
+  );
 
   ipcMain.on("pty:write", (_, { id, data }: { id: string; data: string }) => {
     ptyManager.write(id, data);

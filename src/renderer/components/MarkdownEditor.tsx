@@ -16,6 +16,7 @@ import {
   useTerminalMeta,
 } from "../stores/terminalMetaStore";
 import { useTerminalActions } from "../stores/terminalStore";
+import { useEditorSettings } from "../stores/settingsStore";
 import { showErrorToast } from "./Sidebar/ErrorToast";
 import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
 import { withAlpha, isLightBackground } from "../utils/colorUtils";
@@ -38,6 +39,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
   const theme = useCurrentTheme();
   const themeConfig = useThemeConfig();
   const { setActiveTerminal } = useTerminalActions();
+  const editorSettings = useEditorSettings();
 
   const cmRef = useRef<ReactCodeMirrorRef | null>(null);
 
@@ -118,11 +120,10 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
             backgroundColor: editorChrome.editorBg,
             color: theme.colors.text,
             height: "100%",
-            fontSize: "13.5px",
+            fontSize: `${editorSettings.fontSize}px`,
           },
           ".cm-scroller": {
-            fontFamily:
-              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontFamily: editorSettings.fontFamily,
             lineHeight: "1.65",
           },
           ".cm-content": {
@@ -168,7 +169,12 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
         },
         { dark: !editorChrome.isLight },
       ),
-    [theme.colors, editorChrome],
+    [
+      theme.colors,
+      editorChrome,
+      editorSettings.fontSize,
+      editorSettings.fontFamily,
+    ],
   );
 
   // markdown 構文ハイライト（見出し / 強調 / リンク / コード / リスト等）
@@ -212,8 +218,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
       saveKeymap,
       editorTheme,
       syntaxHighlighting(mdHighlight),
+      ...(editorSettings.softWrap ? [EditorView.lineWrapping] : []),
     ],
-    [saveKeymap, editorTheme, mdHighlight],
+    [saveKeymap, editorTheme, mdHighlight, editorSettings.softWrap],
   );
 
   // ファイルパスを「ディレクトリ部分」と「ファイル名」に分けて表示する
@@ -295,6 +302,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
           ref={cmRef}
           value={initialValue}
           height="100%"
+          theme="none"
           extensions={extensions}
           onChange={handleChange}
           onFocus={() => setActiveTerminal(id)}

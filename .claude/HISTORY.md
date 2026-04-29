@@ -1,5 +1,56 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-29 - T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）
+
+#### 概要
+
+ユーザー要望の「フォントの拡大・縮小機能 + 標準ターミナル / AI エディタとして必要なカスタマイズ機能」を一括導入。`AppSettings` を `terminal` / `editor` / `general` の 3 ブロックで拡張し、`SettingsModal` に 3 タブ（ターミナル / エディタ / 一般）を追加。フォントズームはスコープ C（全ペイン共通の永続化グローバル + ペイン毎の揮発オーバーライド）を採用し、`Cmd+=` / `Cmd+-` / `Cmd+0` でアクティブペインのみ ±1px / リセットする iTerm2 互換の振る舞いを実装。グローバル既定値は `settings.terminal.fontSize` で永続化され、新規ペイン作成時の初期値として使われる。フォントファミリー / 行間 / カーソルスタイル + blink / スクロールバック行数 / Bell（none/visual/sound）/ 単語区切り / デフォルトシェル / デフォルト CWD のターミナル設定、フォントサイズ / ファミリー / softWrap の Markdown エディタ設定、セッション復元 ON/OFF / PTY 異常終了通知の一般設定をすべて永続化。`pty:create` IPC は `options: { shell?, defaultCwd? }` 受領に拡張し、`pty-manager.ts` でカスタムシェル指定（実在チェック付き、不在時は `$SHELL` フォールバック）と既定 CWD（`initialCwd` 未指定時のフォールバック）に対応。ペインタイトル手動 rename を `TerminalSubHeader` のダブルクリック inline edit で導入し、`terminalMetaStore` の `customTitle` フィールドが null（CWD 由来の自動表示）と任意文字列を切替。Bell の sound は WebAudio で 880Hz 80ms の短ビープ、visual は 120ms ペインフラッシュ。PTY 異常終了通知は `Notification` API で exitCode != 0 のときだけ発火（許可ダイアログは初回 ON 時に自動要求）。MarkdownEditor は `EditorView.lineWrapping` を `editor.softWrap` で動的トグル。
+
+#### 変更点
+
+- **shared/settings.ts**: `TerminalSettings` / `EditorSettings` / `GeneralSettings` を新規追加。フィールド単位の `validateTerminalSettings` / `validateEditorSettings` / `validateGeneralSettings` と、`mergeSettings` の field-level merge（`base.terminal` を spread して patch をマージ）。クランプ定数 `FONT_SIZE_MIN/MAX` (8/32) / `LINE_HEIGHT_MIN/MAX` (1.0/2.0) / `SCROLLBACK_MIN/MAX` (1000/100000) / `EDITOR_FONT_SIZE_MIN/MAX` (10/32) を export。`clampNumber` ヘルパも export して renderer 側で再利用
+- **renderer/stores/settingsStore.ts**: `applyOptimistic` を `terminal` / `editor` / `general` の浅マージ対応に拡張。`useTerminalSettings` / `useEditorSettings` / `useGeneralSettings` セレクタを追加
+- **renderer/stores/terminalMetaStore.ts**: `fontSizeOverride: number | null` と `customTitle: string | null` を `TerminalMeta` に追加（揮発、session-persist 対象外）。`setFontSizeOverride(id, value)` / `setCustomTitle(id, value)` action を追加。`initMeta` / `initLeafMeta` / `hydrateMetas` の初期値はすべて null
+- **renderer/services/terminalManager.ts**: `applyOptions(id, partial: Partial<ITerminalOptions>)` を新規追加。セルサイズ影響キー（`fontSize` / `fontFamily` / `fontWeight` / `fontWeightBold` / `letterSpacing` / `lineHeight`）の変更時は `invalidateLastSize` + `fit()` で PTY 側にもリサイズを伝える。`subscribeBell(id, listener)` を追加（戻り値で unsubscribe）
+- **renderer/components/TerminalPane.tsx**: ハードコードされていた fontSize=13 / fontFamily / lineHeight=1.2 / cursorBlink / cursorStyle / scrollback=10000 をすべて `useTerminalSettings()` 由来に置換。`fontSizeOverride` を購読して `effectiveFontSize = override ?? settings.fontSize` を計算（クランプ付き）。設定変更を購読して `applyOptions` で即時反映する `useEffect` を追加（フォントサイズ変動時は `pty.resize` も発火）。Bell 購読 `useEffect` で visual flash（120ms）/ sound（WebAudio 880Hz 80ms）を実装。`pty.create` 呼び出しに `options: { shell, defaultCwd }` を追加。`onExit` ハンドラを `(exitCode) => void` に拡張し、`general.ptyExitNotification && exitCode !== 0` のとき `Notification` API で macOS 通知
+- **renderer/shortcuts/registry.ts**: `font-zoom-in` (Cmd+=) / `font-zoom-out` (Cmd+-) / `font-zoom-reset` (Cmd+0) の 3 ID を追加。`ShortcutCategory` に `Font` を追加（リバインド可能、settings UI のショートカットタブから上書き可能）
+- **renderer/App.tsx**: `adjustActivePaneFontSize(paneId, delta)` ヘルパを追加（`getState()` でフレッシュ参照、クランプ付き、no-op early return）。3 ショートカットの handlers を追加。`useSettingsStore.getState().settings.terminal` から起点を読み、`useTerminalMetaStore.getState().setFontSizeOverride()` で per-pane delta を更新
+- **renderer/services/terminalManager.ts (TerminalCallbacks)**: `onExit: () => void` → `onExit: (exitCode: number) => void` にシグネチャ拡張（main からの exitCode をパススルー）
+- **main/pty-manager.ts (createPty 拡張)**: `customShell?: string` 引数を追加。`fs.existsSync(customShell)` で実在チェックし、不在なら `process.env.SHELL || "/bin/zsh"` にフォールバック
+- **main/ipc-handlers.ts (pty:create シグネチャ拡張)**: `options?: { shell?, defaultCwd? }` を受領。`defaultCwd` は `initialCwd` 未指定時のフォールバックとして `validatePath` を通してから `createPty` に渡す
+- **preload/index.ts**: `pty.create(id, initialCwd?, options?)` の型拡張
+- **renderer/main.tsx (bootstrap)**: 起動時に `settings.get()` と `session.getRestoreData()` を `Promise.all` で並列取得し、`general.restoreSessionOnLaunch` が false なら復元をスキップ（並列化で起動時間影響を最小化）
+- **新規 UI: settings/TerminalSettings.tsx**: フォントサイズ slider（範囲 8–32）+ ファミリー preset セレクト（6 種）+ カスタム指定 input + 行間 slider（1.0–2.0）。カーソルスタイル select（block/underline/bar）+ 点滅 toggle。スクロールバック slider（1000–100000、step 1000）+ Bell select + 単語区切り input。デフォルトシェル input + デフォルト CWD input + 「参照」ボタン（`dialog.selectDirectory` を呼ぶ）
+- **新規 UI: settings/EditorSettings.tsx**: フォントサイズ slider（10–32、step 0.5）+ ファミリー preset（5 種、比例フォント中心）+ カスタム指定 + softWrap toggle
+- **新規 UI: settings/GeneralSettings.tsx**: セッション復元 toggle + PTY 異常終了通知 toggle（初回 ON 時に `Notification.requestPermission` を自動要求）
+- **renderer/components/SettingsModal.tsx**: タブを 3 個から 6 個に拡張（外観 / ターミナル / エディタ / ショートカット / ウィンドウ / 一般）
+- **renderer/components/TerminalSubHeader.tsx**: ペイン名表示にダブルクリック inline rename を追加。`customTitle` が null なら CWD 由来の `folderName` を表示、文字列なら優先表示。空文字列確定で null に戻して自動表示へ復帰。Enter / blur で確定、Escape でキャンセル
+- **renderer/components/MarkdownEditor.tsx**: `useEditorSettings()` 購読を追加。`fontSize: "13.5px"` ハードコードを `editorSettings.fontSize` 由来に、`fontFamily` ハードコードを `editorSettings.fontFamily` に置換。extensions 配列に `editorSettings.softWrap ? [EditorView.lineWrapping] : []` を spread で追加
+- **新規テスト 20 件**:
+  - `shared/__tests__/settings.test.ts` (+6): terminal/editor/general の merge と clamp、cursorStyle/bellStyle の不正値 fallback、validateAppSettings の terminal block 不正値復元
+  - `renderer/stores/__tests__/terminalMetaStore.test.ts` (新規 10 件): initMeta の null 初期化 / 既存 meta の上書き禁止 / setFontSizeOverride（更新・null リセット・no-op・他ペイン無干渉）/ setCustomTitle（文字列 / null クリア / 不在 id）/ hydrateMetas の null 初期化
+  - `renderer/services/__tests__/terminalManager.test.ts` (+4): applyOptions の非サイズキーで no fit / サイズキーで refit / undefined 無視 / 未知 id no-op
+- **既存テスト更新**: `TerminalPane.test.tsx` の `pty.create` 呼び出しアサーションに第 3 引数 `{ shell: undefined, defaultCwd: undefined }` を追加。`vi.mock` で `useTerminalMetaStore` を関数として callable に拡張（`fontSizeOverride` selector 用）、`useTerminalSettings` / `useEditorSettings` / `useGeneralSettings` の mock を追加（DEFAULT_SETTINGS から返す）。`settings.test.ts` の base AppSettings に terminal/editor/general を spread で含めるように修正
+- **テスト合計**: 29 ファイル / 416 件グリーン（修正前 396 から +20 件）
+- **CLAUDE.md (§8 Feature Tier Map)**: T2-10 を新規追加し、ターミナル / エディタ / 一般タブの構成、フォントズームの per-pane 揮発オーバーライド、ペインタイトル rename の自動復帰仕様を記載
+- **設計判断**:
+  - **フォントズームのスコープ C（グローバル + 揮発オーバーライド）**: iTerm2 のメンタルモデルを踏襲。グローバル設定を「新規ペインの初期値」とし、`Cmd+=` / `Cmd+-` でアクティブペインだけ独立調整、`Cmd+0` でグローバルへ戻る。VSCode のような全体共通だけだと「このペインだけ拡大したい」用途に応えられない。per-pane delta は session-persist 対象外（揮発）にすることで、再起動後はフレッシュなグローバル既定で始まる
+  - **Cmd+= / Cmd+- / Cmd+0 のキーバインド**: VSCode / iTerm2 / Chrome 等と互換の事実上の業界標準。`registry.ts` に登録することで、ユーザーが `ShortcutSettings` から自由にリバインド可能（例: `Cmd+Shift+=` を好む人のため）
+  - **per-pane delta は terminalMetaStore に揮発で持つ**: グローバル設定と同列に永続化すると、ペインを閉じても override 値がストレージに残ってしまい「テストで一度大きくしたまま忘れる」が起きやすい。揮発にすれば session を一旦終わらせれば自然にリセットされる
+  - **applyOptions のサイズ影響キー判定 + 自動 refit**: xterm の `options.fontSize` を直接書き換えるとセル幅が変わり PTY の cols/rows が乖離する。`applyOptions` 内で `SIZE_AFFECTING` セットを参照し、該当キーが含まれていれば `invalidateLastSize` → `fit()` を実行して PTY 側にも `pty.resize` を送る（呼び出し側は戻り値の cols/rows で resize する）。これによりフォント変更時の表示崩れを 1 関数で完結
+  - **Bell の WebAudio 実装**: ライブラリ依存ゼロ、880Hz 80ms の短ビープを `OscillatorNode` + `GainNode` で生成。`onended` で `AudioContext.close()` してリソース解放。OS の `NSBeep` を使う案もあったが、IPC 経由になるしユーザーが音量調整できないため WebAudio を選択
+  - **Bell の visual flash は 120ms で十分**: もっと長くすると入力中に視認性が落ちる。フラッシュは「気づき」の発火点だけ提供し、ユーザーが実際に確認するのは ALT screen やプロンプトで行う前提
+  - **PTY 終了通知は Renderer 側の `Notification` API**: main → IPC で `Notification` を出す案もあったが、Renderer 内で完結したほうが (a) ペイン情報（customTitle / processName / cwd）に直接アクセスでき、(b) 許可ダイアログの UX を制御しやすい。`general.ptyExitNotification` トグルで初回 ON 時に `requestPermission()` を発火するため、ユーザーは設定で許可をコントロールできる
+  - **PTY 異常終了の判定は exitCode !== 0**: 0 を「正常終了（exit / Ctrl+D）」、非 0 を「異常終了（クラッシュ / 強制 kill）」として macOS 通知の対象にする。Bell とは別軸のため両方有効化しても重複しない
+  - **デフォルトシェルの存在チェック + フォールバック**: ユーザーが間違ったパス（例: `/usr/local/bin/fish` だが未インストール）を入れても黒画面で起動失敗にならないよう、`fs.existsSync` で実在チェックし不在なら `$SHELL || /bin/zsh` にフォールバック。pty-manager 側の安全網
+  - **デフォルト CWD の優先順位**: 旧来の「メタストア（分割時 CWD）> windowInitialCwd（Dock）> $HOME」の最後に `settings.terminal.defaultCwd` を入れる、ではなく **`initialCwd` が空のときの fallback として ipc-handlers で適用**。これにより Dock や分割からの明示的な CWD は常に優先され、設定の defaultCwd は「何も指定されないとき」だけ効く
+  - **セッション復元 ON/OFF を bootstrap で並列読み**: `settings.get()` と `session.getRestoreData()` を逐次にすると起動時間が IPC 2 回分のレイテンシ。`Promise.all` で並列化することで影響を最小化、settings false なら復元データを単に捨てるだけ（拒否する場合の destroy は `session.clear()` を呼ばない — ユーザーが設定を戻せば次回また復元できる）
+  - **ペインタイトル rename は customTitle null で自動復帰**: 「rename を解除したい」UX を別ボタンで実装するとサブヘッダーが煩雑になる。空文字列を確定すれば null に戻す扱いにすることで、操作系列が「ダブルクリック → 全消去 → Enter」の 1 フローで完結
+  - **MarkdownEditor の softWrap は EditorView.lineWrapping で extension 切替**: CodeMirror 6 の標準パターン。`useMemo` の dep に `editorSettings.softWrap` を含めることで、設定切替時に extensions 配列が再生成され CodeMirror 側が新しい extension を有効化する
+  - **EditorSettings のフォントプリセットは比例フォント中心**: ターミナルと違い Markdown は文章中心の用途が多いため、Helvetica / Hiragino / システム既定の sans-serif を上に置き、等幅は下位に。ユーザーが「コード片中心の note を書く」用途では Menlo / JetBrains Mono を選べるようカスタム指定 input も併設
+  - **設定タブの並び**: 外観 / ターミナル / エディタ / ショートカット / ウィンドウ / 一般。「外観」を最上位に保つことでテーマ切替の発見可能性を維持し、「ターミナル」を 2 番目に置くことで本アプリの主用途に直結する。「一般」は最下位に置いて「設定全体に影響する大物」を物理的に区別
+- **計画書アーカイブ**: `.claude/archive/2026-04-29-customization-features.md` に Status=COMPLETED で移動済み
+
 ### 2026-04-27 - サイドバー再帰検索 + 検索フィールド内ショートカット passthrough
 
 #### 概要
@@ -15,126 +66,45 @@
 - **App.tsx (editable passthrough)**: `EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId>` を新設し、`kill-line-backward` / `kill-line-forward` / `move-line-start` / `move-line-end` / `kill-word-backward` / `kill-word-forward` / `move-word-left` / `move-word-right` / `undo` / `redo` を含めた。`handleKeyDown` のディスパッチループで `inEditable && EDITABLE_PASSTHROUGH_IDS.has(def.id)` のとき preventDefault せずに早期 return し、ブラウザ標準のテキスト編集動作（cmd+delete で行頭まで削除、cmd+←/→ で行頭/行末移動、cmd+z で undo 等）が input 要素に届くようにした。`isEditableTarget` は xterm の helper textarea を除外する既存実装をそのまま流用（端末側のショートカット動作は不変）
 - **新規テスト**: `main/__tests__/searchTree.test.ts`（9 件）— 一時ディレクトリで実ファイルツリーを構築してテスト。検証項目: ルート直下マッチ / サブディレクトリ再帰マッチ（`.claude/MEMORY.md`）/ 大文字小文字無視 / `node_modules` スキップ / 深い階層 / 空クエリ・whitespace-only クエリ / `maxResults` 超過時の `truncated=true` / `maxDepth` 制限 / `isDirectory`・`isSymlink` フラグ
 - **テスト合計**: 28 ファイル / 388 件グリーン（修正前 379 から +9 件）
-- **設計判断**:
-  - **検索クエリ時はツリー描画ではなくフラットリスト**: 既存の「兄弟ノード絞り込み」を再帰版に拡張する案も検討したが、サブディレクトリの自動展開ロジックが複雑化し、ヒットしたファイルの居場所も視覚化しづらい。VS Code の Cmd+P 風に「全マッチをフラットに、相対パスを 2 行目に」する方が探索 UX として直感的
-  - **150ms デバウンス + cancelled フラグの両方**: タイマー clear だけでは「タイマー発火後 → IPC 中に新クエリ」のレースで古い結果が state を上書きする。closure の `cancelled` 変数を effect cleanup で立てることで、IPC レスポンス到着時にも自分が古いものか判定できる。`setSearchState({ status: "loading" })` をタイマー発火前に立てるか後に立てるかは UX の好みで、即時 loading 表示で「反応している」感を出すため発火前に置いた
-  - **node_modules / .git のみスキップ**: ユーザーの不満は `.claude/MEMORY.md` が見つからないこと。`.claude` は dotfile だが探索対象に含まれている必要がある。一方で `node_modules` は数万ファイル単位で結果を埋め尽くすので明示除外。`.git` は内部オブジェクトファイルが大量にある同種の問題。`dist`・`build` はプロジェクト依存なので除外せず、ユーザーが `maxResults` 上限警告を見たらクエリを絞る運用に
-  - **symlink ディレクトリの非再帰**: 自分自身を含むディレクトリへの symlink でも無限ループしない。`fs.promises.stat` で実体解決して isDirectory を正しく返すが、再帰自体はスキップ。symlink ファイル自体（`.md` 等）はマッチ対象に含まれる
-  - **EDITABLE_PASSTHROUGH_IDS 集合方式**: 「ハンドラ内で個別に `isEditableTarget` チェック」する旧アプローチ（`undo`/`redo` のみ実装済み）を全展開すると重複が増える。ディスパッチャレベルで「該当 ID + editable」なら早期 return する形にすれば、新規ショートカット追加時も「テキスト編集に該当するか」の 1 行追加で済む。passthrough 対象は line/word 移動・削除・undo/redo に限定（`split-vertical` の Cmd+D 等はテキスト編集動作と競合しないので包含しない）
-  - **xterm helper textarea は editable target ではない**: `isEditableTarget` の既存判定（`tag === "TEXTAREA" && !classList.contains("xterm-helper-textarea")`）を流用。これにより端末ペインがフォーカス時の Cmd+Backspace 等は従来通り `terminalManager.writeWithHistory(...)` で PTY に届く
-  - **再帰探索を Renderer 側ではなく Main 側に置く**: Renderer 側で `fileTreeStore` のキャッシュを再帰的に走査する案もあったが、未展開ディレクトリは未ロードなので結局 IPC `fs:readDir` を多発させる必要がある。Main で一発走査するほうが round-trip コストが小さく、`fs:readDir` 経由のキャッシュを乱さずに済む
 
 ### 2026-04-27 - Settings カラー編集の簡略化（セマンティック 6 色化）
 
 #### 概要
 
-Settings → 外観のカラー編集が 33 フィールド（基本色 6 + ANSI 16 + App UI 11）に膨らんでおり、特に AppColors の `terminalBackground` と XtermTheme の `background` のように同一概念が二重定義されていることでユーザーが意図しない挙動（「ターミナル背景を白から黒に動かしてもある境目までは見た目が変わらず、`isLightBackground` の輝度 0.5 を跨いだ瞬間に MarkdownEditor 側のオフホワイト切替が一気にスナップする」）を起こしていた。これを「セマンティック 6 色」（背景 / 前景 / アクセント / サブテキスト / ボーダー / Danger）に集約し、内部の重複フィールドを 1 つの onChange で同時に更新する形に再設計。各セマンティックの更新先は互いに排他（同じフィールドが 2 つのセマンティックから書かれない）になっており、副作用バグを構造的に防ぐ。ANSI 16 色は折りたたみアコーディオンとして残し、細かい xterm 色は `.itermcolors` インポート前提とする運用に寄せた。App UI カラーアコーディオンは撤去（重複フィールドはセマンティック側に吸収済み）。
+Settings → 外観のカラー編集が 33 フィールド（基本色 6 + ANSI 16 + App UI 11）に膨らんでおり、特に AppColors の `terminalBackground` と XtermTheme の `background` のように同一概念が二重定義されていることでユーザーが意図しない挙動を起こしていた。これを「セマンティック 6 色」（背景 / 前景 / アクセント / サブテキスト / ボーダー / Danger）に集約し、内部の重複フィールドを 1 つの onChange で同時に更新する形に再設計。各セマンティックの更新先は互いに排他になっており、副作用バグを構造的に防ぐ。ANSI 16 色は折りたたみアコーディオンとして残し、App UI カラーアコーディオンは撤去。
 
 #### 変更点
 
-- **AppearanceSettings.tsx (UI 簡略化)**: 旧 3 アコーディオン（基本色 6 / ANSI 16 / App UI 11 = 33 フィールド）を、常時表示の「カラー」セクション 6 フィールド + 折りたたみ「ANSI 16 色（上級）」アコーディオンの 2 ブロック（合計 22 フィールド）に置換。`SEMANTIC_DEFS` テーブル（key / label / description）でセマンティック色の表示を駆動
-- **AppearanceSettings.tsx (semanticUpdate ヘルパ)**: `semanticUpdate(key, value): ThemeUpdate` を新規追加し、各セマンティック色から内部フィールドへのマッピングを集約。`background` → `xterm.background` + `colors.background` + `colors.headerBackground` + `colors.terminalBackground` + `xterm.cursorAccent` + `xterm.selectionForeground`（6 フィールド一括）。`accent` → `colors.accent` + `colors.activeTerminal` + `colors.borderActive` + `xterm.cursor` + `xterm.selectionBackground`（5 フィールド一括）。`foreground` / `textSecondary` / `border` / `danger` も同様にマッピング。各セマンティックの更新先フィールド集合は互いに排他
-- **AppearanceSettings.tsx (readSemantic ヘルパ)**: 表示時はセマンティック値の代表フィールドを 1 つだけ読む（例: `background` は `xterm.background` を読む。これにより xterm 本体の現在背景がそのまま picker に表示される）。`colors.terminalBackground` を読まないことで「片方のフィールドだけ動いて UI が同期しない」混乱を回避
-- **AppearanceSettings.tsx (handleSemanticColor)**: `setOverride({ ...overrideTheme, colors: { ...overrideTheme.colors, ...update.colors }, xterm: { ...overrideTheme.xterm, ...update.xterm } })` で colors / xterm 双方をシャロー spread + マージ。これにより重複なしの一括更新が成立
-- **MarkdownEditor.tsx (dark モード背景の干渉除去 — 別 commit に分離可)**: `<CodeMirror>` に `theme="none"` を明示的に渡し、`@uiw/react-codemirror` がデフォルトで挿入する `defaultLightThemeOption` (`{ '&': { backgroundColor: '#fff' } }`) の追加をスキップ。我々の `editorTheme` extension が同じ `&` セレクタの `backgroundColor` を設定するが、defaultLightThemeOption が後続適用される CSS 順序で上書きされていた。これにより HighlightStyle (`accent` 色 / `codeFg` `#e6a26a`) は dark テーマの色で適用されつつ背景だけ白いという不整合が dark モードで発生していたのを解消
-- **新規 export 化**: `semanticUpdate` / `readSemantic` / `SemanticKey` を named export にしてテスト容易にした
-- **新規テスト**: `components/settings/__tests__/semanticColors.test.ts` 11 件（`readSemantic` の 4 ケース、`semanticUpdate` の 6 ケース、加えて「全セマンティック間でフィールドが排他」を保証する不変条件テスト 1 件）。テスト合計 26 ファイル / 379 件グリーン（修正前 368 から +11）
-- **設計判断**:
-  - **セマンティック更新は排他マッピングを採用**: ナイーブな実装だと「色 A を変えたら全派生色を上書き」になりがちだが、それだと既存のチューニング値が消える。各セマンティックが「自分の責任フィールドだけ」更新する排他マッピングにすれば、ユーザーが意図的に他セマンティックを動かすまで他フィールドは保持される。テストで排他性を不変条件として担保
-  - **`background` は xterm + AppColors を同時更新**: バグの本丸。旧 UI では `colors.terminalBackground` 編集 → xterm 不変 → MarkdownEditor の `isLightBackground` 判定だけが luminance 0.5 で flip → 「境目で一気に変色」が起きていた。両方を同時更新すれば xterm 本体が滑らかに変色し、MarkdownEditor の閾値挙動はそのまま意図通り（light/dark の境界で off-white に切替わる）に戻る
-  - **代表フィールド読出方式**: 6 セマンティックの「現在値」をどう表示するかは `xterm.background` か `colors.terminalBackground` か競合する。xterm 本体が描画している色 = `xterm.background` を真とすることで、ユーザーが「いま見えている色」と picker の値が一致する
-  - **App UI アコーディオンを完全撤去**: 「app/xterm の重複問題」の根源だった。残せば結局二重編集が可能になり、6 色化のメリットが消える。細かい AppColors（buttonHover 等）はセマンティックで吸収。組込テーマや `.itermcolors` インポート時の値は保持される（編集 UI から触れないだけ）
-  - **ANSI 16 色は残す**: ターミナル `ls` 等の出力色は xterm の独自テーマ領域で、セマンティック 6 色とは別軸。ただし `.itermcolors` インポート（450+ プリセット）でまとめて変更するのが現実的なので、折りたたみ default で「上級」と明示して目立たないようにした
+- **AppearanceSettings.tsx (UI 簡略化)**: 旧 3 アコーディオン（基本色 6 / ANSI 16 / App UI 11 = 33 フィールド）を、常時表示の「カラー」セクション 6 フィールド + 折りたたみ「ANSI 16 色（上級）」アコーディオンの 2 ブロック（合計 22 フィールド）に置換
+- **semanticUpdate / readSemantic ヘルパ**: `semanticUpdate(key, value): ThemeUpdate` を新規追加し、各セマンティック色から内部フィールドへのマッピングを集約
+- **新規テスト**: `components/settings/__tests__/semanticColors.test.ts` 11 件（排他性の不変条件テスト含む）
+- **テスト合計**: 26 ファイル / 379 件グリーン（修正前 368 から +11）
 
 ### 2026-04-27 - Markdown エディタ dark モード背景の修正
 
 #### 概要
 
-dark テーマ選択時、Markdown エディタの背景が白いまま（テキスト色は dark モード用の青系やインラインコードのオレンジ `#e6a26a` は反映されているのに背景だけ白）になる症状を修正。`@uiw/react-codemirror` の `theme` prop はデフォルトが `"light"` で、内部的に `defaultLightThemeOption` (`EditorView.theme({ '&': { backgroundColor: '#fff' } }, { dark: false })`) を最後尾に挿入する。我々の `editorTheme` extension は同じ `&` セレクタに `backgroundColor: editorChrome.editorBg` を指定していたが、CodeMirror の StyleModule 適用順序で defaultLightThemeOption が後勝ちし背景だけが白に固定されていた。`{ dark: false }` フラグはハイライトテーマの暗色判定にしか使われないため、HighlightStyle の color 群（`theme.colors.accent` / `codeFg` 等）は dark モード用の色がそのまま生きており、結果として「色は dark、背景は white」のチグハグ表示が発生していた。
+dark テーマ選択時、Markdown エディタの背景が白いままになる症状を修正。`@uiw/react-codemirror` がデフォルトで挿入する `defaultLightThemeOption` が我々の `editorTheme` を CSS 順序で上書きしていたのが原因。`<CodeMirror>` に `theme="none"` を明示的に渡してデフォルト Extension の挿入をスキップする形に修正。
 
 #### 変更点
 
-- **MarkdownEditor.tsx**: `<CodeMirror>` に `theme="none"` を明示的に渡してデフォルトの `defaultLightThemeOption` Extension の挿入をスキップ。これにより我々の `editorTheme` の `&: { backgroundColor: editorChrome.editorBg }` (dark テーマなら `#0d0d0d` / light テーマなら `#fbfbf9`) が唯一の `&` 背景指定として有効になる
-- **設計判断**:
-  - **`theme="none"` の選択**: 代替案として `theme={editorTheme}` を渡すこともできたが、現状 `editorTheme` は extensions 配列にも入っており重複登録になる。`"none"` で defaultLightThemeOption だけスキップさせ、extensions 経由で渡す既存配線を維持するほうが副作用が少ない
-  - **light テーマの off-white `#fbfbf9` は残置**: 旧セッションで「pure white は長時間編集で疲れる」目的で導入された値で、dark モード背景バグとは別軸。今回のバグ修正で挙動は意図通り（dark なら terminalBackground / light なら off-white）に戻る
+- **MarkdownEditor.tsx**: `<CodeMirror>` に `theme="none"` を明示的に渡してデフォルトの `defaultLightThemeOption` Extension の挿入をスキップ
 
 ### 2026-04-27 - サイドバーのファイル名アイコンずれ修正 + 検索フィールド追加
 
 #### 概要
 
-ディレクトリツリーで長いファイル名のとき、サイドバーを最小幅にスライドするとファイル/フォルダアイコンが微妙に左へずれる現象を修正。原因は `TreeNode.tsx` の chevron / icon span が `display: inline-flex` + 固定 `width` のみで `flex-shrink: 0` を持たず、親 flex コンテナの幅不足時に flex 子要素として自動圧縮されていたこと。あわせて、サイドバー上部の「タブ下＋ツリー上」に表示していたルートディレクトリ名（`terminal-division · ~/dev/...`）行を撤去し、代わりに `<input type="search">` を設置。`sidebarStore` に `searchQuery` を追加し、トップレベル（`DirectoryTree`）と子階層（`ChildList`）の双方で `name` の case-insensitive 部分一致フィルタを適用する。検索フィールド行は `minHeight: 36` でルート行（11px・xs パディング）より縦に余裕を持たせ、フォーカス時に `borderColor` を `borderActive` にハイライトする UX を採用。
+ディレクトリツリーで長いファイル名のとき、サイドバーを最小幅にスライドするとファイル/フォルダアイコンが微妙に左へずれる現象を修正。原因は `TreeNode.tsx` の chevron / icon span が `display: inline-flex` + 固定 `width` のみで `flex-shrink: 0` を持たず、親 flex コンテナの幅不足時に flex 子要素として自動圧縮されていたこと。あわせて、サイドバー上部のルートディレクトリ名行を撤去し `<input type="search">` を設置。`sidebarStore` に `searchQuery` を追加し、トップレベルと子階層の双方で `name` の case-insensitive 部分一致フィルタを適用。
 
 #### 変更点
 
-- **TreeNode.tsx (アイコン圧縮バグ修正)**: chevron 用 `<span>`（`width: 12`）と folder/file アイコン用 `<span>`（`width: 14`）の両方に `flexShrink: 0` を追加。親 `<div role="treeitem">` が `display: flex` + `overflow: hidden` で、長いファイル名のとき flex 子要素として圧縮されアイコン位置が左にずれていたのを根絶
-- **TreeNode.tsx (検索フィルタ + 子階層対応)**: `ChildList` に `useSidebarStore((s) => s.searchQuery)` 購読を追加し、`dirState.entries` を新規ヘルパ `filterEntriesByQuery` で絞り込み。フィルタ結果が空の場合は「一致なし」（イタリック）を表示し、本来の「（空）」と区別。`filterEntriesByQuery(entries, query)` を named export として切り出し（純粋関数: 空 / whitespace-only クエリは元配列を即返、それ以外は trim → toLowerCase → `name.includes` でフィルタ）
-- **DirectoryTree.tsx (ルート行 → 検索フィールド置換)**: 旧ルート表示（`{basenameOf(rootPath)} · {displayPath}`、padding xs/sm、fontSize 11、textSecondary）を削除し、`<input type="search">` を設置。コンテナは padding `sm/sm`、`minHeight: 36`、`display: flex`、`gap: 6`、`borderBottom`。input は `flex: 1` + `minWidth: 0`（flex overflow 対策）、padding `5px/8px`、border 1px、`borderRadius: 4`、placeholder「ファイル名で検索」、`spellCheck={false}`、aria-label 付き。`onFocus` / `onBlur` で `borderColor` を `borderActive` ⇄ `border` に切替（style.border 同値再レンダ時は React style diff で DOM 操作されないため focus 表示は保持）
-- **DirectoryTree.tsx (トップレベルフィルタ + 状態別メッセージ)**: `useMemo` で `visibleEntries = dirState.status === "ready" ? filterEntriesByQuery(dirState.entries, searchQuery) : []` を導出。レンダリングを `dirState.entries` から `visibleEntries` に切替。状態別メッセージは 3 分岐: (a) `entries.length === 0` → 「（空のディレクトリ）」、(b) `entries > 0 && visible === 0` → 「一致するファイルがありません」、(c) `visible > 0` → エントリ列挙。検索クエリと真の空ディレクトリを UI 上で区別
-- **sidebarStore.ts (state 拡張)**: `searchQuery: string` フィールドと `setSearchQuery(query)` action を `SidebarStore` interface に追加。初期値 `""`、setter は同値スキップ（`get().searchQuery === query` で early return）して再レンダ抑制。永続化対象には含めない（タブ切替やセッション間で持ち越さない方針、明示的にユーザーがクリアできる UX に委ねる）
-- **新規テスト**: `Sidebar/__tests__/filterEntriesByQuery.test.ts`（7 件、空 / whitespace-only クエリで元配列を返す参照同一性 / case-insensitive substring / mixed case / 空マッチ / trim / files+dirs を区別なく match）。`stores/__tests__/sidebarStore.test.ts` に `setSearchQuery` の更新 / 同値時の state 参照同一性 / 空文字復帰の 3 アサーション追加。`beforeEach` の reset state にも `searchQuery: ""` を追加
+- **TreeNode.tsx (アイコン圧縮バグ修正)**: chevron 用 `<span>` と folder/file アイコン用 `<span>` の両方に `flexShrink: 0` を追加
+- **TreeNode.tsx (検索フィルタ + 子階層対応)**: `ChildList` に `useSidebarStore((s) => s.searchQuery)` 購読を追加、`filterEntriesByQuery(entries, query)` を named export として切り出し
+- **DirectoryTree.tsx (ルート行 → 検索フィールド置換)**: 旧ルート表示を削除し `<input type="search">` を設置
+- **sidebarStore.ts (state 拡張)**: `searchQuery: string` フィールドと `setSearchQuery(query)` action を追加
+- **新規テスト**: `Sidebar/__tests__/filterEntriesByQuery.test.ts`（7 件）+ `sidebarStore.test.ts` の 3 アサーション追加
 - **テスト合計**: 25 ファイル / 368 件グリーン（修正前 361 から +7 件）
-- **設計判断**:
-  - **flex 子要素の圧縮防止は `flexShrink: 0` が正解**: アイコン span は意味的に「固定サイズの装飾」であり flex 計算で縮められたくない。`min-width` の代わりに `flex-shrink: 0` を使う方が、ベース幅 (`width: 12/14`) と圧縮ポリシーが分離されて意図が明確
-  - **フィルタは全階層に適用**: 「root だけフィルタ」案も検討したが、サブフォルダを展開した瞬間に検索クエリが効かなくなるのは予測不能で混乱を招く。「クエリが空でない間はどの階層でも `name` で絞る」という単純で予測可能なルールを優先。トレードオフとして `.claude` がマッチして展開しても中身は `name` でさらに絞られるが、ユーザーがクリアすれば全ツリーが戻る前提で許容
-  - **検索クエリを sidebarStore に置く**: `DirectoryTree` と `TreeNode/ChildList` の両方が同じクエリに反応する必要があるため context や props drilling より store が自然。selectedTabCwd 切替時のクリアは現時点で実装せず、ユーザーが明示的に消す挙動（input value 表示があるので状態は可視）に委ねる
-  - **`filterEntriesByQuery` を export**: 純粋関数で再利用性とテスタビリティが高い。`TreeNode.tsx` 内で完結させてもよかったが、`DirectoryTree.tsx` のトップレベルフィルタからも参照するため一箇所に集約。テストも書きやすい
-  - **input border のフォーカス UX**: state を増やさず DOM mutation で完結。React の style diff は同値プロパティを再適用しないため、`searchQuery` 変化のたびの再レンダでもフォーカス枠は保持される（`border` shorthand を使っているが、文字列が同一なので React は触らない）
-  - **空ディレクトリ vs 検索ヒット 0 の区別**: 同じ「（空）」表示だと「ディレクトリが空なのか」「検索でフィルタされたのか」が判別不能。ユーザーが検索中だと自明なケースでも、UI 側で明示するほうが説明コストが低い
 
-### 2026-04-26 - Markdown エディタのテーマ対応 UI/UX リデザイン
-
-#### 概要
-
-T2-8 で導入したペイン内 Markdown エディタが light テーマで「真っ白で見づらい」問題に対し、CodeMirror 設定をテーマ駆動に作り直した。原因は `EditorView.theme(..., { dark: true })` がハードコードされており（light テーマでも CodeMirror が dark モードとして動作）、かつ markdown 構文用の `HighlightStyle` が未定義で見出し / リンク / コード等が pale な default 色のままだったこと。修正は (a) 背景色の輝度から light/dark を自動判定して `dark` フラグを切替、(b) 見出し / 強調 / リンク / リストマーク / 引用 / 区切り線 / コード等を `theme.colors.accent` / `text` / `textSecondary` / `border` から派生させた `HighlightStyle` を新設、(c) 不透明だった選択背景を `withAlpha(accent, 0.28)` のセミトランスペアレントに、active line も `accent` 6–9% alpha に置換、(d) light テーマの editor 部分のみ `#fbfbf9` のオフホワイトに（xterm 側の light 設定には触れない）、(e) ファイルパスバーを `[MD]` バッジ + ディレクトリ淡色 + ファイル名強調に再設計。色操作ヘルパは `colorUtils.ts` に切り出して 25 件の単体テストを追加。
-
-#### 変更点
-
-- **MarkdownEditor.tsx**: `EditorView.theme()` の `{ dark: true }` ハードコードを `{ dark: !isLightBackground(theme.colors.terminalBackground) }` に変更（カスタムテーマも輝度判定で自動分岐）。`editorChrome` を `useMemo` で派生させ editorBg / gutterBg / codeBg / codeFg / ruleColor を一元管理。`.cm-selectionBackground` を `borderActive` ベタ塗り → `withAlpha(accent, 0.28)` に、`.cm-activeLine` / `.cm-activeLineGutter` を `buttonHover` → `withAlpha(accent, 0.06–0.16)` に置換。`.cm-content` に padding 14/6/32/6、`.cm-scroller` に lineHeight 1.65、フォントサイズ 13→13.5px、cursor 線幅 2px、`.cm-gutters` に `borderRight: 1px solid border` を追加。light テーマ時は editor 背景を pure white から `#fbfbf9` のオフホワイトに置換
-- **HighlightStyle 新設**: `@codemirror/language` の `syntaxHighlighting` + `HighlightStyle.define` で markdown 用構文ハイライトを定義。heading1–6 / strong / emphasis / strikethrough / link / url / monospace / quote / processingInstruction (= ListMark / HeaderMark) / contentSeparator / meta を `theme.colors.accent` / `text` / `textSecondary` / `border` および inline code 専用色（light=`#a3274a`、dark=`#e6a26a`）から派生
-- **ファイルパスバー再設計**: 単純な path 表示から `[MD]` バッジ（accent 12% alpha 背景 + 55% alpha ボーダー）+ ディレクトリ淡色 70% opacity + ファイル名 fontWeight 600 + `direction: rtl` で省略時もファイル名が見える形に変更
-- **新規 utility**: `src/renderer/utils/colorUtils.ts` に `withAlpha(hex, 0..1)` と `isLightBackground(hex)` を切り出し（`#rrggbb` 専用、不正形式・非対応形式は素通し / false 返し）。MarkdownEditor 内のインライン定義から外出しして再利用可能化
-- **新規テスト**: `utils/__tests__/colorUtils.test.ts` (25 件) — withAlpha は alpha 0/0.5/1 / クランプ（>1, <0）/ # 正規化 / 短縮形と長すぎる hex の素通し / 単一バイト保証、isLightBackground は white/black/各テーマ背景 / 加重輝度（pure red=dark, pure green=light, pure blue=dark）/ 0.5 閾値（#808080=light, #777777=dark）/ shorthand 非対応 / 不正 hex / # 省略許容
-- **テスト合計**: 25 ファイル / 361 件グリーン（修正前 336 から +25 件）
-- **依存追加**: なし（`@codemirror/language` / `@lezer/highlight` は既に `@uiw/react-codemirror` 経由で transitively 解決済み）
-- **設計判断**:
-  - **dark フラグ判定を `theme.id` ではなく輝度ベース**: カスタムテーマ（Settings UI で追加可能）を考慮すると id ベース判定はカバーしきれない。`terminalBackground` の加重輝度 (0.299R + 0.587G + 0.114B) > 0.5 で light 判定するほうがロバスト
-  - **light テーマだけ editor 背景を `#fbfbf9` に**: pure white は長時間編集で疲れるが、テーマ全体（xterm 含む）の `terminalBackground` を変えると影響が大きい。MarkdownEditor 内だけ off-white にすることで「ターミナルは白、エディタは少し落とした白」の差を作りつつ既存テーマ定義は無傷
-  - **選択 / アクティブ行に alpha**: 旧実装は `borderActive` 不透明で選択文字が読めない致命的な UX 問題があった。アプリ全体の `withAlpha` ヘルパーは将来別コンポーネントでも再利用するため utils に切り出し
-  - **HighlightStyle を別 useMemo に**: editorTheme と分離することで「chrome（gutter / cursor / 選択）」と「コンテンツ構文（見出し / リンク / コード）」の責務を明確化。両方とも `[theme.colors, editorChrome]` 依存だが、将来コードブロック言語別ハイライトを足す際の差分が局所化される
-  - **ファイルパスの `direction: rtl`**: 長い絶対パスでも常に末尾（ファイル名）が見える。Bidi 反転のためテキスト本体を `unicodeBidi: plaintext` に包んで論理順序を保つ標準テクニック
-
-#### 概要
-
-Settings モーダル（800×600、左カテゴリ + 右タブ）を新設し、xterm.js `ITheme` 全 30 プロパティのカスタマイズ、ショートカット 24 ID の record-key 再割当（競合検出付き）、ウィンドウ不透明度スライダー + vibrancy トグルを 1 画面に統合。設計は VS Code / Zed 方式の「GUI first + JSON SSOT」で、`userData/settings.json` を Single Source of Truth にし、Renderer は `useSettingsStore` (Zustand) 経由で main からブロードキャストされる `settings:changed` を購読。テーマ編集は **「ライブプレビュー + 明示的保存」** モデルを採用：`themeStore.overrideTheme` に draft を保持して後ろのターミナル本体（xterm.js）にもリアルタイム反映、フッターの「保存」ボタンで `updateCustomTheme()` を呼び settings に永続化、「キャンセル」/× / ESC / 背景クリックで draft 破棄。`react-colorful` の HexColorPicker をポップオーバー化した `ColorField` 共通コンポーネントが、内部に draft state を持って **「タイプ中の不完全な HEX を親に流さない」** ことでテーマが消える致命バグを構造的に防ぐ。`.itermcolors`（XML plist）パーサを外部依存ゼロで実装し、`mbadolato/iTerm2-Color-Schemes` の 450+ プリセットをインポート可能。Header の旧「ショートカット」ボタンは Settings 内のショートカットタブで完全代替されたため削除。
-
-#### 変更点
-
-- **shared SSOT 化**: `src/shared/theme-types.ts` に `XtermTheme` / `AppColors` / `Theme` 型と `validateTheme` / `isHexColor` を集約（renderer/styles/theme.ts は型を re-export + プリセット値のみ保持）。`src/shared/settings.ts` に `AppSettings` / `validateAppSettings` / `mergeSettings` を SSOT 化、検証はフィールド単位フォールバック（セッション永続化と異なり一部破損で全設定を失わない）
-- **main 永続化**: `src/main/settings.ts` に `SettingsManager`（`userData/settings.json`、debounce 250ms、broadcast 即時、サイレントフォールバック）。`src/main/itermcolors-parser.ts` で plist XML を正規表現パース（外部依存なし、1MB 上限、Ansi 0-15 + Background/Foreground/Cursor/Selection マッピング）
-- **IPC 5 チャネル追加**: `settings:get` / `settings:update` / `settings:importItermColors` (handle/invoke)、`settings:changed` (broadcast)、`window:setOpacity` / `app:relaunch` (on/send)。`window-manager.ts` で起動時に `settingsManager.get().window` を反映し、`vibrancyEnabled` のとき `transparent: true` + `vibrancy: "under-window"` + `backgroundColor: "#00000000"` の 3 点セットを適用、`win.setOpacity(opacity)` で初期値反映
-- **shortcuts レジストリ化**: `src/renderer/shortcuts/registry.ts` に 24 ID（split-vertical / focus-_ / kill-line-_ / open-settings 等）を SSOT 化。`parseKey` / `matchKey` / `formatKey` / `canonicalize`（cmd/meta/command エイリアス吸収）/ `resolveShortcutKey`（user override > default）/ `findConflictingIds` を提供。App.tsx の 23 個の `if` ブロックを `Partial<Record<ShortcutId, handler>>` ディスパッチに置換、Cmd+Shift+Arrow → select-current-line のエイリアス 4 キーのみ前段で特殊処理
-- **settingsStore + settingsModalStore**: `useSettingsStore`（load / update / `settings:changed` 購読 / 楽観更新）+ セレクタ `useShortcutBindings` / `useWindowSettings` / `useCustomThemes`。`useSettingsModalStore` で isOpen + recordingShortcutId を管理し、録音中は App.tsx 側で global keydown を抑制、ShortcutSettings 側の listener が capture phase で取得
-- **themeStore リファクタ**: `availableThemes`/`getCurrentTheme` を撤去 → `useAvailableThemes` / `useCurrentTheme` をリアクティブフック化。`overrideTheme` フィールドと `setOverrideTheme()` 追加、`useCurrentTheme` の優先順位は **override > 組込 > customThemes > default**。`setTheme()` は永続化付き（settings.update を呼ぶ）+ override クリア。`setThemeIdLocal()` は永続化なし（起動時 settings load 反映用）。`addCustomTheme` / `updateCustomTheme` / `deleteCustomTheme` を追加（settings 経由で全ウィンドウへ broadcast）
-- **SettingsModal + 4 サブコンポーネント**: `SettingsModal.tsx`（800×600、左 180px カテゴリリスト + 右タブ、フッターに「キャンセル」「保存」、未保存変更インジケータ）、`AppearanceSettings.tsx`（テーマ選択 / 「複製して編集」 / カスタム編集 / 基本色・ANSI 16 色・App UI のアコーディオン / ライブプレビュー / .itermcolors インポート / JSON エクスポート、auto-editing useEffect でカスタム選択時に override 自動セット）、`ShortcutSettings.tsx`（24 ID 表 / Record-Key UX / 競合検出バナーで上書き or キャンセル / クリア / デフォルトに戻す）、`WindowSettings.tsx`（Opacity スライダー即時反映 / Vibrancy トグル + 再起動誘導）、`ColorField.tsx`（react-colorful + HEX 入力 + スウォッチ + click-outside、内部 draft state で **不完全 HEX を親に流さない**）
-- **ColorField 致命バグ修正**: 旧実装は HEX 入力欄の onChange で常に親に通知していたため、ユーザーが `#ff` までタイプした瞬間に main 側 validateTheme が null を返し customThemes 配列からテーマが落ちて「色変更がリセットされる」現象が発生。draft state で「有効 HEX のみ親に通知」+ blur 時に draft を value にスナップ復帰する形に修正
-- **保存モデル変更**: 旧実装は ColorField onChange → 即 settings 永続化だったが、ユーザー要望「閉じたら変更が消える / 明示的に保存したい」に対応するため draft / commit モデルへ。テーマ編集中の override は `themeStore` に保持してターミナル本体にライブ反映、「保存」ボタンで `updateCustomTheme(draft)` 永続化 → override クリア。「キャンセル」/× / ESC / 背景クリック / テーマ切替で override 自動クリア。Opacity / Vibrancy / ショートカットは即時保存のため Save の対象外（フッターヘルプテキストで明示）
-- **Header 整理**: 「ショートカット」ボタンを削除（Settings 内のショートカットタブで完全代替）、代わりに歯車アイコンの「設定 (Cmd+,)」ボタンを追加。`ShortcutsModal.tsx` とそのテストを撤去
-- **window-manager**: 起動時に settings 読込 + `vibrancyEnabled` 反映 + `setOpacity()` 初期値適用
-- **registry のバグ修正（テスト駆動）**: `normalizeKeyName(" ")` が length-1 ブランチで先 return して `"Cmd+ "` を返していたバグを Gate 4 で検出し修正（→ `"Cmd+Space"`）
-- **新規テスト 53 件**: `shortcuts/__tests__/registry.test.ts`（24 ケース、parseKey の修飾キー順序 / 修飾キー単独 null / Space 正規化、matchKey の case-insensitive とエイリアス、formatKey の絵文字レンダリング、resolveShortcutKey / findConflictingIds の override・null・除外）、`shared/__tests__/theme-types.test.ts`（10 ケース、isHexColor の各種パターンと validateTheme のフィールド単位検証）、`shared/__tests__/settings.test.ts`（19 ケース、validateAppSettings の version / opacity clamp / vibrancy 厳密 true / shortcut 文字列長制限 / customThemes フィルタ、mergeSettings の浅マージ・shortcuts 完全置換）
-- **既存テスト更新**: `themeStore.test.ts` を新 API に追従（getCurrentTheme メソッド撤去 → setTheme/setThemeIdLocal/themes record 直接ルックアップ）、`Header.test.tsx` の「ショートカットモーダル」テストを「設定ボタン → settingsModalStore.open()」に置換、`ShortcutsModal.test.tsx` を撤去
-- **テスト合計**: 24 ファイル / 335 件グリーン（修正前 282 から +53 件）
-- **依存追加**: `react-colorful`（軽量 ~2.8kB、HexColorPicker のみ使用）
-- **設計判断**:
-  - **GUI first + JSON SSOT**: VS Code / Zed の二層モデル。settings.json を SSOT にすることでパワーユーザーが直接編集でき、GUI は発見可能性を担保。Zed 公式ブログ「JSON only では新機能の発見が impossible」の知見を採用
-  - **ウィンドウ独立 + 永続化共通**: `themeStore.currentThemeId` はウィンドウローカル（settings broadcast でも他ウィンドウのテーマは触らない）。`customThemes` / `shortcuts` / `window` は全ウィンドウ即時同期。前提は既存 `make each window's theme independent` コミット (a155d11) の方針踏襲
-  - **draft / commit モデル（テーマ編集のみ）**: 「色変更が消える」問題と「明示的保存が欲しい」要望の両方を解決。Opacity / Vibrancy / ショートカットを draft 化しなかったのは UX 的に「即時反映」が自然なため（特に Opacity スライダー）。フッターヘルプテキストで両者の振る舞いを明示
-  - **ColorField の draft state**: タイプ中の不完全な HEX を親に流すと、main 側 validateTheme が「全フィールド有効」を要求するためテーマ全体を破棄してしまう。renderer 側で「有効値のみ親に通知」が最もロバスト
-  - **vibrancy デフォルト Off**: Electron #31862（vibrancy + transparent で白背景、v16+ の既知バグ）を考慮しオプトイン方式。フッターヘルプテキストで「再起動が必要」「一部環境で背景が白くなる」を明示。CSS `backdrop-filter` フォールバックは Phase 2 候補
-  - **Cmd+Shift+Arrow エイリアス**: 1 アクション × 4 キー（select-current-line）の特殊ケースは registry に乗せず前段で直接処理。registry の「1 ID = 1 デフォルトキー」ルールを保つ
-  - **`.itermcolors` パーサの外部依存ゼロ**: `plist` パッケージを使わず正規表現で実装。`mbadolato/iTerm2-Color-Schemes` の 450+ プリセットを取り込めればユーザー価値が大きく、依存追加は不釣り合い。AppColors は base テーマから流用、xterm パートのみ上書き
-  - **registry の Space バグ**: テスト駆動で発見。length-1 ブランチで先 return する設計を「" " を先に special-case」に変更。同種のバグはテストの存在意義そのもの
-- **計画書アーカイブ**: `.claude/archive/2026-04-26-settings-feature.md` に Status=COMPLETED で移動済み
+> 2026-04-29 ローリングアーカイブ: 2026-04-26 の 2 エントリ（Markdown エディタテーマ対応 / Settings モーダル新設）を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 > 2026-04-27 ローリングアーカイブ: これ以前の 30 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

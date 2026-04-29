@@ -31,6 +31,10 @@ export type ShortcutId =
   | "kill-word-forward"
   | "move-word-left"
   | "move-word-right"
+  // Font
+  | "font-zoom-in"
+  | "font-zoom-out"
+  | "font-zoom-reset"
   // App
   | "open-settings";
 
@@ -40,6 +44,7 @@ export type ShortcutCategory =
   | "Navigation"
   | "Line Editing"
   | "Word Editing"
+  | "Font"
   | "App";
 
 export interface ShortcutDefinition {
@@ -194,6 +199,25 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     category: "Word Editing",
     label: "次の単語に移動",
     defaultKey: "Option+ArrowRight",
+  },
+  // Font
+  {
+    id: "font-zoom-in",
+    category: "Font",
+    label: "フォントを拡大（アクティブペイン）",
+    defaultKey: "Cmd+=",
+  },
+  {
+    id: "font-zoom-out",
+    category: "Font",
+    label: "フォントを縮小（アクティブペイン）",
+    defaultKey: "Cmd+-",
+  },
+  {
+    id: "font-zoom-reset",
+    category: "Font",
+    label: "フォントサイズをリセット（アクティブペイン）",
+    defaultKey: "Cmd+0",
   },
   // App
   {

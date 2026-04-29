@@ -51,6 +51,26 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       return parts[parts.length - 1] || displayCwd;
     }, [displayCwd]);
 
+    // ペインタイトル inline rename。customTitle が設定されていれば優先表示。
+    const customTitle = meta?.customTitle ?? null;
+    const [isRenaming, setIsRenaming] = useState(false);
+    const [renameDraft, setRenameDraft] = useState("");
+    const startRename = useCallback(() => {
+      setRenameDraft(customTitle ?? folderName);
+      setIsRenaming(true);
+    }, [customTitle, folderName]);
+    const commitRename = useCallback(() => {
+      const trimmed = renameDraft.trim();
+      // 空文字列を確定 → 自動表示（CWD 由来）に戻す
+      useTerminalMetaStore
+        .getState()
+        .setCustomTitle(id, trimmed.length === 0 ? null : trimmed);
+      setIsRenaming(false);
+    }, [id, renameDraft]);
+    const cancelRename = useCallback(() => {
+      setIsRenaming(false);
+    }, []);
+
     // プロセス名表示: シェル名と同じ場合はシェル名のみ
     const processDisplay = useMemo(() => {
       const shell = meta?.shellName || "shell";
@@ -393,19 +413,59 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
           </div>
         ) : (
           <>
-            <span
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                flexShrink: 1,
-                minWidth: 0,
-                color: theme.colors.text,
-                fontWeight: 600,
-              }}
-              title={displayCwd}
-            >
-              {folderName}
-            </span>
+            {isRenaming ? (
+              <input
+                type="text"
+                value={renameDraft}
+                autoFocus
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitRename();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelRename();
+                  }
+                  e.stopPropagation();
+                }}
+                placeholder={folderName}
+                style={{
+                  flexShrink: 1,
+                  minWidth: 0,
+                  maxWidth: 240,
+                  padding: "0 4px",
+                  background: "transparent",
+                  border: `1px solid ${theme.colors.border}`,
+                  borderRadius: 3,
+                  color: theme.colors.text,
+                  fontSize: 12,
+                  fontFamily: "inherit",
+                  outline: "none",
+                }}
+              />
+            ) : (
+              <span
+                onDoubleClick={startRename}
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  flexShrink: 1,
+                  minWidth: 0,
+                  color: theme.colors.text,
+                  fontWeight: 600,
+                  cursor: "text",
+                }}
+                title={
+                  customTitle
+                    ? `${customTitle}（ダブルクリックで編集 / 元: ${displayCwd}）`
+                    : `${displayCwd}（ダブルクリックで rename）`
+                }
+              >
+                {customTitle ?? folderName}
+              </span>
+            )}
             <span style={{ color: theme.colors.border, flexShrink: 0 }}>|</span>
             <span
               style={{

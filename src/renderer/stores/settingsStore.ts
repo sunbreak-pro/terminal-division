@@ -68,6 +68,9 @@ function applyOptimistic(
     theme: { ...base.theme },
     shortcuts: { ...base.shortcuts },
     window: { ...base.window },
+    terminal: { ...base.terminal },
+    editor: { ...base.editor },
+    general: { ...base.general },
   };
   if (patch.theme) {
     if (typeof patch.theme.currentThemeId === "string") {
@@ -88,6 +91,15 @@ function applyOptimistic(
       next.window.vibrancyEnabled = patch.window.vibrancyEnabled;
     }
   }
+  if (patch.terminal) {
+    next.terminal = { ...next.terminal, ...patch.terminal };
+  }
+  if (patch.editor) {
+    next.editor = { ...next.editor, ...patch.editor };
+  }
+  if (patch.general) {
+    next.general = { ...next.general, ...patch.general };
+  }
   return next;
 }
 
@@ -100,3 +112,12 @@ export const useWindowSettings = (): AppSettings["window"] =>
 
 export const useCustomThemes = (): AppSettings["theme"]["customThemes"] =>
   useSettingsStore((s) => s.settings.theme.customThemes);
+
+export const useTerminalSettings = (): AppSettings["terminal"] =>
+  useSettingsStore((s) => s.settings.terminal);
+
+export const useEditorSettings = (): AppSettings["editor"] =>
+  useSettingsStore((s) => s.settings.editor);
+
+export const useGeneralSettings = (): AppSettings["general"] =>
+  useSettingsStore((s) => s.settings.general);

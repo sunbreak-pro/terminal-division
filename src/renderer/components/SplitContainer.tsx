@@ -8,6 +8,7 @@ import type {
 } from "../types/layout";
 import { collectPaneIdsInOrder } from "../utils/layoutUtils";
 import TerminalPane from "./TerminalPane";
+import * as terminalManager from "../services/terminalManager";
 
 const SplitContainer: React.FC = React.memo(() => {
   const rootId = useRootId();
@@ -21,6 +22,25 @@ const SplitContainer: React.FC = React.memo(() => {
     ids.forEach((id, index) => map.set(id, index + 1));
     return map;
   }, [rootId, nodes]);
+
+  // Panel のリサイズ通知 → 葉ペインだけ即座に fit + pty.resize。
+  // ResizeObserver より早く正確なサイズが取れるため、scrollback の cols 不整合を防ぐ。
+  // Panel.onResize は SplitNode (内部) にも付くが、id が paneNumberMap に無いものは
+  // 葉ペインではないので無視する。
+  const handlePanelResize = useCallback(
+    (
+      _size: { asPercentage: number; inPixels: number },
+      panelId: string | number | undefined,
+    ): void => {
+      if (typeof panelId !== "string") return;
+      if (!paneNumberMap.has(panelId)) return;
+      const result = terminalManager.fit(panelId);
+      if (result) {
+        window.api.pty.resize(panelId, result.cols, result.rows);
+      }
+    },
+    [paneNumberMap],
+  );
 
   const separatorStyleHorizontal = useMemo(
     () => ({
@@ -66,6 +86,7 @@ const SplitContainer: React.FC = React.memo(() => {
                     id={childId}
                     minSize={10}
                     defaultSize={100 / splitNode.children.length}
+                    onResize={handlePanelResize}
                   >
                     {renderNode(childId)}
                   </Panel>
@@ -95,7 +116,13 @@ const SplitContainer: React.FC = React.memo(() => {
         />
       );
     },
-    [nodes, separatorStyleHorizontal, separatorStyleVertical, paneNumberMap],
+    [
+      nodes,
+      separatorStyleHorizontal,
+      separatorStyleVertical,
+      paneNumberMap,
+      handlePanelResize,
+    ],
   );
 
   return (
