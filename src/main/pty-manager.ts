@@ -9,6 +9,7 @@ import {
   getMergedPath,
   cleanup as cleanupShellIntegration,
 } from "./shell-integration";
+import { claudeProcessDetector } from "./claude-process-detector";
 
 // チャンク分割送信用の定数
 const CHUNK_SIZE = 1024; // 1KB単位で分割
@@ -127,6 +128,10 @@ class PtyManager {
       };
 
       ptyProcess.onData((data) => {
+        // claude TUI 起動検出: PTY chunk を detector に流す。検出ロジック側で
+        // 一度検出した paneId は無視する。
+        claudeProcessDetector.feedChunk(id, windowId, data);
+
         if (proc.bufferingActive) {
           // 上限超過時は累積分 + 今回分を一括 flush して通常モードへ。
           // renderer のリスナー登録より早すぎる送信になるリスクは残るが、
@@ -253,6 +258,8 @@ class PtyManager {
       }
       process.pty.kill();
       this.processes.delete(id);
+      // claude 検出状態もリセット（次に PTY が起動した際に再検出可能にする）
+      claudeProcessDetector.reset(id);
     }
   }
 
@@ -261,6 +268,7 @@ class PtyManager {
       if (proc.windowId === windowId) {
         proc.pty.kill();
         this.processes.delete(id);
+        claudeProcessDetector.reset(id);
       }
     }
   }

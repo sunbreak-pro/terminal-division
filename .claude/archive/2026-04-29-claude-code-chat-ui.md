@@ -1,8 +1,8 @@
 ---
-Status: APPROVED — Phase 0 着手待ち
+Status: COMPLETED
 Created: 2026-04-29
-Updated: 2026-04-29 (Open Questions 確定)
-Task: T3-5（候補） Claude Code Chat UI in Pane
+Updated: 2026-04-29 (実装完了 + 複数 MD タブ対応も同時実装)
+Task: T3-5 Claude Code Chat UI 実装 + 複数 MD タブ対応
 Project: /Users/newlife/dev/apps/terminal-division
 ---
 

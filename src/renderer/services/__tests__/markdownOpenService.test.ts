@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// markdownEditorRegistry をモック化（getApi が undefined を返す = dirty 判定回避）
+// markdownEditorRegistry をモック化
 vi.mock("../markdownEditorRegistry", () => ({
   getApi: vi.fn(() => undefined),
 }));
 
-// fs.readFile / openMarkdown の実体は走らせず、呼び出しだけ確認する
+// fs.readFile / openMarkdown / dialog の呼び出しを観測するためのモック
 const readFileMock = vi.fn();
 const openMarkdownMock = vi.fn();
 const setActiveTerminalMock = vi.fn();
@@ -20,15 +20,15 @@ vi.stubGlobal("window", {
   },
 });
 
-// terminalMetaStore: cwd / mdDirty を制御するため後から差し替え可能に
+// terminalMetaStore: 新仕様（mdTabs[]）。openMarkdown は { ok: true, tabId, existed } を返す。
 const metaState = {
   metas: new Map<
     string,
     {
       cwd: string | null;
       viewMode: string;
-      mdDirty: boolean;
-      mdFilePath: string | null;
+      mdTabs: { id: string; filePath: string; dirty: boolean }[];
+      activeMdTabId: string | null;
     }
   >(),
   openMarkdown: (...args: unknown[]) => openMarkdownMock(...args),
@@ -78,10 +78,15 @@ import {
   NEW_PANE_CHOICE,
 } from "../markdownOpenService";
 
-describe("markdownOpenService", () => {
+describe("markdownOpenService (multi-tab)", () => {
   beforeEach(() => {
     readFileMock.mockReset();
     openMarkdownMock.mockReset();
+    openMarkdownMock.mockReturnValue({
+      ok: true,
+      tabId: "t1",
+      existed: false,
+    });
     setActiveTerminalMock.mockReset();
     splitTerminalMock.mockReset();
     canSplitMock.mockReset();
@@ -103,8 +108,8 @@ describe("markdownOpenService", () => {
       metaState.metas.set("p1", {
         cwd: "/work",
         viewMode: "cli",
-        mdDirty: false,
-        mdFilePath: null,
+        mdTabs: [],
+        activeMdTabId: null,
       });
       readFileMock.mockResolvedValue({ ok: true, content: "# hi" });
 
@@ -121,8 +126,8 @@ describe("markdownOpenService", () => {
       metaState.metas.set("p1", {
         cwd: "/work",
         viewMode: "cli",
-        mdDirty: false,
-        mdFilePath: null,
+        mdTabs: [],
+        activeMdTabId: null,
       });
 
       requestEditMarkdownFromTerminal("/other/foo.md", "p1");
@@ -147,20 +152,24 @@ describe("markdownOpenService", () => {
       expect(readFileMock).not.toHaveBeenCalled();
     });
 
-    it("triggers unsaved warning when current pane has dirty MD inside CWD", () => {
+    it("opens new tab without warning even when another dirty MD tab exists in the pane", async () => {
+      // 新仕様: dirty なタブが別にあっても、新ファイルを開く際の警告は不要
+      // （タブが追加されるだけで dirty タブを破壊しない）
       metaState.metas.set("p1", {
         cwd: "/work",
         viewMode: "md",
-        mdDirty: true,
-        mdFilePath: "/work/dirty.md",
+        mdTabs: [{ id: "t-existing", filePath: "/work/dirty.md", dirty: true }],
+        activeMdTabId: "t-existing",
       });
+      readFileMock.mockResolvedValue({ ok: true, content: "# hi" });
 
       requestEditMarkdownFromTerminal("/work/new.md", "p1");
+      await Promise.resolve();
+      await Promise.resolve();
 
-      expect(showUnsavedMock).toHaveBeenCalledTimes(1);
-      const arg = showUnsavedMock.mock.calls[0][0];
-      expect(arg.filePath).toBe("/work/dirty.md");
-      expect(arg.paneId).toBe("p1");
+      // 警告は出さない / openMarkdown が呼ばれて新タブが追加される
+      expect(showUnsavedMock).not.toHaveBeenCalled();
+      expect(readFileMock).toHaveBeenCalledWith("/work/new.md");
     });
   });
 
@@ -169,8 +178,8 @@ describe("markdownOpenService", () => {
       metaState.metas.set("p1", {
         cwd: "/work",
         viewMode: "cli",
-        mdDirty: false,
-        mdFilePath: null,
+        mdTabs: [],
+        activeMdTabId: null,
       });
       requestEditMarkdownFromSidebar("/work/in-cwd.md", "p1");
       expect(showOpenConfirmMock).toHaveBeenCalledTimes(1);
@@ -190,8 +199,8 @@ describe("markdownOpenService", () => {
       metaState.metas.set("p1", {
         cwd: "/work",
         viewMode: "cli",
-        mdDirty: false,
-        mdFilePath: null,
+        mdTabs: [],
+        activeMdTabId: null,
       });
       canSplitMock.mockReturnValue(true);
       readFileMock.mockResolvedValue({ ok: true, content: "# hi" });
@@ -214,8 +223,8 @@ describe("markdownOpenService", () => {
       metaState.metas.set("p1", {
         cwd: "/work",
         viewMode: "cli",
-        mdDirty: false,
-        mdFilePath: null,
+        mdTabs: [],
+        activeMdTabId: null,
       });
       canSplitMock.mockReturnValue(false);
 

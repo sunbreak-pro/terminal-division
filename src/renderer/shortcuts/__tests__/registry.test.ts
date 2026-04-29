@@ -58,6 +58,21 @@ describe("parseKey", () => {
   it("preserves symbol keys", () => {
     expect(parseKey(ev({ key: ".", meta: true }))).toBe("Cmd+.");
     expect(parseKey(ev({ key: ",", meta: true }))).toBe("Cmd+,");
+    expect(parseKey(ev({ key: "-", meta: true }))).toBe("Cmd+-");
+    expect(parseKey(ev({ key: "=", meta: true }))).toBe("Cmd+=");
+  });
+
+  it("aliases '+' to 'Plus' and strips Shift (layout-agnostic Cmd+Plus)", () => {
+    // US 配列: Cmd+Shift+= (e.key="+", shiftKey=true) → "Cmd+Plus"
+    expect(parseKey(ev({ key: "+", meta: true, shift: true }))).toBe(
+      "Cmd+Plus",
+    );
+    // JIS 配列: Cmd+Shift+- (e.key="+", shiftKey=true) → "Cmd+Plus"
+    expect(parseKey(ev({ key: "+", meta: true, shift: true }))).toBe(
+      "Cmd+Plus",
+    );
+    // Shift なしでも "Plus" にエイリアス（テンキー等）
+    expect(parseKey(ev({ key: "+", meta: true }))).toBe("Cmd+Plus");
   });
 
   it("converts space to 'Space'", () => {
@@ -107,6 +122,24 @@ describe("matchKey", () => {
   it("returns false for modifier-only events", () => {
     expect(matchKey(ev({ key: "Meta", meta: true }), "Cmd+D")).toBe(false);
   });
+
+  it("matches Cmd+Plus regardless of source layout / Shift state", () => {
+    // バインディング側は "Cmd++" / "Cmd+Plus" のどちらでも同じものを指す
+    expect(
+      matchKey(ev({ key: "+", meta: true, shift: true }), "Cmd+Plus"),
+    ).toBe(true);
+    expect(matchKey(ev({ key: "+", meta: true, shift: true }), "Cmd++")).toBe(
+      true,
+    );
+    expect(matchKey(ev({ key: "+", meta: true }), "Cmd+Plus")).toBe(true);
+  });
+
+  it("Cmd+- still matches '-' key without shift", () => {
+    expect(matchKey(ev({ key: "-", meta: true }), "Cmd+-")).toBe(true);
+    expect(matchKey(ev({ key: "-", meta: true, shift: true }), "Cmd+-")).toBe(
+      false,
+    );
+  });
 });
 
 describe("formatKey", () => {
@@ -115,6 +148,17 @@ describe("formatKey", () => {
     expect(formatKey("Cmd+Option+ArrowLeft")).toBe("⌘ ⌥ ←");
     expect(formatKey("Shift+Enter")).toBe("⇧ ⏎");
     expect(formatKey("Cmd+Backspace")).toBe("⌘ ⌫");
+  });
+
+  it("renders Plus-key as '+' from either notation", () => {
+    expect(formatKey("Cmd+Plus")).toBe("⌘ +");
+    expect(formatKey("Cmd++")).toBe("⌘ +");
+    expect(formatKey("Cmd+Shift++")).toBe("⌘ ⇧ +");
+  });
+
+  it("renders Cmd+- and Cmd+= as their literal symbol", () => {
+    expect(formatKey("Cmd+-")).toBe("⌘ -");
+    expect(formatKey("Cmd+=")).toBe("⌘ =");
   });
 
   it("returns placeholder for null / empty", () => {
@@ -131,6 +175,10 @@ describe("formatKey", () => {
 describe("resolveShortcutKey", () => {
   it("returns default when bindings has no entry", () => {
     expect(resolveShortcutKey("split-vertical", {})).toBe("Cmd+D");
+  });
+
+  it("font-zoom-in default is Cmd+Plus", () => {
+    expect(resolveShortcutKey("font-zoom-in", {})).toBe("Cmd+Plus");
   });
 
   it("returns user override when bindings has the id", () => {

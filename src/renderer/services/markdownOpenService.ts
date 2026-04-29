@@ -1,16 +1,19 @@
 // Markdown ファイルを「ペインで開く」操作の集約サービス。
 // 発火元（Sidebar / Terminal リンク）に依存しない open フローを 1 箇所に集める。
 //
-// 設計方針:
+// 設計方針（複数 MD タブ対応版）:
 //  - 「アクティブペイン CWD 配下のファイル」 → そのまま開く（確認ダイアログ無し）
 //    ※ ターミナル発のリンクは「自分のペインの CWD 配下」を current とみなす
 //  - 「外」 → 確認ダイアログを出し、既存ペイン or 新規ペイン作成 を選ばせる
 //  - Sidebar からの起動は常にダイアログを出す（ユーザーが明示的に選びたいケース）
+//  - openMarkdown は同 path のタブがあれば既存をアクティブ化、無ければ新タブ追加。
+//    タブ上限（MD_TABS_MAX = 8）到達時は toast で通知して諦める。
+//  - 旧仕様の「dirty な MD を別ファイルで上書き」というシナリオは無くなった
+//    （タブ追加で済むため）。dirty 警告は TerminalSubHeader 側のタブ close で扱う。
 
 import { useTerminalStore } from "../stores/terminalStore";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { useMarkdownDialogStore } from "../stores/markdownDialogStore";
-import * as markdownEditorRegistry from "./markdownEditorRegistry";
 import { collectPaneIdsInOrder } from "../utils/layoutUtils";
 import { isMarkdownPath } from "../utils/markdownFile";
 import { isInsideCwd } from "../utils/markdownPath";
@@ -31,15 +34,23 @@ async function openMarkdownInPane(
     showErrorToast(`ファイル読込に失敗しました: ${result.error}`);
     return;
   }
-  useTerminalMetaStore
+  const opened = useTerminalMetaStore
     .getState()
     .openMarkdown(paneId, filePath, result.content);
+  if (!opened.ok) {
+    if (opened.reason === "limit") {
+      showErrorToast(
+        "このペインで開ける Markdown タブは最大 8 件です。タブを閉じてから開いてください。",
+      );
+    } else {
+      showErrorToast("Markdown を開けませんでした");
+    }
+    return;
+  }
   useTerminalStore.getState().setActiveTerminal(paneId);
 }
 
 // 既存ペインを分割して新規ペインを作り、そこで MD を開く。
-// 元ペインは splitTerminal の引数で指定（通常は activeTerminalId）。
-// 分割不可（MAX_TERMINALS 到達など）の場合は toast を出して諦める。
 async function openMarkdownInNewPane(
   basePaneId: string,
   filePath: string,
@@ -64,9 +75,8 @@ async function openMarkdownInNewPane(
 }
 
 // ダイアログ経由で Markdown を開く共通フロー。
-// - currentPaneId: ダイアログのデフォルト選択ペイン
-// - originatingPaneId: 「新規」が選ばれた際に分割の起点となるペイン
-//   （Sidebar 起動時は currentPaneId と同じで OK）
+// 複数 MD タブ環境では「現ペインの dirty な MD」概念が無くなったため、ダイアログを
+// そのまま出すだけに簡素化される。
 function showOpenDialog(args: {
   filePath: string;
   currentPaneId: string;
@@ -81,7 +91,6 @@ function showOpenDialog(args: {
   }));
 
   const showOpenConfirm = useMarkdownDialogStore.getState().showOpenConfirm;
-  const showUnsaved = useMarkdownDialogStore.getState().showUnsaved;
   const dismiss = useMarkdownDialogStore.getState().dismiss;
 
   const performOpen = (chosen: PaneChoiceId): void => {
@@ -93,41 +102,13 @@ function showOpenDialog(args: {
     }
   };
 
-  const showConfirm = (): void => {
-    showOpenConfirm({
-      filePath,
-      availablePanes,
-      defaultPaneId: currentPaneId,
-      allowCreateNewPane: true,
-      onConfirm: performOpen,
-    });
-  };
-
-  // 選択ペインが dirty な MD を編集中なら、先に未保存警告を出す（既存挙動踏襲）
-  const meta = useTerminalMetaStore.getState().metas.get(currentPaneId);
-  if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
-    showUnsaved({
-      filePath: meta.mdFilePath,
-      paneId: currentPaneId,
-      reason: "open-other",
-      onSave: async () => {
-        const api = markdownEditorRegistry.getApi(currentPaneId);
-        const ok = api ? await api.save() : false;
-        if (!ok) {
-          showErrorToast("保存に失敗しました");
-          return;
-        }
-        dismiss();
-        showConfirm();
-      },
-      onDiscard: () => {
-        dismiss();
-        showConfirm();
-      },
-    });
-    return;
-  }
-  showConfirm();
+  showOpenConfirm({
+    filePath,
+    availablePanes,
+    defaultPaneId: currentPaneId,
+    allowCreateNewPane: true,
+    onConfirm: performOpen,
+  });
 }
 
 /**
@@ -161,32 +142,7 @@ export function requestEditMarkdownFromTerminal(
   const cwd = meta?.cwd ?? null;
 
   if (cwd && isInsideCwd(resolvedAbsolutePath, cwd)) {
-    // current 配下: 直接開く（dirty なら未保存警告）
-    const showUnsaved = useMarkdownDialogStore.getState().showUnsaved;
-    const dismiss = useMarkdownDialogStore.getState().dismiss;
-
-    if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
-      showUnsaved({
-        filePath: meta.mdFilePath,
-        paneId: originatingPaneId,
-        reason: "open-other",
-        onSave: async () => {
-          const api = markdownEditorRegistry.getApi(originatingPaneId);
-          const ok = api ? await api.save() : false;
-          if (!ok) {
-            showErrorToast("保存に失敗しました");
-            return;
-          }
-          dismiss();
-          void openMarkdownInPane(originatingPaneId, resolvedAbsolutePath);
-        },
-        onDiscard: () => {
-          dismiss();
-          void openMarkdownInPane(originatingPaneId, resolvedAbsolutePath);
-        },
-      });
-      return;
-    }
+    // current 配下: 直接開く（複数タブ環境では既存タブを尊重 / 新タブ追加）
     void openMarkdownInPane(originatingPaneId, resolvedAbsolutePath);
     return;
   }
@@ -197,4 +153,16 @@ export function requestEditMarkdownFromTerminal(
     currentPaneId: originatingPaneId,
     originatingPaneId,
   });
+}
+
+/**
+ * 既に開かれている MD タブを集約して MdTabPickerDropdown 等から呼ぶための直接 API。
+ * （+ ボタンのドロップダウン経由のオープンに使用）
+ */
+export async function openMarkdownDirect(
+  paneId: string,
+  filePath: string,
+): Promise<void> {
+  if (!isMarkdownPath(filePath)) return;
+  await openMarkdownInPane(paneId, filePath);
 }

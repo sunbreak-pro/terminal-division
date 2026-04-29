@@ -1,8 +1,10 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   useTerminalMeta,
   useTerminalMetaStore,
+  type MdTab,
 } from "../stores/terminalMetaStore";
+import { useChatSessionStore } from "../stores/chatSessionStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { useTerminalSettings } from "../stores/settingsStore";
 import { promptAndInsertFiles } from "../utils/insertFiles";
@@ -12,6 +14,8 @@ import { useMarkdownDialogStore } from "../stores/markdownDialogStore";
 import { getFileName } from "../utils/markdownFile";
 import { showErrorToast } from "./Sidebar/ErrorToast";
 import { ContextMenu, ContextMenuItem } from "./Sidebar/ContextMenu";
+import { disposeChatSession } from "../services/chatBridge";
+import { MdTabPickerDropdown } from "./MdTabPickerDropdown";
 
 interface TerminalSubHeaderProps {
   id: string;
@@ -34,6 +38,9 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     const themeConfig = useThemeConfig();
     const theme = { colors: currentTheme.colors, ...themeConfig };
     const terminalSettings = useTerminalSettings();
+    // ペイン番号は terminal 本体と同じ実効フォントサイズに揃える。
+    const paneNumberFontSize =
+      meta?.fontSizeOverride ?? terminalSettings.fontSize;
 
     // CWD表示: ホームディレクトリは ~ に変換、未報告時は ~ をデフォルト表示
     const displayCwd = useMemo(() => {
@@ -63,7 +70,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     }, [customTitle, folderName]);
     const commitRename = useCallback(() => {
       const trimmed = renameDraft.trim();
-      // 空文字列を確定 → 自動表示（CWD 由来）に戻す
       useTerminalMetaStore
         .getState()
         .setCustomTitle(id, trimmed.length === 0 ? null : trimmed);
@@ -89,14 +95,20 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [id],
     );
 
-    // ===== Markdown タブ操作 =====
-    const hasMarkdown = !!meta?.mdFilePath;
+    // ===== Markdown / Chat タブ操作 =====
+    const mdTabs = meta?.mdTabs ?? [];
+    const activeMdTabId = meta?.activeMdTabId ?? null;
     const isMd = meta?.viewMode === "md";
-    const isDirty = meta?.mdDirty ?? false;
-    const mdFilePath = meta?.mdFilePath ?? null;
+    const isChat = meta?.viewMode === "chat";
+    const canOpenMore = mdTabs.length < 8;
+
+    // Chat セッションが Renderer 側に存在するかどうか（タブ表示判定 + 会話履歴有無）。
+    const hasChatSession = useChatSessionStore((s) => s.sessions.has(id));
+    const showChatTab = isChat || hasChatSession;
+    const showTabs = mdTabs.length > 0 || showChatTab;
 
     const switchToMode = useCallback(
-      (mode: "cli" | "md"): void => {
+      (mode: "cli" | "md" | "chat"): void => {
         if (meta?.viewMode === mode) return;
         useTerminalMetaStore.getState().setViewMode(id, mode);
       },
@@ -106,58 +118,38 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     const handleClickCliTab = useCallback(
       (e: React.MouseEvent<HTMLButtonElement>) => {
         e.stopPropagation();
-        if (!isMd) return; // 既に CLI
-        if (isDirty && mdFilePath) {
-          // dirty な MD タブから CLI へ切替: 表示を隠すだけだが念のため警告
-          useMarkdownDialogStore.getState().showUnsaved({
-            filePath: mdFilePath,
-            paneId: id,
-            reason: "switch-to-cli",
-            onSave: async () => {
-              const api = markdownEditorRegistry.getApi(id);
-              const ok = api ? await api.save() : false;
-              if (!ok) {
-                showErrorToast("保存に失敗しました");
-                return;
-              }
-              useMarkdownDialogStore.getState().dismiss();
-              switchToMode("cli");
-            },
-            onDiscard: () => {
-              useMarkdownDialogStore.getState().dismiss();
-              switchToMode("cli");
-            },
-          });
-          return;
-        }
+        if (meta?.viewMode === "cli") return;
         switchToMode("cli");
       },
-      [id, isMd, isDirty, mdFilePath, switchToMode],
+      [meta?.viewMode, switchToMode],
     );
 
+    // 個別 MD タブをクリック: そのタブをアクティブ化 + viewMode=md
     const handleClickMdTab = useCallback(
-      (e: React.MouseEvent<HTMLButtonElement>) => {
+      (e: React.MouseEvent<HTMLButtonElement>, tabId: string) => {
         e.stopPropagation();
-        switchToMode("md");
+        const store = useTerminalMetaStore.getState();
+        store.setActiveMdTab(id, tabId);
+        store.setViewMode(id, "md");
       },
-      [switchToMode],
+      [id],
     );
 
-    // span / button いずれからも呼ばれるため、要素は HTMLElement に汎化する
+    // 個別 MD タブの × をクリック: dirty なら警告、なければ即座に閉じる
     const handleCloseMdTab = useCallback(
-      (e: React.MouseEvent<HTMLElement>) => {
+      (e: React.MouseEvent<HTMLElement>, tab: MdTab) => {
         e.stopPropagation();
-        if (!mdFilePath) return;
         const close = (): void => {
-          useTerminalMetaStore.getState().clearMarkdown(id);
+          useTerminalMetaStore.getState().closeMdTab(id, tab.id);
         };
-        if (isDirty) {
+        if (tab.dirty) {
           useMarkdownDialogStore.getState().showUnsaved({
-            filePath: mdFilePath,
+            filePath: tab.filePath,
             paneId: id,
+            tabId: tab.id,
             reason: "open-other",
             onSave: async () => {
-              const api = markdownEditorRegistry.getApi(id);
+              const api = markdownEditorRegistry.getApi(tab.id);
               const ok = api ? await api.save() : false;
               if (!ok) {
                 showErrorToast("保存に失敗しました");
@@ -175,13 +167,47 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         }
         close();
       },
-      [id, mdFilePath, isDirty],
+      [id],
     );
 
-    const mdFileName = useMemo(
-      () => (mdFilePath ? getFileName(mdFilePath) : ""),
-      [mdFilePath],
+    // Chat タブをクリック: viewMode=chat に切替
+    const handleClickChatTab = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        switchToMode("chat");
+      },
+      [switchToMode],
     );
+
+    // Chat タブを閉じる: chat session を破棄して viewMode を cli に戻す
+    const handleCloseChatTab = useCallback(
+      (e: React.MouseEvent<HTMLElement>) => {
+        e.stopPropagation();
+        disposeChatSession(id);
+        if (meta?.viewMode === "chat") {
+          useTerminalMetaStore.getState().setViewMode(id, "cli");
+        }
+      },
+      [id, meta?.viewMode],
+    );
+
+    // Chat タブを手動で起動するためのトリガー（吹き出しアイコン）。
+    const handleStartChat = useCallback((): void => {
+      useTerminalMetaStore.getState().setViewMode(id, "chat");
+    }, [id]);
+
+    // ===== MD タブピッカードロップダウン =====
+    const plusButtonRef = useRef<HTMLButtonElement | null>(null);
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const handleClickPlus = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.stopPropagation();
+        if (!canOpenMore) return; // 上限到達時は no-op
+        setPickerOpen((v) => !v);
+      },
+      [canOpenMore],
+    );
+    const closePicker = useCallback(() => setPickerOpen(false), []);
 
     // スクロールバック削除メニュー: クリックでアイコン下にポップオーバーを開く
     const [clearMenuPos, setClearMenuPos] = useState<{
@@ -270,6 +296,29 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [theme.colors.textSecondary, theme.colors.border],
     );
 
+    // タブボタンの共通スタイル生成
+    const tabButtonStyle = (active: boolean): React.CSSProperties => ({
+      background: "transparent",
+      border: "none",
+      color: active ? theme.colors.text : theme.colors.textSecondary,
+      fontSize: 12,
+      fontFamily: "inherit",
+      letterSpacing: "0.02em",
+      padding: "0 6px",
+      cursor: "pointer",
+      borderBottom: active
+        ? `2px solid ${theme.colors.accent}`
+        : "2px solid transparent",
+      marginBottom: -1,
+      fontWeight: active ? 700 : 500,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4,
+      maxWidth: 180,
+      overflow: "hidden",
+      flexShrink: 0,
+    });
+
     return (
       <div
         style={{
@@ -294,181 +343,71 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       >
         <span
           style={{
-            // ユーザーの設定フォントサイズと同寸にして「数字だけ大きい」違和感を排除。
-            // 強調はアクセントカラーのみで担当（fontWeight は周囲の SubHeader に合わせる）。
             color: theme.colors.accent,
-            fontSize: `${terminalSettings.fontSize}px`,
+            fontSize: `${paneNumberFontSize}px`,
             flexShrink: 0,
             fontVariantNumeric: "tabular-nums",
           }}
         >
           {paneNumber}
         </span>
-        {hasMarkdown ? (
-          <div
+        {/* タイトル / CWD は常に表示する。タブを開いていても消さない */}
+        {isRenaming ? (
+          <input
+            type="text"
+            value={renameDraft}
+            autoFocus
+            onChange={(e) => setRenameDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitRename();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                cancelRename();
+              }
+              e.stopPropagation();
+            }}
+            placeholder={folderName}
             style={{
-              display: "flex",
-              alignItems: "stretch",
-              gap: 0,
               flexShrink: 1,
               minWidth: 0,
-              height: "100%",
+              maxWidth: 240,
+              padding: "0 4px",
+              background: "transparent",
+              border: `1px solid ${theme.colors.border}`,
+              borderRadius: 3,
+              color: theme.colors.text,
+              fontSize: 12,
+              fontFamily: "inherit",
+              outline: "none",
             }}
-          >
-            <button
-              type="button"
-              onClick={handleClickCliTab}
-              title="ターミナル表示に切替"
-              style={{
-                background: "transparent",
-                border: "none",
-                color: !isMd ? theme.colors.text : theme.colors.textSecondary,
-                fontSize: 12,
-                fontFamily: "inherit",
-                letterSpacing: "0.03em",
-                padding: "0 8px",
-                cursor: "pointer",
-                borderBottom: !isMd
-                  ? `2px solid ${theme.colors.accent}`
-                  : "2px solid transparent",
-                marginBottom: -1,
-                fontWeight: !isMd ? 700 : 500,
-              }}
-            >
-              CLI
-            </button>
-            <button
-              type="button"
-              onClick={handleClickMdTab}
-              title={mdFilePath ?? ""}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: isMd ? theme.colors.text : theme.colors.textSecondary,
-                fontSize: 12,
-                fontFamily: "inherit",
-                letterSpacing: "0.02em",
-                padding: "0 4px 0 8px",
-                cursor: "pointer",
-                borderBottom: isMd
-                  ? `2px solid ${theme.colors.accent}`
-                  : "2px solid transparent",
-                marginBottom: -1,
-                fontWeight: isMd ? 700 : 500,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                maxWidth: 220,
-                overflow: "hidden",
-              }}
-            >
-              <span
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {mdFileName}
-              </span>
-              {isDirty && (
-                <span
-                  aria-label="未保存"
-                  style={{
-                    color: theme.colors.accent,
-                    fontSize: 14,
-                    lineHeight: 1,
-                  }}
-                >
-                  ●
-                </span>
-              )}
-              <span
-                role="button"
-                aria-label="Markdown タブを閉じる"
-                onClick={handleCloseMdTab}
-                style={{
-                  marginLeft: 2,
-                  width: 14,
-                  height: 14,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: 3,
-                  color: theme.colors.textSecondary,
-                  fontSize: 12,
-                  lineHeight: 1,
-                  cursor: "pointer",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor =
-                    theme.colors.buttonHover;
-                  e.currentTarget.style.color = theme.colors.text;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "transparent";
-                  e.currentTarget.style.color = theme.colors.textSecondary;
-                }}
-              >
-                ×
-              </span>
-            </button>
-          </div>
+          />
         ) : (
+          <span
+            onDoubleClick={startRename}
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              flexShrink: 1,
+              minWidth: 0,
+              maxWidth: showTabs ? 160 : undefined,
+              color: theme.colors.text,
+              fontWeight: 600,
+              cursor: "text",
+            }}
+            title={
+              customTitle
+                ? `${customTitle}（ダブルクリックで編集 / 元: ${displayCwd}）`
+                : `${displayCwd}（ダブルクリックで rename）`
+            }
+          >
+            {customTitle ?? folderName}
+          </span>
+        )}
+        {!showTabs && (
           <>
-            {isRenaming ? (
-              <input
-                type="text"
-                value={renameDraft}
-                autoFocus
-                onChange={(e) => setRenameDraft(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    commitRename();
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    cancelRename();
-                  }
-                  e.stopPropagation();
-                }}
-                placeholder={folderName}
-                style={{
-                  flexShrink: 1,
-                  minWidth: 0,
-                  maxWidth: 240,
-                  padding: "0 4px",
-                  background: "transparent",
-                  border: `1px solid ${theme.colors.border}`,
-                  borderRadius: 3,
-                  color: theme.colors.text,
-                  fontSize: 12,
-                  fontFamily: "inherit",
-                  outline: "none",
-                }}
-              />
-            ) : (
-              <span
-                onDoubleClick={startRename}
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  flexShrink: 1,
-                  minWidth: 0,
-                  color: theme.colors.text,
-                  fontWeight: 600,
-                  cursor: "text",
-                }}
-                title={
-                  customTitle
-                    ? `${customTitle}（ダブルクリックで編集 / 元: ${displayCwd}）`
-                    : `${displayCwd}（ダブルクリックで rename）`
-                }
-              >
-                {customTitle ?? folderName}
-              </span>
-            )}
             <span style={{ color: theme.colors.border, flexShrink: 0 }}>|</span>
             <span
               style={{
@@ -482,6 +421,164 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               {processDisplay}
             </span>
           </>
+        )}
+        {showTabs && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "stretch",
+              gap: 0,
+              flexShrink: 1,
+              minWidth: 0,
+              height: "100%",
+              marginLeft: 4,
+              borderLeft: `1px solid ${theme.colors.border}`,
+              paddingLeft: 4,
+              overflowX: "auto",
+              overflowY: "hidden",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleClickCliTab}
+              title="ターミナル表示に切替"
+              style={tabButtonStyle(meta?.viewMode === "cli")}
+            >
+              CLI
+            </button>
+            {mdTabs.map((tab) => {
+              const fileName = getFileName(tab.filePath);
+              const active = isMd && activeMdTabId === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={(e) => handleClickMdTab(e, tab.id)}
+                  title={tab.filePath}
+                  style={tabButtonStyle(active)}
+                >
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {fileName}
+                  </span>
+                  {tab.dirty && (
+                    <span
+                      aria-label="未保存"
+                      style={{
+                        color: theme.colors.accent,
+                        fontSize: 14,
+                        lineHeight: 1,
+                      }}
+                    >
+                      ●
+                    </span>
+                  )}
+                  <span
+                    role="button"
+                    aria-label="タブを閉じる"
+                    onClick={(e) => handleCloseMdTab(e, tab)}
+                    style={{
+                      marginLeft: 2,
+                      width: 14,
+                      height: 14,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderRadius: 3,
+                      color: theme.colors.textSecondary,
+                      fontSize: 12,
+                      lineHeight: 1,
+                      cursor: "pointer",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor =
+                        theme.colors.buttonHover;
+                      e.currentTarget.style.color = theme.colors.text;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = "transparent";
+                      e.currentTarget.style.color = theme.colors.textSecondary;
+                    }}
+                  >
+                    ×
+                  </span>
+                </button>
+              );
+            })}
+            {/* + ボタン: MD タブを開く（mdTabs > 0 のときのみ表示。ペイン初回はサイドバーから開く） */}
+            {mdTabs.length > 0 && (
+              <button
+                ref={plusButtonRef}
+                type="button"
+                onClick={handleClickPlus}
+                title={
+                  canOpenMore
+                    ? "Markdown タブを追加"
+                    : "Markdown タブの上限（8）に達しました"
+                }
+                aria-label="Markdown タブを追加"
+                aria-disabled={!canOpenMore}
+                style={{
+                  ...tabButtonStyle(false),
+                  cursor: canOpenMore ? "pointer" : "not-allowed",
+                  color: canOpenMore
+                    ? theme.colors.textSecondary
+                    : theme.colors.border,
+                  opacity: canOpenMore ? 1 : 0.5,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  paddingLeft: 8,
+                  paddingRight: 8,
+                }}
+              >
+                +
+              </button>
+            )}
+            {showChatTab && (
+              <button
+                type="button"
+                onClick={handleClickChatTab}
+                title="Chat 表示に切替（Claude Code）"
+                style={tabButtonStyle(isChat)}
+              >
+                <span>Chat</span>
+                <span
+                  role="button"
+                  aria-label="Chat タブを閉じる"
+                  onClick={handleCloseChatTab}
+                  style={{
+                    marginLeft: 2,
+                    width: 14,
+                    height: 14,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 3,
+                    color: theme.colors.textSecondary,
+                    fontSize: 12,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor =
+                      theme.colors.buttonHover;
+                    e.currentTarget.style.color = theme.colors.text;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                    e.currentTarget.style.color = theme.colors.textSecondary;
+                  }}
+                >
+                  ×
+                </span>
+              </button>
+            )}
+          </div>
         )}
         <div
           style={{
@@ -541,6 +638,30 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
+          {!showChatTab && (
+            <button
+              type="button"
+              onClick={handleStartChat}
+              onMouseEnter={handleIconButtonEnter}
+              onMouseLeave={handleIconButtonLeave}
+              title="Claude Code Chat を起動"
+              aria-label="Chat を起動"
+              style={iconButtonStyle}
+            >
+              <svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </button>
+          )}
         </div>
         {clearMenuPos && (
           <ContextMenu
@@ -548,6 +669,13 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
             y={clearMenuPos.y}
             items={clearMenuItems}
             onClose={closeClearMenu}
+          />
+        )}
+        {pickerOpen && (
+          <MdTabPickerDropdown
+            paneId={id}
+            anchorEl={plusButtonRef.current}
+            onClose={closePicker}
           />
         )}
       </div>

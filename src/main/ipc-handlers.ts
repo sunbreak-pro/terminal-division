@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow, app, dialog, shell } from "electron";
 import fs from "fs";
 import { ptyManager } from "./pty-manager";
+import { chatSessionManager } from "./chat-session-manager";
 import { createWindow, canCreateWindow } from "./window-manager";
 import { recentDirectoryManager } from "./recent-directories";
 import { fileSystemManager } from "./file-system-handler";
@@ -466,8 +467,50 @@ export function setupIpcHandlers(): void {
     app.exit(0);
   });
 
+  // ========== Chat (Claude Code chat backend) ==========
+
+  // 新規 / resume セッションを開始する。resumeSessionId が指定されたら `--resume` で起動。
+  ipcMain.handle(
+    "chat:start",
+    (
+      event,
+      paneId: string,
+      cwd: string,
+      options?: { resumeSessionId?: string },
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return { ok: false as const, error: "no_window" };
+      // CWD は path-validator の許可境界内でなければ HOME にフォールバック（manager 側でも再チェック）
+      const safeCwd = cwd ? validatePath(cwd) : null;
+      const finalCwd = safeCwd ?? cwd;
+      return chatSessionManager.start(paneId, win.id, finalCwd, {
+        resumeSessionId: options?.resumeSessionId,
+      });
+    },
+  );
+
+  ipcMain.on(
+    "chat:send",
+    (_, { paneId, content }: { paneId: string; content: string }) => {
+      chatSessionManager.write(paneId, content);
+    },
+  );
+
+  ipcMain.on("chat:stop", (_, paneId: string) => {
+    chatSessionManager.stop(paneId);
+  });
+
+  ipcMain.on("chat:dispose", (_, paneId: string) => {
+    chatSessionManager.dispose(paneId);
+  });
+
+  ipcMain.handle("chat:getSessionId", (_, paneId: string) => {
+    return chatSessionManager.getSessionId(paneId);
+  });
+
   app.on("before-quit", () => {
     ptyManager.killAll();
+    chatSessionManager.killAll();
     fileSystemManager.closeAll();
   });
 }

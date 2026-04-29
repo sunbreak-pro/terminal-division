@@ -204,8 +204,10 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   {
     id: "font-zoom-in",
     category: "Font",
+    // "+" は Shift を伴って入力されるが、ショートカット表記としては
+    // Shift を含めず "Cmd+Plus"（表示は "⌘ +"）で統一する。JIS / US 両対応。
     label: "フォントを拡大（アクティブペイン）",
-    defaultKey: "Cmd+=",
+    defaultKey: "Cmd+Plus",
   },
   {
     id: "font-zoom-out",
@@ -243,6 +245,8 @@ export function getDefinition(id: ShortcutId): ShortcutDefinition | undefined {
 function normalizeKeyName(rawKey: string): string {
   // " " は length 1 だが Space と表記する（記号として残すと "Cmd+ " になり読みにくい）
   if (rawKey === " ") return "Space";
+  // "+" は区切り文字と紛らわしいので "Plus" にエイリアスする
+  if (rawKey === "+" || rawKey === "Plus") return "Plus";
   if (rawKey.length === 1) {
     // letter: 大文字に。記号 (".", ",", "/", ";") はそのまま
     if (/^[a-zA-Z]$/.test(rawKey)) return rawKey.toUpperCase();
@@ -271,12 +275,16 @@ export function parseKey(event: {
   ) {
     return null;
   }
+  const keyName = normalizeKeyName(event.key);
   const parts: string[] = [];
   if (event.metaKey) parts.push("Cmd");
   if (event.ctrlKey) parts.push("Ctrl");
   if (event.altKey) parts.push("Option");
-  if (event.shiftKey) parts.push("Shift");
-  parts.push(normalizeKeyName(event.key));
+  // "+" (Plus) は標準キーボードで Shift を伴って入力されるが、ショートカット
+  // 表記としては Shift を省く（Cmd+Plus = ⌘ +）。これにより US / JIS の双方で
+  // 同じバインディングが機能する。
+  if (event.shiftKey && keyName !== "Plus") parts.push("Shift");
+  parts.push(keyName);
   return parts.join("+");
 }
 
@@ -300,7 +308,17 @@ export function matchKey(
 
 function canonicalize(key: string): string {
   // "cmd+shift+d" / "Cmd+Shift+D" / "CMD+SHIFT+D" を統一
-  const parts = key
+  // "Cmd++" / "Cmd+Shift++" のように末尾が "++" の場合、最後の "+" は記号キー
+  // として扱う（"Plus" にエイリアスしてから split する）
+  let work = key.trim();
+  if (
+    work.length >= 2 &&
+    work.charAt(work.length - 1) === "+" &&
+    work.charAt(work.length - 2) === "+"
+  ) {
+    work = work.slice(0, -1) + "Plus";
+  }
+  const parts = work
     .split("+")
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
@@ -345,6 +363,7 @@ const DISPLAY_MAP: Record<string, string> = {
   Space: "␣",
   Escape: "⎋",
   Tab: "⇥",
+  Plus: "+",
 };
 
 export function formatKey(key: string | null | undefined): string {

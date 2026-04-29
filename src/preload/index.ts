@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { SerializedLayout } from "../shared/session-state-validator";
 import type { AppSettings, PartialAppSettings } from "../shared/settings";
 import type { Theme, AppColors, XtermTheme } from "../shared/theme-types";
+import type { ChatEventEnvelope } from "../shared/chat-events";
 
 function createIpcListener<T>(channel: string) {
   return (callback: (data: T) => void): (() => void) => {
@@ -202,6 +203,41 @@ const api = {
       ipcRenderer.invoke("session:getRestoreData"),
     // session-state.json 書き込み失敗を renderer に通知（toast 表示）
     onSaveFailed: createIpcListener<{ message: string }>("session:saveFailed"),
+  },
+  // ===== Chat (Claude Code chat backend) =====
+  // 子プロセス `claude -p --input-format stream-json --output-format stream-json` を
+  // ペイン単位で 1 つ保持し、stdin/stdout 経由で双方向通信する。
+  // viewMode=chat への遷移時に start() を呼び、CLI に戻るときは sessionId を控えて
+  // PTY 側で `claude --resume <id>` を起動できるようにする（Renderer 側 chatBridge が責務）。
+  chat: {
+    start: (
+      paneId: string,
+      cwd: string,
+      options?: { resumeSessionId?: string },
+    ): Promise<
+      { ok: true; sessionId?: string } | { ok: false; error?: string }
+    > => ipcRenderer.invoke("chat:start", paneId, cwd, options),
+    send: (paneId: string, content: string): void =>
+      ipcRenderer.send("chat:send", { paneId, content }),
+    stop: (paneId: string): void => ipcRenderer.send("chat:stop", paneId),
+    dispose: (paneId: string): void => ipcRenderer.send("chat:dispose", paneId),
+    getSessionId: (paneId: string): Promise<string | null> =>
+      ipcRenderer.invoke("chat:getSessionId", paneId),
+    onEvent: createIpcListener<{
+      paneId: string;
+      event: ChatEventEnvelope;
+    }>("chat:event"),
+    onClaudeDetected: createIpcListener<{ paneId: string }>(
+      "chat:claudeDetected",
+    ),
+  },
+  // 表示メニューからのフォントズーム IPC。
+  // Chromium が Cmd+= / Cmd+- / Cmd+0 をブラウザ層で消費するため、
+  // メニューアクセラレータ経由で受け取って renderer 側で処理する。
+  menu: {
+    onFontZoomIn: createIpcListener<void>("font-zoom:in"),
+    onFontZoomOut: createIpcListener<void>("font-zoom:out"),
+    onFontZoomReset: createIpcListener<void>("font-zoom:reset"),
   },
 };
 

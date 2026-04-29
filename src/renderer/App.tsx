@@ -46,12 +46,13 @@ import {
 } from "./shortcuts/registry";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX, clampNumber } from "../shared/settings";
 
-// アクティブペインのフォントサイズを delta だけ動かす（Cmd+= / Cmd+-）。
-// 現在の有効サイズ（override or グローバル）を起点に ±1px、クランプ範囲を適用。
-function adjustActivePaneFontSize(paneId: string, delta: number): void {
-  const meta = useTerminalMetaStore.getState().metas.get(paneId);
+// グローバル Settings.terminal.fontSize を delta だけ動かす（Cmd+= / Cmd+-）。
+// per-pane override ではなく Settings 自体を直接更新するので、Settings UI の
+// スライダー値とターミナル表示が常に同期する。settingsStore.update が
+// clearAllFontSizeOverrides も呼ぶので、過去の override は自動的に解除される。
+function adjustGlobalFontSize(delta: number): void {
   const settings = useSettingsStore.getState().settings.terminal;
-  const current = meta?.fontSizeOverride ?? settings.fontSize;
+  const current = settings.fontSize;
   const next = clampNumber(
     current + delta,
     FONT_SIZE_MIN,
@@ -59,7 +60,16 @@ function adjustActivePaneFontSize(paneId: string, delta: number): void {
     current,
   );
   if (next === current) return;
-  useTerminalMetaStore.getState().setFontSizeOverride(paneId, next);
+  useSettingsStore.getState().update({ terminal: { fontSize: next } });
+}
+
+// Cmd+0: ファクトリーデフォルト (14) に戻す。
+// シェアード Settings にも書き込み、override も消えるため Settings と完全同期。
+function resetGlobalFontSize(): void {
+  useSettingsStore.getState().update({ terminal: { fontSize: 14 } });
+  // 念のため override もクリア（settingsStore 側でクリアされるが、
+  // 14 が現在値と同じだった場合 fontSize 変更判定に引っかからないため）
+  useTerminalMetaStore.getState().clearAllFontSizeOverrides();
 }
 
 // xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
@@ -98,6 +108,10 @@ const EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId> = new Set([
   "move-word-right",
   "undo",
   "redo",
+  // Shift+Enter: 通常の input/textarea（Chat 入力欄など）では改行のデフォルト動作を
+  // 維持する。xterm の helper textarea は isEditableTarget で false 扱いなので、
+  // CLI ターミナルでは引き続き writeWithHistory("\n") が走る。
+  "insert-newline",
 ]);
 
 const App: React.FC = () => {
@@ -197,26 +211,31 @@ const App: React.FC = () => {
         const meta = useTerminalMetaStore
           .getState()
           .metas.get(activeTerminalId);
-        if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
-          const targetId = activeTerminalId;
-          const filePath = meta.mdFilePath;
+        // dirty な MD タブが 1 つでもあれば、最初の dirty タブを対象に未保存警告を出す。
+        // 複数 dirty 環境で全部の保存を強制するのは煩わしいので、ユーザー操作で順に
+        // 保存してから最終的に close を再実行してもらう設計（discard なら問答無用で close）。
+        const dirtyTab = meta?.mdTabs.find((t) => t.dirty);
+        if (dirtyTab) {
+          const targetPaneId = activeTerminalId;
+          const targetTabId = dirtyTab.id;
           showUnsaved({
-            filePath,
-            paneId: targetId,
+            filePath: dirtyTab.filePath,
+            paneId: targetPaneId,
+            tabId: targetTabId,
             reason: "close-pane",
             onSave: async () => {
-              const api = markdownEditorRegistry.getApi(targetId);
+              const api = markdownEditorRegistry.getApi(targetTabId);
               const ok = api ? await api.save() : false;
               if (!ok) {
                 showErrorToast("保存に失敗しました");
                 return;
               }
               dismissDialog();
-              closeTerminal(targetId);
+              closeTerminal(targetPaneId);
             },
             onDiscard: () => {
               dismissDialog();
-              closeTerminal(targetId);
+              closeTerminal(targetPaneId);
             },
           });
           return;
@@ -391,26 +410,73 @@ const App: React.FC = () => {
       "font-zoom-in": (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!activeTerminalId) return;
-        adjustActivePaneFontSize(activeTerminalId, +1);
+        adjustGlobalFontSize(+1);
       },
       "font-zoom-out": (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!activeTerminalId) return;
-        adjustActivePaneFontSize(activeTerminalId, -1);
+        adjustGlobalFontSize(-1);
       },
       "font-zoom-reset": (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!activeTerminalId) return;
-        useTerminalMetaStore
-          .getState()
-          .setFontSizeOverride(activeTerminalId, null);
+        resetGlobalFontSize();
       },
     };
 
     const handleKeyDown = (e: KeyboardEvent): void => {
+      // フォントズームは IME ガードより先に処理する。
+      // 理由: 日本語 IME 有効時、"-" キーは "ー" として消費されたり
+      // e.keyCode === 229 を伴う合成イベントになることがあり、その場合
+      // 後段の IME ガードに弾かれて Cmd+- が反応しない。Cmd 修飾ありは
+      // アプリのコマンドであり IME 入力ではないので、ここで先取りする。
+      if (e.metaKey && !e.ctrlKey && !e.altKey) {
+        const earlyBindings = useSettingsStore.getState().settings.shortcuts;
+        const zoomInKey = resolveShortcutKey("font-zoom-in", earlyBindings);
+        const zoomOutKey = resolveShortcutKey("font-zoom-out", earlyBindings);
+        const zoomResetKey = resolveShortcutKey(
+          "font-zoom-reset",
+          earlyBindings,
+        );
+        // 拡大: Plus の物理キー（US: Equal+Shift, JIS: Semicolon+Shift）または e.key="+"
+        const isZoomIn =
+          zoomInKey !== null &&
+          (e.key === "+" ||
+            (e.shiftKey && (e.code === "Equal" || e.code === "Semicolon")));
+        // 縮小: Shift なしで Minus の物理キー or "-" 文字 or 旧 keyCode 189
+        // 旧 keyCode 189 を含めることで IME / 配列違いで e.key/e.code が想定外でも拾う
+        const isZoomOut =
+          zoomOutKey !== null &&
+          !e.shiftKey &&
+          (e.key === "-" || e.code === "Minus" || e.keyCode === 189);
+        // リセット: Shift なしで Digit0 物理キー or "0" 文字 or 旧 keyCode 48
+        const isZoomReset =
+          zoomResetKey !== null &&
+          !e.shiftKey &&
+          (e.key === "0" || e.code === "Digit0" || e.keyCode === 48);
+        if (
+          isZoomIn &&
+          useSettingsModalStore.getState().recordingShortcutId === null
+        ) {
+          handlers["font-zoom-in"]?.(e);
+          return;
+        }
+        if (
+          isZoomOut &&
+          useSettingsModalStore.getState().recordingShortcutId === null
+        ) {
+          handlers["font-zoom-out"]?.(e);
+          return;
+        }
+        if (
+          isZoomReset &&
+          useSettingsModalStore.getState().recordingShortcutId === null
+        ) {
+          handlers["font-zoom-reset"]?.(e);
+          return;
+        }
+      }
+
       // IME 変換中は処理をスキップ
       if (e.isComposing || e.keyCode === 229) return;
 
@@ -468,7 +534,31 @@ const App: React.FC = () => {
     moveFocus,
     showUnsaved,
     dismissDialog,
+    resolveTargetPaneId,
   ]);
+
+  // 表示メニューからのフォントズーム IPC を購読する。
+  // Chromium が Cmd+= / Cmd+- / Cmd+0 をブラウザプロセス層で消費するため、
+  // renderer の keydown には届かない。メニューアクセラレータ + IPC 経由で
+  // アクションをディスパッチする（main/menu.ts 参照）。
+  // 仕様: グローバル Settings.terminal.fontSize を直接動かして、Settings UI の
+  // スライダー値とターミナル表示を常に同期させる。
+  useEffect(() => {
+    const offIn = window.api.menu.onFontZoomIn(() => {
+      adjustGlobalFontSize(+1);
+    });
+    const offOut = window.api.menu.onFontZoomOut(() => {
+      adjustGlobalFontSize(-1);
+    });
+    const offReset = window.api.menu.onFontZoomReset(() => {
+      resetGlobalFontSize();
+    });
+    return () => {
+      offIn();
+      offOut();
+      offReset();
+    };
+  }, []);
 
   // セッション永続化: レイアウト / CWD 変更を debounced に Main へ送る
   useEffect(() => {

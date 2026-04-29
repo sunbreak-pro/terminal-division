@@ -26,6 +26,8 @@ import {
 } from "../../shared/settings";
 import { useSidebarStore } from "../stores/sidebarStore";
 import { MarkdownEditor } from "./MarkdownEditor";
+import { ChatPaneView } from "./ChatPane/ChatPaneView";
+import { useChatSessionStore } from "../stores/chatSessionStore";
 import { formatPaths } from "../utils/insertFiles";
 import {
   useSearchOpenForPane,
@@ -90,8 +92,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       }
     }, [id]);
 
-    // 直前の showMd を保持して md→cli の遷移エッジだけを検出する。
-    const prevShowMdRef = useRef<boolean>(false);
+    // 直前のオーバーレイ表示状態（md / chat）を保持して、cli への復帰エッジだけを検出する。
+    const prevOverlayedRef = useRef<boolean>(false);
 
     // useLayoutEffect: DOM 反映後・paint 前に同期実行されるため、
     // attach → fit → pty.create の順序を setTimeout(0) なしで保証できる。
@@ -389,27 +391,44 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
     // viewMode === "md" のとき MarkdownEditor を前面に表示し、
     // xterm のコンテナは display:none で残す。これにより PTY と xterm.js の
     // バッファ・カーソル位置が完全に保たれ、CLI に戻るとそのまま再開できる。
+    // viewMode === "chat" も同様に PTY を生存させたまま ChatPaneView を前面に重ねる。
     const meta = useTerminalMeta(id);
-    const showMd = meta?.viewMode === "md" && !!meta.mdFilePath;
+    const mdTabs = meta?.mdTabs ?? [];
+    const activeMdTabId = meta?.activeMdTabId ?? null;
+    const showMd =
+      meta?.viewMode === "md" && mdTabs.length > 0 && activeMdTabId !== null;
+    const showChat = meta?.viewMode === "chat";
+    const isOverlayed = showMd || showChat;
+
+    // Chat session が一度でも起動されたら ChatPaneView を mount し続け、display で切替する。
+    // CLI タブに戻っても ChatInput の useState（入力中テキスト）が保持されるようにする。
+    const hasChatSession = useChatSessionStore((s) => s.sessions.has(id));
+    const mountChat = showChat || hasChatSession;
 
     // md → cli への復帰時に同期 fit + pty.resize を実行する。
     // display:none 中は fit() の lastSizes キャッシュが古いまま PTY 側に残るので、
     // 復帰直前に invalidate して必ず最新サイズで pty.resize を発火させる。
     // useLayoutEffect で paint 前に実行することで、復帰直後にユーザーが入力したり
     // Claude Code が描画する文字が古い cols で wrap されるのを防ぐ。
+    // chat → cli の復帰でも同じ resize が必要なので isOverlayed で統合する。
+    // 加えて rAF で 1 度 invalidate + fit を再実行する。useLayoutEffect 時点では
+    // ブラウザがまだ display:none → block のレイアウトを確定していないことがあり、
+    // その場合 1 回目の fit が 0-cols でリトライ経路へ落ちて scrollback が
+    // 古い cols のまま残る現象（scrollback の "細長い" 表示）への保険。
     useLayoutEffect(() => {
-      const prev = prevShowMdRef.current;
-      prevShowMdRef.current = showMd;
-      if (!showMd && prev) {
+      const prev = prevOverlayedRef.current;
+      prevOverlayedRef.current = isOverlayed;
+      if (!isOverlayed && prev) {
         terminalManager.invalidateLastSize(id);
         handleFit();
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(() => {
+            terminalManager.invalidateLastSize(id);
+            handleFit();
+          });
+        }
       }
-    }, [showMd, id, handleFit]);
-    // 同一ファイルを再オープンした場合でも MarkdownEditor を remount するため、
-    // mdLoadedAt を key に含める。filePath だけだと、再ロード時にエディタが
-    // 古い doc を表示し続けてしまう。
-    const mdEditorKey = `${meta?.mdFilePath ?? ""}#${meta?.mdLoadedAt ?? 0}`;
-
+    }, [isOverlayed, id, handleFit]);
     return (
       <div
         className="terminal-container"
@@ -431,22 +450,39 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
             style={{
               height: "100%",
               width: "100%",
-              display: showMd ? "none" : "block",
+              display: isOverlayed ? "none" : "block",
             }}
           />
-          {showMd && (
+          {/* 全 MD タブを mount し続け、active のみ表示する。
+              CodeMirror の編集状態（カーソル位置・履歴）をタブ切替で保持するため。
+              key に loadedAt を含めることで、同一ファイルの再オープン時に remount される。 */}
+          {mdTabs.map((tab) => {
+            const tabActive = showMd && activeMdTabId === tab.id;
+            return (
+              <div
+                key={`${tab.id}-${tab.loadedAt}`}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: tabActive ? "block" : "none",
+                }}
+              >
+                <MarkdownEditor paneId={id} tabId={tab.id} />
+              </div>
+            );
+          })}
+          {mountChat && (
             <div
               style={{
                 position: "absolute",
                 inset: 0,
-                height: "100%",
-                width: "100%",
+                display: showChat ? "block" : "none",
               }}
             >
-              <MarkdownEditor key={mdEditorKey} id={id} />
+              <ChatPaneView id={id} />
             </div>
           )}
-          {isSearchOpen && !showMd && (
+          {isSearchOpen && !isOverlayed && (
             <TerminalSearchOverlay paneId={id} onClose={closeSearch} />
           )}
         </div>

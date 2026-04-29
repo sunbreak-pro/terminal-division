@@ -41,6 +41,7 @@ describe("markdownDialogStore", () => {
     useMarkdownDialogStore.getState().showUnsaved({
       filePath: "/foo/bar.md",
       paneId: "p1",
+      tabId: "t1",
       reason: "close-pane",
       onSave: () => {
         saved = true;
@@ -82,6 +83,7 @@ describe("markdownDialogStore", () => {
     useMarkdownDialogStore.getState().showUnsaved({
       filePath: "/foo/b.md",
       paneId: "p1",
+      tabId: "t1",
       reason: "open-other",
       onSave: () => {},
       onDiscard: () => {},

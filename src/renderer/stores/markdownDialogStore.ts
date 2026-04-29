@@ -31,6 +31,9 @@ export interface UnsavedRequest {
   kind: "unsaved";
   filePath: string;
   paneId: string;
+  // 対象の MD タブ ID。複数 MD タブ環境で「どのタブの dirty に対する警告か」を
+  // markdownEditorRegistry 経由で特定するために必要。
+  tabId: string;
   reason: UnsavedReason;
   onSave: () => void;
   onDiscard: () => void;

@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import * as terminalManager from "../services/terminalManager";
 import { isTerminalPane } from "../utils/layoutUtils";
 import { useTerminalMetaStore } from "./terminalMetaStore";
+import { useChatSessionStore } from "./chatSessionStore";
 import type {
   SplitDirection,
   TerminalPane,
@@ -161,6 +162,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     // Destroy terminal instance (cleanup listeners and dispose)
     terminalManager.destroy(terminalId);
     window.api.pty.kill(terminalId);
+    // Chat session も同時に破棄（プロセスリーク防止）
+    window.api.chat.dispose(terminalId);
+    useChatSessionStore.getState().remove(terminalId);
 
     const newNodes = new Map(state.nodes);
     newNodes.delete(terminalId);

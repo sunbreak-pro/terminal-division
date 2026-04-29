@@ -264,10 +264,11 @@ describe("TerminalPane", () => {
   });
 
   it("invalidates and re-fits on md → cli viewMode transition", () => {
-    // 初回マウント時は md 状態
+    // 初回マウント時は md 状態（複数 MD タブ仕様: mdTabs[] + activeMdTabId）
     mockUseTerminalMeta.mockReturnValue({
       viewMode: "md",
-      mdFilePath: "/foo.md",
+      mdTabs: [{ id: "tab-1", filePath: "/foo.md", dirty: false }],
+      activeMdTabId: "tab-1",
     });
     mockGetOrCreate.mockReturnValue({
       ...mockTerminalInstance,

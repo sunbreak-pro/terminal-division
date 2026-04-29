@@ -73,8 +73,10 @@ vi.mock("react-resizable-panels", () => ({
 
 // terminalManager のモック
 const mockFit = vi.fn();
+const mockInvalidateLastSize = vi.fn();
 vi.mock("../../services/terminalManager", () => ({
   fit: (...args: unknown[]) => mockFit(...args),
+  invalidateLastSize: (...args: unknown[]) => mockInvalidateLastSize(...args),
 }));
 
 import * as terminalStore from "../../stores/terminalStore";

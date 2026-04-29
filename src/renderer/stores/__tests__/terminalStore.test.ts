@@ -9,11 +9,14 @@ vi.mock("../../services/terminalManager", () => ({
   destroy: vi.fn(),
 }));
 
-// グローバルwindow.api.ptyのモック
+// グローバルwindow.api のモック (pty + chat)
 Object.defineProperty(window, "api", {
   value: {
     pty: {
       kill: vi.fn(),
+    },
+    chat: {
+      dispose: vi.fn(),
     },
   },
   writable: true,

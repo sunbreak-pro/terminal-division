@@ -14,6 +14,7 @@ import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import {
   useTerminalMetaStore,
   useTerminalMeta,
+  type MdTab,
 } from "../stores/terminalMetaStore";
 import { useTerminalActions } from "../stores/terminalStore";
 import { useEditorSettings } from "../stores/settingsStore";
@@ -22,19 +23,52 @@ import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
 import { withAlpha, isLightBackground } from "../utils/colorUtils";
 
 interface MarkdownEditorProps {
-  id: string;
+  paneId: string;
+  tabId: string;
 }
 
-// 親 (TerminalPane) は filePath 変化時に key で remount すること。
+// 親 (TerminalPane) は tab.loadedAt 変化時に key で remount すること。
 // これにより value/initialContent の同期問題を避け、CodeMirror の internal state は
-// ファイル単位でフレッシュに保たれる。
-export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
-  const meta = useTerminalMeta(id);
-  const filePath = meta?.mdFilePath ?? null;
-  const savedContent = meta?.mdSavedContent ?? "";
+// タブ単位でフレッシュに保たれる。
+export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
+  paneId,
+  tabId,
+}) => {
+  const meta = useTerminalMeta(paneId);
+  const tab: MdTab | null = useMemo(
+    () => meta?.mdTabs.find((t) => t.id === tabId) ?? null,
+    [meta, tabId],
+  );
+  const filePath = tab?.filePath ?? null;
+  const savedContent = tab?.savedContent ?? "";
 
   // 初期 value は mount 時に固定（後続の savedContent 変化で value を入れ替えない）
   const [initialValue] = useState(() => savedContent);
+
+  // セッション復元直後など savedContent="" のままで mount された場合は、ファイルを
+  // IPC で読み込んで markMdSaved → 編集開始時の比較基準にする。
+  useEffect(() => {
+    if (!filePath) return;
+    if (tab?.savedContent !== "") return;
+    let canceled = false;
+    void (async () => {
+      const result = await window.api.fs.readFile(filePath);
+      if (canceled) return;
+      if (!result.ok) {
+        showErrorToast(`ファイルを読み込めませんでした: ${result.error}`);
+        return;
+      }
+      // 読み込み内容で savedContent を更新する。dirty=false なので markMdSaved を流用。
+      useTerminalMetaStore
+        .getState()
+        .markMdSaved(paneId, tabId, result.content);
+    })();
+    return () => {
+      canceled = true;
+    };
+    // mount 時の 1 度だけでよい（後続の savedContent 変化でも再読込しない）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const theme = useCurrentTheme();
   const themeConfig = useThemeConfig();
@@ -52,31 +86,32 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
       showErrorToast(`保存に失敗しました: ${result.error}`);
       return false;
     }
-    useTerminalMetaStore.getState().markMdSaved(id, content);
+    useTerminalMetaStore.getState().markMdSaved(paneId, tabId, content);
     return true;
-  }, [id, filePath]);
+  }, [paneId, tabId, filePath]);
 
-  // ペイン外部から save / focus を呼ぶための imperative API を registry に登録
+  // ペイン外部から save / focus を呼ぶための imperative API を registry に登録（tabId キー）
   useEffect(() => {
-    markdownEditorRegistry.register(id, {
+    markdownEditorRegistry.register(tabId, {
       getContent: () => cmRef.current?.view?.state.doc.toString() ?? "",
       save: handleSave,
       focus: () => cmRef.current?.view?.focus(),
     });
-    return () => markdownEditorRegistry.unregister(id);
-  }, [id, handleSave]);
+    return () => markdownEditorRegistry.unregister(tabId);
+  }, [tabId, handleSave]);
 
-  // 入力のたびに dirty 判定を更新（mdSavedContent と一致なら dirty=false に戻す）
+  // 入力のたびに dirty 判定を更新（tab.savedContent と一致なら dirty=false に戻す）
   const handleChange = useCallback(
     (value: string): void => {
-      const meta = useTerminalMetaStore.getState().metas.get(id);
-      if (!meta) return;
-      const dirty = value !== (meta.mdSavedContent ?? "");
-      if (meta.mdDirty !== dirty) {
-        useTerminalMetaStore.getState().setMdDirty(id, dirty);
+      const m = useTerminalMetaStore.getState().metas.get(paneId);
+      const t = m?.mdTabs.find((x) => x.id === tabId);
+      if (!t) return;
+      const dirty = value !== (t.savedContent ?? "");
+      if (t.dirty !== dirty) {
+        useTerminalMetaStore.getState().setMdDirty(paneId, tabId, dirty);
       }
     },
-    [id],
+    [paneId, tabId],
   );
 
   // Cmd+S を CodeMirror keymap で捕捉。default は Mod-s (Mac=Cmd / others=Ctrl)。
@@ -236,8 +271,9 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
 
   return (
     <div
-      data-md-editor-pane={id}
-      onMouseDownCapture={() => setActiveTerminal(id)}
+      data-md-editor-pane={paneId}
+      data-md-editor-tab={tabId}
+      onMouseDownCapture={() => setActiveTerminal(paneId)}
       style={{
         height: "100%",
         width: "100%",
@@ -305,7 +341,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ id }) => {
           theme="none"
           extensions={extensions}
           onChange={handleChange}
-          onFocus={() => setActiveTerminal(id)}
+          onFocus={() => setActiveTerminal(paneId)}
           basicSetup={{
             lineNumbers: true,
             highlightActiveLine: true,

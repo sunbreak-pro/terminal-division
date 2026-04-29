@@ -52,12 +52,21 @@ export function serializeCurrentSession(): SerializedLayout {
   }
 
   // 葉ペインの cwd のみ保存対象
-  const metaEntries: Array<[string, { cwd: string | null }]> = [];
+  // 葉ペインの cwd と mdTabs[].filePath を保存対象にする。dirty 状態は永続化しない。
+  const metaEntries: Array<
+    [string, { cwd: string | null; mdTabFilePaths?: string[] }]
+  > = [];
   for (const [id, meta] of metas.entries()) {
     const node = nodes.get(id);
     if (!node) continue;
     if ("type" in node && node.type === "split") continue;
-    metaEntries.push([id, { cwd: meta.cwd }]);
+    const filePaths = meta.mdTabs.map((t) => t.filePath);
+    metaEntries.push([
+      id,
+      filePaths.length > 0
+        ? { cwd: meta.cwd, mdTabFilePaths: filePaths }
+        : { cwd: meta.cwd },
+    ]);
   }
 
   return {
@@ -109,10 +118,20 @@ export function restoreSession(payload: SerializedLayout): boolean {
   if (!ok) return false;
 
   // メタは葉ペインのみ採用（payload.metas に分岐 ID が混入していても無視される）
-  const leafEntries = payload.metas.filter(([id]) => {
-    const node = layout.nodes.get(id);
-    return node && !("type" in node && node.type === "split");
-  });
+  // mdTabFilePaths も合わせて hydrateMetas に渡す（terminalMetaStore 側で MdTab[] に変換）
+  const leafEntries: Array<
+    [string, { cwd: string | null; mdTabFilePaths?: string[] }]
+  > = payload.metas
+    .filter(([id]) => {
+      const node = layout.nodes.get(id);
+      return node && !("type" in node && node.type === "split");
+    })
+    .map(([id, m]) => [
+      id,
+      m.mdTabFilePaths
+        ? { cwd: m.cwd, mdTabFilePaths: m.mdTabFilePaths }
+        : { cwd: m.cwd },
+    ]);
   useTerminalMetaStore.getState().hydrateMetas(leafEntries);
 
   return true;

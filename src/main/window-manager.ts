@@ -2,6 +2,8 @@ import { BrowserWindow, screen, shell, app } from "electron";
 import { join } from "path";
 import { is } from "@electron-toolkit/utils";
 import { ptyManager } from "./pty-manager";
+import { chatSessionManager } from "./chat-session-manager";
+import { claudeProcessDetector } from "./claude-process-detector";
 import { settingsManager } from "./settings";
 
 const MAX_WINDOWS = 3;
@@ -64,6 +66,8 @@ export function createWindow(initialCwd?: string): BrowserWindow | null {
   const windowId = win.id;
   windows.set(windowId, win);
   ptyManager.registerWindow(windowId, win);
+  chatSessionManager.registerWindow(windowId, win);
+  claudeProcessDetector.registerWindow(windowId, win);
 
   win.on("ready-to-show", () => {
     win.show();
@@ -77,6 +81,9 @@ export function createWindow(initialCwd?: string): BrowserWindow | null {
   win.on("closed", () => {
     ptyManager.killAllForWindow(windowId);
     ptyManager.unregisterWindow(windowId);
+    chatSessionManager.killAllForWindow(windowId);
+    chatSessionManager.unregisterWindow(windowId);
+    claudeProcessDetector.unregisterWindow(windowId);
     windows.delete(windowId);
 
     // 全ウィンドウ閉じたらアプリ終了

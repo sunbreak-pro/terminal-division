@@ -51,6 +51,30 @@ export function setupApplicationMenu(): void {
             focusedWindow?.webContents.toggleDevTools();
           },
         },
+        { type: "separator" },
+        // フォントズームのキー登録は globalShortcut 側 (zoom-shortcuts.ts) に
+        // 任せる。Chromium が Cmd+- 等をブラウザ層で消費する問題を回避するため。
+        // メニューアイテムは「クリックでも実行できる UI」として残し、accelerator
+        // ラベル表示はせずクリックハンドラだけ持たせる（accelerator を書くと
+        // globalShortcut と二重登録になり挙動不安定）。
+        {
+          label: "フォント拡大",
+          click: (_item, focusedWindow): void => {
+            focusedWindow?.webContents.send("font-zoom:in");
+          },
+        },
+        {
+          label: "フォント縮小",
+          click: (_item, focusedWindow): void => {
+            focusedWindow?.webContents.send("font-zoom:out");
+          },
+        },
+        {
+          label: "フォントサイズをリセット",
+          click: (_item, focusedWindow): void => {
+            focusedWindow?.webContents.send("font-zoom:reset");
+          },
+        },
       ],
     },
     {

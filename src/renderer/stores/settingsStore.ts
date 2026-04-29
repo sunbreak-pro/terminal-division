@@ -4,6 +4,7 @@ import {
   type AppSettings,
   type PartialAppSettings,
 } from "../../shared/settings";
+import { useTerminalMetaStore } from "./terminalMetaStore";
 
 export interface SettingsStore {
   settings: AppSettings;
@@ -49,6 +50,18 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const current = get().settings;
     const optimistic = applyOptimistic(current, patch);
     set({ settings: optimistic });
+
+    // Settings からターミナル fontSize を変更したときは全ペインの揮発オーバーライド
+    // (Cmd+= / Cmd+- で付いた fontSizeOverride) をクリアして、新しい設定値を即時反映する。
+    // これをやらないと「Settings を動かしてもパネル番号だけ変わってターミナル本体は変わらない」
+    // 現象が起きる（override が effectiveFontSize を握り続けるため）。
+    if (
+      patch.terminal &&
+      typeof patch.terminal.fontSize === "number" &&
+      patch.terminal.fontSize !== current.terminal.fontSize
+    ) {
+      useTerminalMetaStore.getState().clearAllFontSizeOverrides();
+    }
 
     if (typeof window !== "undefined" && window.api?.settings) {
       void window.api.settings.update(patch);

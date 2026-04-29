@@ -1,16 +1,10 @@
 import React, { useCallback, useMemo, useEffect } from "react";
 import {
   useActiveTerminalId,
-  useTerminalCount,
   useCanSplit,
   useTerminalActions,
 } from "../stores/terminalStore";
-import {
-  useCurrentTheme,
-  useAvailableThemes,
-  useSetTheme,
-  useThemeConfig,
-} from "../stores/themeStore";
+import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import * as terminalManager from "../services/terminalManager";
 import { useSidebarStore, useSidebarOpen } from "../stores/sidebarStore";
 import { useSettingsModalStore } from "../stores/settingsModalStore";
@@ -18,16 +12,12 @@ import { PanelLeftIcon } from "./Sidebar/icons";
 
 const Header: React.FC = React.memo(() => {
   const activeTerminalId = useActiveTerminalId();
-  const terminalCount = useTerminalCount();
   const canSplit = useCanSplit();
-  const { splitTerminal, closeTerminal } = useTerminalActions();
+  const { splitTerminal } = useTerminalActions();
   const sidebarOpen = useSidebarOpen();
   const toggleSidebar = useSidebarStore((s) => s.toggleOpen);
 
-  // テーマ関連
   const currentTheme = useCurrentTheme();
-  const availableThemes = useAvailableThemes();
-  const setTheme = useSetTheme();
   const themeConfig = useThemeConfig();
   const theme = { colors: currentTheme.colors, ...themeConfig };
 
@@ -36,15 +26,7 @@ const Header: React.FC = React.memo(() => {
     terminalManager.updateAllThemes(currentTheme.xterm);
   }, [currentTheme]);
 
-  const handleThemeChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      setTheme(e.target.value);
-    },
-    [setTheme],
-  );
-
   const canSplitNow = canSplit();
-  const canClose = terminalCount > 1;
 
   const handleSplitVertical = useCallback((): void => {
     if (activeTerminalId && canSplitNow) {

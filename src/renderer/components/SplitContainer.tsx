@@ -27,6 +27,10 @@ const SplitContainer: React.FC = React.memo(() => {
   // ResizeObserver より早く正確なサイズが取れるため、scrollback の cols 不整合を防ぐ。
   // Panel.onResize は SplitNode (内部) にも付くが、id が paneNumberMap に無いものは
   // 葉ペインではないので無視する。
+  // 兄弟ペインを閉じた直後の "expand" でもこのハンドラが呼ばれるが、その時点で
+  // lastSize キャッシュが古い値のままだと fit() が同サイズ判定で IPC を抑制してしまう。
+  // invalidate してから fit すれば、必ず最新サイズで fitAddon.fit() → terminal.resize()
+  // が走り、scrollback も新しい cols で reflow される。
   const handlePanelResize = useCallback(
     (
       _size: { asPercentage: number; inPixels: number },
@@ -34,6 +38,7 @@ const SplitContainer: React.FC = React.memo(() => {
     ): void => {
       if (typeof panelId !== "string") return;
       if (!paneNumberMap.has(panelId)) return;
+      terminalManager.invalidateLastSize(panelId);
       const result = terminalManager.fit(panelId);
       if (result) {
         window.api.pty.resize(panelId, result.cols, result.rows);

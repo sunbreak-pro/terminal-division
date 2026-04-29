@@ -1,5 +1,66 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-29 - T3-5 Claude Code Chat UI 実装 + 複数 MD タブ対応
+
+#### 概要
+
+T3-5 Claude Code Chat UI を MVP として完成させ、同時に Markdown エディタを 1 ペインあたり最大 8 タブまで開ける構成へ拡張。Chat バックエンドは `claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --session-id <uuid>` を子プロセス起動し、stdout を行バッファリングで JSON.parse、`stream_event.content_block_delta.text_delta` を逐次描画。PTY 出力監視で OSC 0 `✳ Claude Code` を検出すると自動で Chat ビューに切替える。アシスタント発言には ✳ アバターを表示し、ストリーミング中は ChatStatusBar が現在の作業（思考中 / Bash 実行中 等）を表示、ツール使用は MessageBubble 内の折りたたみカードに inline 表示。CLI ↔ Chat の手動切替で会話継続させるための「CLI で続きを表示」ボタン（`pty.write("claude --resume <id>\\n")`）を追加。複数 MD タブはタブ列右の「+」ボタンドロップダウン（検索フィールド + 全 watch 中 CWD 配下の .md 最大 50 件 + ファイル選択ダイアログ）から開け、上限 8 件到達時は + ボタンが disabled。session-state.json の `SerializedMeta.mdTabFilePaths` で MD タブの filePath を永続化し、復元時は MarkdownEditor が mount 時に `fs.readFile` → `markMdSaved` で内容を再ロード。Phase 0 で実機検証した stream-json プロトコル仕様は `.claude/docs/known-issues/003-claude-cli-stream-json.md` に記録（Status=Monitoring）。テスト合計 35 ファイル / 502 件グリーン。
+
+#### 変更点
+
+- **Chat backend (Main)**:
+  - `chat-session-manager.ts` 新規: `child_process.spawn("claude", [...])` でセッション管理、stdin に JSONL 書込、stdout を 1MB 上限の行バッファリングで JSON.parse、`session_id` 抽出、`assistant.error="authentication_failed"` 早期検出、SIGTERM による stop / dispose
+  - `claude-process-detector.ts` 新規: PTY 出力 chunk から OSC 0 `\x1b]0;✳ Claude Code\x07` を 256B リングバッファで chunk 跨ぎ込みで検出。フォールバックは `]0;` + `Claude Code\x07` の同居要求（誤検出回避のため BEL 直後を要求）
+  - `cli-resolver.ts` 新規: `getMergedPath()` で PATH 走査 + `~/.local/bin/claude` フォールバック + プロセス内キャッシュ
+  - `pty-manager.ts` 修正: onData hook で detector に chunk を流す + kill 時に detector reset
+  - `ipc-handlers.ts` / `window-manager.ts` 修正: `chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:event` / `chat:claudeDetected` を追加 + ウィンドウ生成 / 破棄で chat / detector の register/unregister
+- **Chat frontend (Renderer)**:
+  - `shared/chat-events.ts` 新規: `ChatEventEnvelope` 型を Main / preload / Renderer 共通定義
+  - `chatSessionStore.ts` 新規: paneId ごとに `messages` / `currentAssistantBuffer` / `currentMessageId` / `currentActivity` / `pendingToolUses` / `sessionId` / `status` / `lastError` を保持。空コンテンツでの `finalizeAssistantMessage` は message を作らない（空 bubble 抑制）
+  - `chatBridge.ts` 新規: `chat:event` を消費して `stream_event` の `content_block_start/delta/stop` を SSE 互換に変換、`message_start` で `beginAssistantMessage`、`text_delta` を `appendAssistantDelta` に流す。`session_already_started` エラー時は `getSessionId` で取得して silent 復帰、`startChatSession` 成功時に `setStatus("idle")` に遷移
+  - `ChatPane/ChatPaneView.tsx`: コンテナ。useEffect 一本で `chat:start`、停止後の入力で自動 `--resume` 再起動 + 送信、`onContinueInCli` で PTY に `claude --resume <id>` を投入
+  - `ChatPane/MessageBubble.tsx`: ✳ アバター + 思考過程 details + tool_use 折りたたみカード（ToolUseChip: Bash/Read/Edit/Write/Glob/Grep の input サマリー + result/error 展開）+ fenced code / inline code の軽量 Markdown レンダラ
+  - `ChatPane/ChatInput.tsx`: 1〜3 行自動高さ拡張 + 4 行以上は固定 max-height + 内部スクロール、IME ガード（compositionStart/End）、Enter 送信 / Shift+Enter 改行 / Cmd+Enter 送信、64KB 警告
+  - `ChatPane/ChatStatusBar.tsx`: starting / streaming（thinking | text | tool_use を `formatActivity` で表示）/ error / ended の 4 状態 + 再起動 / CLI に戻る / 「CLI で続きを表示」ボタン
+  - `ChatPane/MessageList.tsx`: 自動スクロール（最下部追従）+ streaming 仮想 bubble は `streamingText.length > 0` のみ表示
+- **複数 MD タブ (terminalMetaStore + UI)**:
+  - `terminalMetaStore.ts` 大幅変更: 旧 `mdFilePath / mdSavedContent / mdDirty / mdLoadedAt` を撤廃し、`mdTabs: MdTab[]` + `activeMdTabId: string | null` に置換。新 actions: `openMarkdown`（同 path はアクティブ化、上限 8 で `{ok:false, reason:"limit"}`）/ `setActiveMdTab` / `closeMdTab`（左隣フォールバック、最後の 1 つで viewMode=cli 復帰）/ `setMdDirty(paneId, tabId, dirty)` / `markMdSaved(paneId, tabId, content)` / `canOpenMoreMd`
+  - `MarkdownEditor.tsx`: `paneId` + `tabId` props で識別。mount 時 `savedContent === ""` なら `fs.readFile` → `markMdSaved` で復元時に自動ロード
+  - `markdownEditorRegistry.ts`: キーを paneId → tabId に変更（ファイル自体は変えず使い分け規約のみ更新）
+  - `markdownDialogStore.ts`: `UnsavedRequest.tabId` を必須化
+  - `markdownOpenService.ts`: dirty 警告ロジックを撤去（タブ追加で済むため）+ 上限到達時 toast。`openMarkdownDirect` を export し MdTabPickerDropdown から呼ぶ
+  - `MdTabPickerDropdown.tsx` 新規: タブ列右「+」クリックで開く Portal ドロップダウン。検索フィールド + watch 中の全 CWD を `searchTree` で再帰検索（最大 50 件、横スクロール対応）+ 末尾に「ファイルを選択...」(`dialog.selectFiles`)
+  - `mdFileListing.ts` 新規: `listMarkdownFilesAcrossPanes(metas, query)` で .md / .markdown を CWD 重複排除 + path 重複排除しながら集約
+  - `TerminalSubHeader.tsx` 大幅改修: タイトル/CWD を **常時表示** に変更（旧仕様ではタブ表示で消えていた問題を修正）。タブ列は `[CLI | mdTabs.map → + ボタン | Chat]`、+ ボタンは 8 タブ達成で disabled + non-active カーソル
+  - `TerminalPane.tsx`: 全 mdTabs を mount し続けて active のみ display:block（CodeMirror 編集状態保持）+ Chat session が存在する間 ChatPaneView を mount し続ける（CLI 切替で ChatInput の useState を保持）
+- **永続化**:
+  - `shared/session-state-validator.ts`: `SerializedMeta.mdTabFilePaths?: string[]` を追加（最大 8 / 各非空）+ `SESSION_STATE_MAX_MD_TABS` 定数
+  - `services/sessionPersist.ts`: `hasMdTabPathsChanged` を追加して filePath 変化で保存トリガ（dirty / loadedAt 変動は保存しない）
+  - `services/sessionRestore.ts`: serialize 時に `mdTabs.map(t => t.filePath)` を出力 / restore 時に `hydrateMetas` に `mdTabFilePaths` を渡す
+- **追加バグ修正**:
+  - **CWD/タイトルが「CLI」に置換される**: TerminalSubHeader で常時表示の rename 可能 span を維持
+  - **Chat 入力が CLI 切替で消える**: ChatPaneView を unmount せず display:none で隠す方式に変更
+  - **Shift+Enter が CLI 側に流れる**: `App.tsx` の `EDITABLE_PASSTHROUGH_IDS` に `insert-newline` を追加（xterm helper textarea は除外されるので CLI 側挙動は不変）
+  - **Chat の内容が CLI で見えない**: ChatStatusBar に「CLI で続きを表示」ボタン（クリックで PTY に `claude --resume <id>\\n` 投入）
+  - **「セッションを開始しています」永続化**: `startChatSession` 成功時に `setStatus("idle")` 追加 + `session_already_started` エラー時に `getSessionId` で復帰
+  - **二重起動 → 即 error**: `handleStartChat` / `handleClaudeDetected` は `setViewMode` のみに専念、バックエンド起動は ChatPaneView マウント時の useEffect 一本に集約
+  - **claude-process-detector の定数バイト混入**: prettier が `\x1b` / `\x07` を実体バイトに変換して保存していたため、明示的なエスケープシーケンス文字列に書き直し（実値は同一だが Read で読み解ける形に）
+- **新規テスト 31 件**:
+  - `utils/__tests__/mdFileListing.test.ts` (8): 空 metas / cwd 重複排除 / .md 拡張子フィルタ / path 重複排除 / query 部分一致（case-insensitive）/ 50 件上限 + truncated / searchTree truncated 伝搬 / searchTree エラー無視
+  - `stores/__tests__/chatSessionStore.test.ts` (13): getOrCreate / remove / appendUserMessage / beginAssistantMessage / appendAssistantDelta / finalize（text あり / 空コンテンツ skip / tool_uses で bubble 作成）/ recordToolResult（注入 / isError / 不一致 noop）/ setActivity / setStatus / setSessionId / setError
+  - `main/__tests__/claude-process-detector.test.ts` (10): 単 chunk 検出 / chunk 跨ぎ検出 / 同 paneId は 1 度のみ / paneId 別独立 / reset で再検出 / 別タイトルは検出せず / fallback BEL 直後パターン / window 未登録 noop / destroyed window スキップ / unregisterWindow で states クリア
+- **既存テスト改訂**: `terminalMetaStore.test.ts` に mdTabs ベースの 9 ケース追加（hydrateMetas with mdTabFilePaths / openMarkdown 既存タブアクティブ化 / 上限到達 / closeMdTab フォールバック / setMdDirty / markMdSaved / canOpenMoreMd）、`markdownOpenService.test.ts` を新仕様に書き直し（dirty 警告削除）、`markdownDialogStore.test.ts` に `tabId` 必須化、`terminalStore.test.ts` のモックに `chat.dispose` 追加、`TerminalPane.test.tsx` の md 状態モックを `mdTabs` に置換
+- **テスト合計**: 35 ファイル / 502 件グリーン（修正前 454 から +48 件）
+- **計画書アーカイブ**: `.claude/archive/2026-04-29-claude-code-chat-ui.md` に Status=COMPLETED で移動済み
+- **設計判断**:
+  - **Chat バックエンドは別プロセス、PTY と並走**: PTY 上で claude が起動していても Chat 用の子プロセスは独立した session_id で動かす。プロセスリーク防止のため closeTerminal で `chat.dispose` を呼んで両方破棄。CLI ↔ Chat の会話継続は session_id を `--resume` で再投入する形にし、自動継続は PTY 状態破壊リスクを避けて明示クリック（「CLI で続きを表示」）に限定
+  - **空 bubble 抑制**: claude が assistant ブロックを tool_use のみで返す場合、text と thinking が空のまま finalize される。空 bubble がストリーミング中に複数並ぶと焦ったいので、`finalizeAssistantMessage` で内容が完全に空なら message 化せず activity だけクリア。ただし toolUses が 1 件でもあれば bubble を作る（折りたたみカード表示のため）
+  - **作業状態の表示は currentActivity ベース**: stream_event の `content_block_start` で `tool_use` / `thinking` / `text` を判別して activity に保存し、`content_block_stop` でクリア。ChatStatusBar が「Bash を実行中: <description>」「Claude が思考中...」「Claude が応答を生成中...」を切替表示する。ツール使用の inline カード（MessageBubble 内の ToolUseChip）と二重情報になるが、タイムラインを spam しない簡潔な進捗表示として併存
+  - **MD タブの mount 戦略**: 全 mdTabs を mount し続けて active 以外を display:none で隠す。CodeMirror の internal state（カーソル位置・履歴・編集中の差分）をタブ切替で保持するため。`tab.id + tab.loadedAt` を React key に使うことで、同一タブの再ロード時にだけ remount
+  - **「+ ボタン」のドロップダウンを Portal で配置**: タブ列内に絶対配置すると overflow:auto に切られるので、`createPortal(document.body)` で z-index 10000 で描画。anchor の bounding rect で位置決めし、viewport 端で右にはみ出る場合は左寄せ
+  - **「CLI で続きを表示」の自動 vs 明示**: PTY が現在シェルプロンプトに居ない場合（コマンド実行中など）に `claude --resume` を流すと混入する。Chat → CLI 切替を全自動 resume にすると体験が壊れるリスクがあるため、ユーザーが意図的にクリックする「CLI で続きを表示」ボタンに限定。通常の「CLI に戻る」ボタンは PTY を触らない
+  - **OSC 0 検出の fallback 設計**: `\x1b]0;✳ Claude Code\x07` (絵文字付きの完全マッチ) を primary、`]0;` + `Claude Code\x07` (BEL 直後) の同居を fallback。BEL 直後を要求することで「他の出力に偶然 Claude Code が含まれる」誤検出を回避
+
 ### 2026-04-29 - T3-5（候補） Claude Code Chat UI 計画策定
 
 #### 概要
@@ -117,19 +178,6 @@
 - **新規テスト**: `main/__tests__/searchTree.test.ts`（9 件）— 一時ディレクトリで実ファイルツリーを構築してテスト。検証項目: ルート直下マッチ / サブディレクトリ再帰マッチ（`.claude/MEMORY.md`）/ 大文字小文字無視 / `node_modules` スキップ / 深い階層 / 空クエリ・whitespace-only クエリ / `maxResults` 超過時の `truncated=true` / `maxDepth` 制限 / `isDirectory`・`isSymlink` フラグ
 - **テスト合計**: 28 ファイル / 388 件グリーン（修正前 379 から +9 件）
 
-### 2026-04-27 - Settings カラー編集の簡略化（セマンティック 6 色化）
-
-#### 概要
-
-Settings → 外観のカラー編集が 33 フィールド（基本色 6 + ANSI 16 + App UI 11）に膨らんでおり、特に AppColors の `terminalBackground` と XtermTheme の `background` のように同一概念が二重定義されていることでユーザーが意図しない挙動を起こしていた。これを「セマンティック 6 色」（背景 / 前景 / アクセント / サブテキスト / ボーダー / Danger）に集約し、内部の重複フィールドを 1 つの onChange で同時に更新する形に再設計。各セマンティックの更新先は互いに排他になっており、副作用バグを構造的に防ぐ。ANSI 16 色は折りたたみアコーディオンとして残し、App UI カラーアコーディオンは撤去。
-
-#### 変更点
-
-- **AppearanceSettings.tsx (UI 簡略化)**: 旧 3 アコーディオン（基本色 6 / ANSI 16 / App UI 11 = 33 フィールド）を、常時表示の「カラー」セクション 6 フィールド + 折りたたみ「ANSI 16 色（上級）」アコーディオンの 2 ブロック（合計 22 フィールド）に置換
-- **semanticUpdate / readSemantic ヘルパ**: `semanticUpdate(key, value): ThemeUpdate` を新規追加し、各セマンティック色から内部フィールドへのマッピングを集約
-- **新規テスト**: `components/settings/__tests__/semanticColors.test.ts` 11 件（排他性の不変条件テスト含む）
-- **テスト合計**: 26 ファイル / 379 件グリーン（修正前 368 から +11）
-
-> 2026-04-29 ローリングアーカイブ: 2026-04-27 の Markdown エディタ dark モード背景修正 / サイドバーファイル名アイコンずれ修正、および 2026-04-26 の 2 エントリを [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-29 ローリングアーカイブ: 「Settings カラー編集の簡略化（セマンティック 6 色化）」、「Markdown エディタ dark モード背景修正」「サイドバーファイル名アイコンずれ修正」、および 2026-04-26 の 2 エントリを [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 > 2026-04-27 ローリングアーカイブ: これ以前の 30 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
