@@ -4,6 +4,7 @@ import {
   useTerminalMetaStore,
 } from "../stores/terminalMetaStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
+import { useTerminalSettings } from "../stores/settingsStore";
 import { promptAndInsertFiles } from "../utils/insertFiles";
 import * as terminalManager from "../services/terminalManager";
 import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
@@ -32,6 +33,7 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     const currentTheme = useCurrentTheme();
     const themeConfig = useThemeConfig();
     const theme = { colors: currentTheme.colors, ...themeConfig };
+    const terminalSettings = useTerminalSettings();
 
     // CWD表示: ホームディレクトリは ~ に変換、未報告時は ~ をデフォルト表示
     const displayCwd = useMemo(() => {
@@ -292,9 +294,10 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       >
         <span
           style={{
+            // ユーザーの設定フォントサイズと同寸にして「数字だけ大きい」違和感を排除。
+            // 強調はアクセントカラーのみで担当（fontWeight は周囲の SubHeader に合わせる）。
             color: theme.colors.accent,
-            fontWeight: 700,
-            fontSize: "13px",
+            fontSize: `${terminalSettings.fontSize}px`,
             flexShrink: 0,
             fontVariantNumeric: "tabular-nums",
           }}

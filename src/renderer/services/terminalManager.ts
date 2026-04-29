@@ -1,9 +1,16 @@
-import { Terminal, ITerminalOptions, IMarker, IDecoration } from "@xterm/xterm";
+import {
+  Terminal,
+  ITerminalOptions,
+  IMarker,
+  IDecoration,
+  ILink,
+} from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon, ISearchOptions } from "@xterm/addon-search";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { usePathHistoryStore } from "../stores/pathHistoryStore";
+import { findMarkdownPaths } from "../utils/markdownPath";
 import type { XtermTheme } from "../../shared/theme-types";
 
 // 行単位 Undo/Redo 履歴の最大保持数
@@ -112,6 +119,10 @@ export interface TerminalCallbacks {
   onData: (data: string) => void;
   onExit: (exitCode: number) => void;
   onFocus: () => void;
+  // Cmd/Ctrl + クリックで .md / .markdown パスがアクティブ化された時に発火する。
+  // raw は xterm 行から検出した文字列そのまま（チルダ・相対表記を保持）。
+  // 解決は呼び出し側（TerminalPane）で行う。未指定時は何もしない。
+  onMarkdownLinkClick?: (raw: string) => void;
 }
 
 /**
@@ -147,6 +158,44 @@ export function getOrCreate(
     }
   });
   terminal.loadAddon(webLinksAddon);
+
+  // Markdown ファイルパスの link provider。
+  // `~/foo.md` / `/abs/foo.md` / `./foo.md` / `dir/foo.md` 等を検出して
+  // Cmd/Ctrl + クリックで onMarkdownLinkClick へ raw を渡す。
+  // WebLinksAddon の URL とは検出範囲を分けるため、findMarkdownPaths 内で http(s)
+  // 範囲を除外している。
+  terminal.registerLinkProvider({
+    provideLinks(bufferLineNumber, callback): void {
+      const buffer = terminal.buffer.active;
+      const line = buffer.getLine(bufferLineNumber - 1);
+      if (!line) {
+        callback(undefined);
+        return;
+      }
+      const text = line.translateToString(true);
+      const matches = findMarkdownPaths(text);
+      if (matches.length === 0) {
+        callback(undefined);
+        return;
+      }
+      const links: ILink[] = matches.map((m) => ({
+        // xterm の x は 1-based、y は IBuffer での 1-based 行番号
+        range: {
+          start: { x: m.start + 1, y: bufferLineNumber },
+          end: { x: m.end, y: bufferLineNumber },
+        },
+        text: m.raw,
+        activate: (event: MouseEvent, raw: string): void => {
+          const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+          const modifierPressed = isMac ? event.metaKey : event.ctrlKey;
+          if (!modifierPressed) return;
+          event.preventDefault();
+          callbacks.onMarkdownLinkClick?.(raw);
+        },
+      }));
+      callback(links);
+    },
+  });
 
   // IME composition state tracking
   // When composing (e.g., typing Japanese), macOS IME may split long compositions

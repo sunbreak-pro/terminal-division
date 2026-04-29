@@ -3,11 +3,16 @@ import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { getFileName } from "../utils/markdownFile";
 import type { PaneChoice } from "../stores/markdownDialogStore";
 
+// 「新規パネルを作成」を表す sentinel id。markdownOpenService の NEW_PANE_CHOICE と一致。
+const NEW_PANE_SENTINEL = "__new__";
+
 interface OpenMarkdownModalProps {
   isOpen: boolean;
   filePath: string;
   availablePanes: PaneChoice[];
   defaultPaneId: string;
+  // 「新規パネルを作成」を選択肢に含めるか。
+  allowCreateNewPane?: boolean;
   onConfirm: (paneId: string) => void;
   onCancel: () => void;
 }
@@ -17,6 +22,7 @@ export const OpenMarkdownModal: React.FC<OpenMarkdownModalProps> = ({
   filePath,
   availablePanes,
   defaultPaneId,
+  allowCreateNewPane = false,
   onConfirm,
   onCancel,
 }) => {
@@ -105,6 +111,7 @@ export const OpenMarkdownModal: React.FC<OpenMarkdownModalProps> = ({
           <PaneSelect
             availablePanes={availablePanes}
             selectedPaneId={selectedPaneId}
+            allowCreateNewPane={allowCreateNewPane}
             onChange={setSelectedPaneId}
             theme={theme}
           />
@@ -172,6 +179,7 @@ export const OpenMarkdownModal: React.FC<OpenMarkdownModalProps> = ({
 interface PaneSelectProps {
   availablePanes: PaneChoice[];
   selectedPaneId: string;
+  allowCreateNewPane: boolean;
   onChange: (paneId: string) => void;
   theme: {
     colors: ReturnType<typeof useCurrentTheme>["colors"];
@@ -180,21 +188,23 @@ interface PaneSelectProps {
   };
 }
 
-// 選択肢が 1 つだけならただ番号を表示。複数あれば <select> でペインを切替できる。
+// ペイン番号 + 「+ 新規」を選択肢として持つ <select>。
+// 「新規」が許容される場合、availablePanes が 0/1 でもセレクト UI を出す。
 const PaneSelect: React.FC<PaneSelectProps> = ({
   availablePanes,
   selectedPaneId,
+  allowCreateNewPane,
   onChange,
   theme,
 }) => {
-  if (availablePanes.length <= 1) {
+  // 新規が無効、かつペインが 1 つしかない場合は番号のみ表示
+  if (!allowCreateNewPane && availablePanes.length <= 1) {
     const only = availablePanes[0];
     return (
       <span
         style={{
           color: theme.colors.accent,
-          fontSize: "32px",
-          fontWeight: 700,
+          fontSize: "16px",
           lineHeight: 1,
         }}
       >
@@ -211,19 +221,21 @@ const PaneSelect: React.FC<PaneSelectProps> = ({
         color: theme.colors.accent,
         border: `1px solid ${theme.colors.border}`,
         borderRadius: theme.borderRadius,
-        padding: "2px 6px",
-        fontSize: "24px",
-        fontWeight: 700,
-        lineHeight: 1,
+        padding: "4px 8px",
+        fontSize: "14px",
+        lineHeight: 1.2,
         fontFamily: "inherit",
         cursor: "pointer",
       }}
     >
       {availablePanes.map((p) => (
         <option key={p.paneId} value={p.paneId}>
-          {p.paneNumber}
+          パネル {p.paneNumber}
         </option>
       ))}
+      {allowCreateNewPane && (
+        <option value={NEW_PANE_SENTINEL}>+ 新規パネルを作成</option>
+      )}
     </select>
   );
 };

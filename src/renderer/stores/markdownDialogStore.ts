@@ -18,8 +18,12 @@ export interface OpenConfirmRequest {
   availablePanes: PaneChoice[];
   // ダイアログ初期選択ペイン
   defaultPaneId: string;
+  // 「新規パネルを作成して開く」を選択肢に出すか。
+  // true のとき onConfirm に "__new__" sentinel が渡される（NEW_PANE_CHOICE）。
+  // markdownOpenService 側で sentinel を解釈して splitTerminal を実行する。
+  allowCreateNewPane?: boolean;
   // モーダルで「はい」が押された時の処理 (ファイル読込 + openMarkdown)。
-  // ユーザーがダイアログ内で変更したペイン ID を受け取る。
+  // ユーザーがダイアログ内で変更したペイン ID、または "__new__" を受け取る。
   onConfirm: (paneId: string) => void;
 }
 

@@ -2,6 +2,31 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-27 - Markdown エディタ dark モード背景の修正
+
+#### 概要
+
+dark テーマ選択時、Markdown エディタの背景が白いままになる症状を修正。`@uiw/react-codemirror` がデフォルトで挿入する `defaultLightThemeOption` が我々の `editorTheme` を CSS 順序で上書きしていたのが原因。`<CodeMirror>` に `theme="none"` を明示的に渡してデフォルト Extension の挿入をスキップする形に修正。
+
+#### 変更点
+
+- **MarkdownEditor.tsx**: `<CodeMirror>` に `theme="none"` を明示的に渡してデフォルトの `defaultLightThemeOption` Extension の挿入をスキップ
+
+### 2026-04-27 - サイドバーのファイル名アイコンずれ修正 + 検索フィールド追加
+
+#### 概要
+
+ディレクトリツリーで長いファイル名のとき、サイドバーを最小幅にスライドするとファイル/フォルダアイコンが微妙に左へずれる現象を修正。原因は `TreeNode.tsx` の chevron / icon span が `display: inline-flex` + 固定 `width` のみで `flex-shrink: 0` を持たず、親 flex コンテナの幅不足時に flex 子要素として自動圧縮されていたこと。あわせて、サイドバー上部のルートディレクトリ名行を撤去し `<input type="search">` を設置。`sidebarStore` に `searchQuery` を追加し、トップレベルと子階層の双方で `name` の case-insensitive 部分一致フィルタを適用。
+
+#### 変更点
+
+- **TreeNode.tsx (アイコン圧縮バグ修正)**: chevron 用 `<span>` と folder/file アイコン用 `<span>` の両方に `flexShrink: 0` を追加
+- **TreeNode.tsx (検索フィルタ + 子階層対応)**: `ChildList` に `useSidebarStore((s) => s.searchQuery)` 購読を追加、`filterEntriesByQuery(entries, query)` を named export として切り出し
+- **DirectoryTree.tsx (ルート行 → 検索フィールド置換)**: 旧ルート表示を削除し `<input type="search">` を設置
+- **sidebarStore.ts (state 拡張)**: `searchQuery: string` フィールドと `setSearchQuery(query)` action を追加
+- **新規テスト**: `Sidebar/__tests__/filterEntriesByQuery.test.ts`（7 件）+ `sidebarStore.test.ts` の 3 アサーション追加
+- **テスト合計**: 25 ファイル / 368 件グリーン（修正前 361 から +7 件）
+
 ### 2026-04-26 - Markdown エディタのテーマ対応 UI/UX リデザイン
 
 #### 概要

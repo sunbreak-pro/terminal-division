@@ -24,7 +24,8 @@ import {
 import { useSettingsStore } from "./stores/settingsStore";
 import { useSettingsModalStore } from "./stores/settingsModalStore";
 import { SettingsModal } from "./components/SettingsModal";
-import { getAllTerminalIds, collectPaneIdsInOrder } from "./utils/layoutUtils";
+import { getAllTerminalIds } from "./utils/layoutUtils";
+import { requestEditMarkdownFromSidebar } from "./services/markdownOpenService";
 import { promptAndInsertFiles } from "./utils/insertFiles";
 import * as terminalManager from "./services/terminalManager";
 import { useTerminalSearchStore } from "./stores/terminalSearchStore";
@@ -130,23 +131,8 @@ const App: React.FC = () => {
     return null;
   }, [activeTerminalId, terminalIds]);
 
-  // 指定ペインで Markdown を開くフロー: ファイル読込 → openMarkdown → タブ MD に切替
-  const openMarkdownInPane = useCallback(
-    async (paneId: string, filePath: string): Promise<void> => {
-      const result = await window.api.fs.readFile(filePath);
-      if (!result.ok) {
-        showErrorToast(`ファイル読込に失敗しました: ${result.error}`);
-        return;
-      }
-      useTerminalMetaStore
-        .getState()
-        .openMarkdown(paneId, filePath, result.content);
-      setActiveTerminal(paneId);
-    },
-    [setActiveTerminal],
-  );
-
-  // Sidebar からの「編集する」要求 → 確認モーダル → 開く
+  // Sidebar からの「編集する」要求 → 確認モーダル → 開く。
+  // 詳細フローは markdownOpenService に集約。新規ペイン作成オプションを許可する。
   const handleRequestEditMarkdown = useCallback(
     (filePath: string): void => {
       if (!isMarkdownPath(filePath)) return; // 念のため
@@ -155,58 +141,9 @@ const App: React.FC = () => {
         showErrorToast("対象ペインが見つかりません");
         return;
       }
-      // ダイアログで切替できる候補。ペイン番号付与は DFS 順 (= getPaneNumber と同じ)
-      const orderedIds = rootId ? collectPaneIdsInOrder(rootId, nodes) : [];
-      const availablePanes = orderedIds.map((paneId, idx) => ({
-        paneId,
-        paneNumber: idx + 1,
-      }));
-      const meta = useTerminalMetaStore.getState().metas.get(defaultPaneId);
-      // 選択ペインが dirty な MD を編集中なら、先に未保存警告を出す
-      const openConfirm = (): void => {
-        showOpenConfirm({
-          filePath,
-          availablePanes,
-          defaultPaneId,
-          onConfirm: (chosenPaneId) => {
-            dismissDialog();
-            void openMarkdownInPane(chosenPaneId, filePath);
-          },
-        });
-      };
-      if (meta && meta.viewMode === "md" && meta.mdDirty && meta.mdFilePath) {
-        showUnsaved({
-          filePath: meta.mdFilePath,
-          paneId: defaultPaneId,
-          reason: "open-other",
-          onSave: async () => {
-            const api = markdownEditorRegistry.getApi(defaultPaneId);
-            const ok = api ? await api.save() : false;
-            if (!ok) {
-              showErrorToast("保存に失敗しました");
-              return;
-            }
-            dismissDialog();
-            openConfirm();
-          },
-          onDiscard: () => {
-            dismissDialog();
-            openConfirm();
-          },
-        });
-        return;
-      }
-      openConfirm();
+      requestEditMarkdownFromSidebar(filePath, defaultPaneId);
     },
-    [
-      resolveTargetPaneId,
-      rootId,
-      nodes,
-      showUnsaved,
-      showOpenConfirm,
-      dismissDialog,
-      openMarkdownInPane,
-    ],
+    [resolveTargetPaneId],
   );
 
   const moveFocus = useCallback(
@@ -581,6 +518,7 @@ const App: React.FC = () => {
           filePath={dialogRequest.filePath}
           availablePanes={dialogRequest.availablePanes}
           defaultPaneId={dialogRequest.defaultPaneId}
+          allowCreateNewPane={dialogRequest.allowCreateNewPane}
           onConfirm={dialogRequest.onConfirm}
           onCancel={dismissDialog}
         />

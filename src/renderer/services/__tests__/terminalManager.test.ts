@@ -26,6 +26,8 @@ vi.mock("@xterm/xterm", () => {
     parser = {
       registerOscHandler: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     };
+    registerLinkProvider = vi.fn().mockReturnValue({ dispose: vi.fn() });
+    onBell = vi.fn().mockReturnValue({ dispose: vi.fn() });
     registerMarker = vi
       .fn()
       .mockReturnValue({ isDisposed: false, dispose: vi.fn() });

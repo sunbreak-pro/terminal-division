@@ -1,5 +1,55 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-29 - T3-5（候補） Claude Code Chat UI 計画策定
+
+#### 概要
+
+ユーザーが `claude` CLI を起動した際に claude.ai 風の専用チャット UI に切替できる機能（T3-5 候補）の計画書を策定。Anthropic API 直接呼び出しは使わず、サブスクリプション認証付きの既存 `claude` CLI を子プロセス起動して `--output-format stream-json --input-format stream-json` で双方向 JSONL を流す方針。既存 T2-8（Markdown Editor）と同じ per-pane viewMode 拡張パターンを踏襲（`viewMode = "cli" | "md" | "chat"`）。Open Questions Q1〜Q5 をユーザーと確定: (Q1) 自動検出、(Q2) CLI ↔ Chat 切替で会話継続（`--resume <session-id>` 連携）、(Q3) stream-json 仕様は Phase 0 で実機検証、(Q4) MVP ではツール使用イベント表示なし（Phase 4 で再判断）、(Q5) 入力欄は 1〜3 行自動拡張・4 行以上で内部スクロール、上限 64KB 目安。Phase 0（事前検証） / Phase 1（IPC + Main） / Phase 2（Renderer State） / Phase 3（UI + UX 評価セッション）/ Phase 4（統合・ガード・suppress オプション・必要なら ToolUseCard）/ Phase 5（ドキュメント反映）の 6 フェーズで構成。
+
+#### 変更点
+
+- **新規プラン**: `.claude/2026-04-29-claude-code-chat-ui.md`（Status: APPROVED — Phase 0 着手待ち）
+  - Architecture: `chat-session-manager.ts`（spawn / `--resume` / write / stop / dispose / getSessionId）、`claude-process-detector.ts`（PTY 出力監視 + foreground プロセス確認 500ms ポーリング）、stream-json パーサ、IPC（`chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:event` / `chat:claudeDetected`）、Renderer Store（`chatSessionStore` + `viewMode` 拡張）、UI（`ChatPaneView` / `MessageList` / `MessageBubble` / `ChatInput` / `ChatStatusBar`、ToolUseCard は MVP 範囲外）
+  - Phase 0 検証項目: stream-json 双方向ストリーミング / `--resume` 挙動 / session-id 取得経路 / 自動検出方式（claude 固有 ANSI/OSC の有無 + `tcgetpgrp` + `ps` の妥当性）/ ツール承認イベント / 認証エラー
+  - 設計判断: claude CLI ラップで認証は CLI 側 OAuth に委譲（API キーを持たない）、PTY と Chat は viewMode 切替で並存（PTY 破棄しない）、CLI ↔ Chat は同一 session-id で `--resume` 継続、自動検出は MVP では即時切替（モーダルなし、suppress は Phase 4）、入力欄は 4 行スクロールとパフォーマンス計測ベースの 64KB 上限
+  - Files テーブル: 新規 14 + modify 9（ToolUseCard は Phase 4 に明示）
+  - Verification: 機能受入 12 項目（自動切替 / 会話継続 / ストリーミング / IME 誤送信防止 / プロセスリーク無し / 64KB + 100 件メッセージのパフォーマンス受入）
+- **MEMORY.md（予定）**: T3-5（候補） Claude Code Chat UI in Pane を追加（計画書リンク + Phase 0 着手待ちの注記）
+
+### 2026-04-29 - ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整
+
+#### 概要
+
+ターミナル出力に流れた `~/dev/apps/terminal-division/README.md` のような Markdown ファイルパスを Cmd/Ctrl + クリックで開けるようにした。クリックされたパスがアクティブペインの CWD 配下なら確認なしで直接そのペインで開き、CWD 外なら確認ダイアログを出して既存ペイン or 新規パネルを選択させる。あわせて Sidebar からの「編集する」ダイアログにも「+ 新規パネルを作成」を選択肢として追加し、`splitTerminal` で分割した新ペインに開けるようにした。Markdown オープン処理は `services/markdownOpenService.ts` に集約し、Sidebar / Terminal の両起点が共通フローを使う構成。UI 改善として、ペインヘッダーの番号フォントが大きすぎる問題を是正し、`settings.terminal.fontSize` 追従の同寸 + アクセントカラーのみで強調する形に変更（fontWeight 700 を撤去）。
+
+#### 変更点
+
+- **新規 utils/markdownPath.ts**: 1 行から MD パスを検出する純粋関数群。`findMarkdownPaths(line)` が `~/foo.md` / `/abs/foo.md` / `./foo.md` / `dir/foo.md` / `README.md` を検出し、`http(s)://...md` 範囲とは重ならないよう URL を先抽出して除外。末尾装飾文字（`,` `.` `:` `;` `)`）を剥がし、同一範囲の重複マッチは長い方を残す。`resolveMarkdownPath(raw, cwd, home)` でチルダ展開 / 相対 (`./` `../`) 解決 / 絶対パス normalize（`..` のスタック解消、ルート越え禁止）。`isInsideCwd(abs, cwd)` は区切り境界を厳密判定（`/work-foo` を `/work` の配下とは判定しない）
+- **新規 services/markdownOpenService.ts**: Markdown オープン処理の集約サービス。`requestEditMarkdownFromTerminal(absPath, paneId)` は CWD 配下なら確認なしで直接開き、配下外なら `showOpenConfirm` で確認ダイアログ（`allowCreateNewPane: true` 付き）。`requestEditMarkdownFromSidebar(filePath, paneId)` は常にダイアログ。`NEW_PANE_CHOICE = "__new__"` sentinel が選ばれたら `splitTerminal(originatingPaneId, "horizontal")` で分割し、新ペイン id を `useTerminalStore.getState().activeTerminalId` 経由で取得して `openMarkdown` を発火。`canSplit()` 失敗時 / dirty MD 編集中は既存パターンで unsaved 警告を経由
+- **terminalManager.ts (link provider)**: `terminal.registerLinkProvider({ provideLinks })` を追加し、各 buffer 行で `findMarkdownPaths` を呼んで `ILink[]` を返す。`x` は 1-based、`y` は IBuffer の 1-based 行番号（`getLine(bufferLineNumber - 1)` で 0-based 配列にアクセス）。`activate(event, raw)` で Cmd/Ctrl 押下時のみ `event.preventDefault()` + コールバック発火。`TerminalCallbacks` に `onMarkdownLinkClick?: (raw: string) => void` を追加
+- **TerminalPane.tsx**: `getOrCreate` に `onMarkdownLinkClick` を渡す。コールバック内で自ペインの `meta.cwd` と `window.api.system.getHomeDir()` を取得し、`resolveMarkdownPath` で絶対パスに解決してから `requestEditMarkdownFromTerminal(abs, id)` を呼ぶ。解決失敗時は toast 表示
+- **markdownDialogStore.ts**: `OpenConfirmRequest.allowCreateNewPane?: boolean` を追加。true のとき OpenMarkdownModal が「新規パネルを作成」を選択肢として表示し、選択時には `onConfirm("__new__")` が呼ばれる規約
+- **OpenMarkdownModal.tsx**: `allowCreateNewPane` prop を追加。`<select>` に `+ 新規パネルを作成`（value=`__new__`）option を末尾に追加。`allowCreateNewPane=true` のときはペインが 1 つしか無くても select UI を表示。番号のみ表示時のフォントサイズも 32px → 16px に縮小（`PaneSelect` 共通の見た目を整理）。NEW_PANE_SENTINEL は markdownOpenService の `NEW_PANE_CHOICE` と一致
+- **App.tsx**: 旧 `handleRequestEditMarkdown` の本体を `requestEditMarkdownFromSidebar` に置換し、`openMarkdownInPane` ローカル定義 + `collectPaneIdsInOrder` import を撤去（サービスへ移管）。`<OpenMarkdownModal>` に `allowCreateNewPane={dialogRequest.allowCreateNewPane}` を配線
+- **TerminalSubHeader.tsx**: ペイン番号 span のスタイルを `fontSize: "13px" + fontWeight: 700` から `fontSize: ${terminalSettings.fontSize}px`（設定追従、デフォルト 13px）+ fontWeight 撤去 に変更。強調はアクセントカラーのみ。`useTerminalSettings` を新規 import
+- **新規テスト 38 件**:
+  - `utils/__tests__/markdownPath.test.ts` (22): 絶対 / チルダ / 相対 / 単独ファイル / `.markdown` / case-insensitive / 末尾装飾 / URL 除外 / 複数マッチ / `.txt` 不一致 / `~` 単独 / 絶対 normalize / 相対 cwd 解決 / cwd null フォールバック / home 空フォールバック / `..` ルート越え禁止 / isInsideCwd 等価 / 配下 / 配下外 / `/work-foo` 境界判定 / cwd null
+  - `services/__tests__/markdownOpenService.test.ts` (9): CWD 内なら no-dialog で直接 open / CWD 外なら `allowCreateNewPane: true` ダイアログ / cwd 不明時はフォールバックでダイアログ / 非 .md 防衛無視 / dirty MD で unsaved 警告 / Sidebar 起動は常にダイアログ / Sidebar 非 .md 防衛 / `NEW_PANE_CHOICE` で `splitTerminal("p1", "horizontal")` 発火 / `canSplit=false` で分割中止
+  - `components/__tests__/OpenMarkdownModal.test.tsx` (7): `isOpen=false` で非表示 / 確認で `onConfirm(defaultPaneId)` / ESC で `onCancel` / デフォルトは新規オプション非表示 / `allowCreateNewPane` で表示 / `__new__` を選んだら sentinel が onConfirm に渡る / 1 ペイン時も新規許可なら select 表示
+- **既存テスト更新**: `services/__tests__/terminalManager.test.ts` の MockTerminal に `registerLinkProvider` / `onBell` プロパティを追加（前 commit で抜けていた link provider 用 mock を補完）
+- **テスト合計**: 32 ファイル / 454 件グリーン（修正前 416 から +38 件）
+- **設計判断**:
+  - **「current 配下なら確認なし、配下外なら確認」のヒューリスティック**: 大半の場面（`cd ~/proj && cat README.md` のように開きたい）で確認ダイアログがクリックを 2 段階にして体験を悪化させる。一方、別プロジェクトの `.md` を不意に同ペインで開くと現在編集中のものを潰すリスクがある。`isInsideCwd` で区切り境界を厳密判定し、明らかな「同じプロジェクト」だけ直接開く設計
+  - **CWD 解決を起点ペイン基準に**: 相対パス（`README.md` / `./foo.md` / `dir/foo.md`）はクリックされた xterm 行が描画されているペインの CWD で resolve する。複数ペインで同じプロジェクトを開いていても、各ペインの CWD でローカル解決される
+  - **xterm `registerLinkProvider` を使う（WebLinks と分離）**: WebLinksAddon は URL のみで MD パスを拾わない。`registerLinkProvider` は同一行に複数のリンクを共存可能で、URL は WebLinks、MD パスは独自プロバイダで責務分離。`findMarkdownPaths` 内で URL 範囲との重複を除外することで両者の重なりを防ぐ
+  - **`activate` で `event.preventDefault()` を Cmd/Ctrl のときだけ呼ぶ**: 通常クリックのデフォルト動作（テキスト選択開始など）は妨げない。WebLinks と同じパターン
+  - **MD オープン処理を service に集約**: 旧 App.tsx の `handleRequestEditMarkdown` は 50 行超で複雑だった（dirty 判定 → unsaved 警告 → 通常ダイアログ → readFile → openMarkdown）。Sidebar / Terminal 双方が同じフローを必要とするため、`markdownOpenService` に切り出し App.tsx を簡素化。テストも service 単体で routing 判定をカバーできる
+  - **`__new__` sentinel 方式 vs callback 直接呼出**: OpenMarkdownModal の onConfirm シグネチャを `(paneId: string)` のまま保ち、特殊値で「新規」を表現する形に。signature を `(choice: string | { create: true })` 等に拡張すると既存テストや消費側の型変更が広がるため、sentinel + ドキュメント明示が局所影響で済む
+  - **`splitTerminal` の戻り値ではなく `activeTerminalId` 経由で新ペイン取得**: 既存 `splitTerminal` は `boolean` を返す API なのでシグネチャを変更しない。`splitTerminal` 内で `activeTerminalId` を新ペインに設定する既存挙動（terminalStore.ts:108）に依存する。Zustand の更新は同期なので `getState()` 直後に新 id が読める
+  - **新規ペイン分割方向を horizontal 固定**: 「縦並び（左右）と横並び（上下）」のどちらでも一長一短だが、Markdown は縦に長いことが多く、縦に並べるよりは横に並べる方がプレビューと作業ターミナルを両立しやすい。`SplitDirection.horizontal` = pane を horizontal な分割線で分ける = 上下 2 ペイン
+  - **ペイン番号のフォントを設定追従に**: 旧実装の `13px + fontWeight 700` は SubHeader の周囲（12px 通常）と比べて顕著に大きく、視覚ノイズになっていた。`terminalSettings.fontSize` を参照することで、ユーザーがフォントを大きくすればペイン番号も比例して大きくなる「整合した拡縮」が成立する。強調は accent カラーのみで完結（数字は元々 tabular-nums で揃っているため bold が無くても識別性は十分）
+  - **`PaneSelect` の番号のみ表示も縮小（32px → 16px）**: 旧実装では「ペインが 1 つだけ」のときのモーダル内表示が 32px の巨大数字でうるさかった。<select> 表示時の 14px 系と同寸感に揃える
+
 ### 2026-04-29 - T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）
 
 #### 概要
@@ -80,31 +130,6 @@ Settings → 外観のカラー編集が 33 フィールド（基本色 6 + ANSI
 - **新規テスト**: `components/settings/__tests__/semanticColors.test.ts` 11 件（排他性の不変条件テスト含む）
 - **テスト合計**: 26 ファイル / 379 件グリーン（修正前 368 から +11）
 
-### 2026-04-27 - Markdown エディタ dark モード背景の修正
-
-#### 概要
-
-dark テーマ選択時、Markdown エディタの背景が白いままになる症状を修正。`@uiw/react-codemirror` がデフォルトで挿入する `defaultLightThemeOption` が我々の `editorTheme` を CSS 順序で上書きしていたのが原因。`<CodeMirror>` に `theme="none"` を明示的に渡してデフォルト Extension の挿入をスキップする形に修正。
-
-#### 変更点
-
-- **MarkdownEditor.tsx**: `<CodeMirror>` に `theme="none"` を明示的に渡してデフォルトの `defaultLightThemeOption` Extension の挿入をスキップ
-
-### 2026-04-27 - サイドバーのファイル名アイコンずれ修正 + 検索フィールド追加
-
-#### 概要
-
-ディレクトリツリーで長いファイル名のとき、サイドバーを最小幅にスライドするとファイル/フォルダアイコンが微妙に左へずれる現象を修正。原因は `TreeNode.tsx` の chevron / icon span が `display: inline-flex` + 固定 `width` のみで `flex-shrink: 0` を持たず、親 flex コンテナの幅不足時に flex 子要素として自動圧縮されていたこと。あわせて、サイドバー上部のルートディレクトリ名行を撤去し `<input type="search">` を設置。`sidebarStore` に `searchQuery` を追加し、トップレベルと子階層の双方で `name` の case-insensitive 部分一致フィルタを適用。
-
-#### 変更点
-
-- **TreeNode.tsx (アイコン圧縮バグ修正)**: chevron 用 `<span>` と folder/file アイコン用 `<span>` の両方に `flexShrink: 0` を追加
-- **TreeNode.tsx (検索フィルタ + 子階層対応)**: `ChildList` に `useSidebarStore((s) => s.searchQuery)` 購読を追加、`filterEntriesByQuery(entries, query)` を named export として切り出し
-- **DirectoryTree.tsx (ルート行 → 検索フィールド置換)**: 旧ルート表示を削除し `<input type="search">` を設置
-- **sidebarStore.ts (state 拡張)**: `searchQuery: string` フィールドと `setSearchQuery(query)` action を追加
-- **新規テスト**: `Sidebar/__tests__/filterEntriesByQuery.test.ts`（7 件）+ `sidebarStore.test.ts` の 3 アサーション追加
-- **テスト合計**: 25 ファイル / 368 件グリーン（修正前 361 から +7 件）
-
-> 2026-04-29 ローリングアーカイブ: 2026-04-26 の 2 エントリ（Markdown エディタテーマ対応 / Settings モーダル新設）を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-29 ローリングアーカイブ: 2026-04-27 の Markdown エディタ dark モード背景修正 / サイドバーファイル名アイコンずれ修正、および 2026-04-26 の 2 エントリを [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 > 2026-04-27 ローリングアーカイブ: これ以前の 30 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

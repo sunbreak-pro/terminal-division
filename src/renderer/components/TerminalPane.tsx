@@ -33,6 +33,8 @@ import {
 } from "../stores/terminalSearchStore";
 import { TerminalSearchOverlay } from "./TerminalSearchOverlay";
 import { showErrorToast } from "./Sidebar/ErrorToast";
+import { resolveMarkdownPath } from "../utils/markdownPath";
+import { requestEditMarkdownFromTerminal } from "../services/markdownOpenService";
 
 const TD_PATH_MIME = "application/x-td-path";
 
@@ -145,6 +147,20 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
           onFocus: () => {
             setActiveTerminal(id);
             useSidebarStore.getState().setLastInteractedArea("terminal");
+          },
+          onMarkdownLinkClick: (raw: string) => {
+            // raw は xterm 行から検出した「~/foo.md」「./foo.md」等の生文字列。
+            // 自ペインの CWD と HOME で絶対パスに解決し、サービス側で
+            // 「current 配下なら直接 / 配下外なら確認ダイアログ」を判定する。
+            const meta = useTerminalMetaStore.getState().metas.get(id);
+            const cwd = meta?.cwd ?? null;
+            const home = window.api.system.getHomeDir() || "";
+            const abs = resolveMarkdownPath(raw, cwd, home);
+            if (!abs) {
+              showErrorToast("パスを解決できませんでした");
+              return;
+            }
+            requestEditMarkdownFromTerminal(abs, id);
           },
         },
       );
