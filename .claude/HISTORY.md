@@ -1,6 +1,53 @@
 # HISTORY.md - 変更履歴
 
-### 2026-04-29 - T3-5 Claude Code Chat UI 実装 + 複数 MD タブ対応
+### 2026-04-29 - フォントズームのキーバインド修正（globalShortcut + Settings 連動）+ Header 整理 + per-pane close button
+
+#### 概要
+
+ユーザー報告の 3 連続ショートカット問題を順に切り分け、最終的に Chromium のキーディスパッチ仕様に行き当たった。`Cmd+=` は renderer の keydown まで到達するが `Cmd+-` は到達しない（Chromium の `prePerformKeyEquivalent:` がアプリ層でステップ 2 のズーム処理として消費する）ため、Electron メニューアクセラレータも `before-input-event` も間に合わない。`globalShortcut.register("CommandOrControl+-")` で OS 直接のキー監視に乗せ、フォーカス時のみ register / blur で unregister するフォーカス条件付きのグローバルショートカットを `src/main/zoom-shortcuts.ts` に新設。同時に `Cmd+=` / `Cmd+0` / 代替の `Cmd+Shift+-` も同じ仕組みで登録し、メニューアイテムは accelerator なしのクリックハンドラ（IPC 送出）に簡素化した。これとは別系統で「Settings のフォントスライダーが拡大時に同期しない」問題を、per-pane の `fontSizeOverride` を直接動かす方式から **グローバル `Settings.terminal.fontSize` を直接更新する方式** に切替、`adjustGlobalFontSize` / `resetGlobalFontSize` を Renderer 側に新設。`Cmd+0` はファクトリー既定値 14 に戻す挙動に統一。あわせて UI 整理として、`Header` 右端の閉じるボタンとテーマ選択ドロップダウンを撤去（テーマは Settings に集約済み）し、各ペインの `TerminalSubHeader` 右端に × ボタンを追加（dirty MD タブがある場合は `UnsavedChangesModal` で警告フローに乗る）。Header / TerminalPane の既存テストを新仕様に書き換え、合計 35 ファイル / 500 件グリーン。
+
+#### 変更点
+
+- **新規 `src/main/zoom-shortcuts.ts`**: フォーカス条件付き globalShortcut 登録モジュール。`browser-window-focus` で `CommandOrControl+=` / `CommandOrControl+Shift+=` / `CommandOrControl+-` / `CommandOrControl+Shift+-` / `CommandOrControl+0` を登録、`browser-window-blur` で全 unregister。これによりフォーカス時のみキーを奪い、他アプリ使用中は素通しさせる。コールバックは `BrowserWindow.getFocusedWindow().webContents.send("font-zoom:in/out/reset")` で IPC 送出
+- **`src/main/index.ts`**: `setupZoomShortcuts()` を `app.whenReady` 内で呼出 + `app.on("will-quit", teardownZoomShortcuts)` でクリーンアップ
+- **`src/main/menu.ts`**: 「表示」メニューに「フォント拡大 / 縮小 / リセット」を追加。**accelerator は付けず click のみ**（globalShortcut と二重登録すると挙動が不安定）。click は `webContents.send("font-zoom:*")` を発火するだけ
+- **`src/preload/index.ts`**: `window.api.menu.{onFontZoomIn,onFontZoomOut,onFontZoomReset}` を公開。`createIpcListener<void>` で wrap
+- **`src/renderer/App.tsx`**:
+  - `adjustActivePaneFontSize`（per-pane override 操作）を撤去し、`adjustGlobalFontSize(delta)` / `resetGlobalFontSize()` を新設。前者は `useSettingsStore.getState().update({ terminal: { fontSize: clamp(current + delta, MIN, MAX) } })` で **グローバル設定を直接更新**、後者はファクトリー既定値 14 にリセット + `clearAllFontSizeOverrides()` も呼ぶ
+  - メニュー IPC リスナーを `useEffect` で購読し、`onFontZoomIn` → `adjustGlobalFontSize(+1)` 等にディスパッチ
+  - registry-based handler の `font-zoom-in/out/reset` も同関数を呼ぶよう統一（カスタムバインドからの経路でも同じ挙動）
+  - keydown 早期 fallback の `isZoomOut` マッチ条件に `e.keyCode === 189` を追加（IME / 配列違いで `e.key`/`e.code` が想定外でも拾えるように）。`isZoomReset` も同様に `e.keyCode === 48` 追加
+- **`src/renderer/stores/settingsStore.ts`**:
+  - `update(patch)` 内で `patch.terminal.fontSize !== current.terminal.fontSize` のときに `useTerminalMetaStore.getState().clearAllFontSizeOverrides()` を呼ぶ side-effect を追加。Settings からのスライダー操作で全ペインの override が解除され、新しい `fontSize` が即時反映される
+- **`src/renderer/stores/terminalMetaStore.ts`**:
+  - `clearAllFontSizeOverrides: () => void` action を新設。null 以外の override が 1 つでもあるときだけ `set({ metas: next })` で再描画トリガを最小化（fontSizeOverride を保持しているのは UI レイヤだけなのでバルク操作で十分）
+- **`src/renderer/shortcuts/registry.ts`**:
+  - `font-zoom-in` のデフォルトキーを `Cmd+=` から `Cmd+Plus` に変更（表示は `⌘ +`）。`normalizeKeyName` に `+ → Plus` エイリアスを追加し、`parseKey` は `keyName === "Plus"` のとき Shift を省く（US の `Cmd+Shift+=` も JIS の `Cmd+Shift+;` も同じ `Cmd+Plus` に正規化される）
+  - `canonicalize` を拡張して末尾 `++` を `+Plus` にプリプロセス（`Cmd++` 表記も受理）
+  - `DISPLAY_MAP` に `Plus → "+"` 追加
+- **`src/renderer/components/SplitContainer.tsx`**: `Panel.onResize` の `handlePanelResize` で `fit()` 前に `terminalManager.invalidateLastSize(panelId)` を呼ぶ。兄弟ペイン削除直後の expand で `lastSizes` キャッシュが古い値のまま `pty.resize` を抑止する不具合（scrollback の細長表示）を修正
+- **`src/renderer/components/TerminalPane.tsx`**: md/chat → cli 復帰時の `useLayoutEffect` に `requestAnimationFrame` ベースの 2 度目 `invalidateLastSize + handleFit` を追加。`useLayoutEffect` 1 回目は `display:none → block` のレイアウト未確定で 0-cols 失敗することがあるため、paint 後に再フィットする保険
+- **`src/renderer/components/Header.tsx`**: 大幅整理。
+  - **削除**: 右端の「閉じる (Cmd+W)」ボタン、テーマ選択 `<select>` ドロップダウン
+  - これに伴い `useTerminalCount` / `useAvailableThemes` / `useSetTheme` / `closeTerminal` / `handleClose` / `handleCloseButton*` / `handleThemeChange` / `closeButtonStyle` / `canClose` を撤去
+  - 残す UI: Sidebar トグル / 縦分割 / 横分割 / ディレクトリ移動 / 設定
+- **`src/renderer/components/TerminalSubHeader.tsx`**:
+  - 各ペインのヘッダー右端に × 閉じるボタンを追加（`useTerminalActions` / `useTerminalCount` を購読）。`terminalCount > 1` のときのみ有効、最後の 1 ペインは disabled
+  - `handleClosePane` は dirty な MD タブが存在すれば `useMarkdownDialogStore.showUnsaved({ reason: "close-pane", onSave / onDiscard })` で警告フローに乗せる。dirty なしなら即時 `closeTerminal(id)`
+  - hover で danger カラーに反転、disabled 時は不透明度 0.4 + `cursor: not-allowed`
+  - ペイン番号 span のフォントサイズを `meta?.fontSizeOverride ?? terminalSettings.fontSize` に変更（Cmd+= / Settings の双方で番号もターミナル本体も同寸で動く）
+- **既存テスト改訂**:
+  - `Header.test.tsx`: 削除済み UI（閉じるボタン / テーマ選択）の表示テストを除去し、代わりに「これらが描画されないこと」を assert する負のテストを追加。残す機能（split / directory / settings）のテストはそのまま
+  - `TerminalPane.test.tsx`: TerminalSubHeader が `useTerminalCount` を購読するようになったため、mock に `useTerminalCount: vi.fn(() => 2)` を追加
+  - `SplitContainer.test.tsx`: `terminalManager` mock に `invalidateLastSize: vi.fn()` を追加（handlePanelResize がそれを呼ぶようになったため）
+- **テスト合計**: 35 ファイル / 500 件グリーン
+- **設計判断**:
+  - **`Cmd+-` を globalShortcut に逃がす根拠**: Chromium の macOS キーディスパッチは `OS → アプリ固有 (`prePerformKeyEquivalent:`) → メニュー → before-input-event → renderer keydown` の順で動き、ズームショートカットはステップ 2 で消費される。Electron メニューに `accelerator: "CommandOrControl+-"` を登録しても、ステップ 2 の消費の方が先に走るため安定して上書きできない（ユーザー実機で再現確認済み: `[zoom-diag keydown]` ログが Cmd+= では出るが Cmd+- では出ない）。globalShortcut は OS が直接ハンドルする経路に乗るため、Chromium のステップ 2 に到達する前にコールバックが走る
+  - **focus-conditional な globalShortcut**: 真にグローバルに register したまま放置すると他アプリ操作中の `Cmd+-` も奪ってしまう。`browser-window-focus`/`blur` で register/unregister することで、フォーカスがあるときだけインターセプトする UX に揃える
+  - **Settings 直接更新方式 vs per-pane override**: 旧仕様は `Cmd+=` で `fontSizeOverride` を弄り、Settings.fontSize は触らない方針だったが、ユーザーから「Settings のスライダーが連動しない」「override が積まれて Settings 操作が効かなくなる」の 2 件報告を受けて方針転換。グローバル `Settings.terminal.fontSize` を直接動かすことで、(a) スライダーが常に現在値を反映、(b) 全ペインが同期、(c) override 不在で挙動が単純化、を同時に達成。per-pane override の余地は内部に残しているが、現在の Cmd+= 系経路では使わない
+  - **Header 整理の方針**: 閉じるボタンは「対象ペインが分かりにくい」（アクティブペインが暗黙的）という UX 課題があり、各ペインのヘッダーに × を置くことで操作対象が視覚的に明示される。テーマ選択は Settings の「外観」タブに既に存在するため Header 上で重複していた。両者を撤去することで Header の右側ブロックがすっきり、Settings ボタン押下のみへ集約
+  - **TerminalSubHeader の × ボタンも dirty 警告フローを踏襲**: 既存の Cmd+W ショートカットと同じ `UnsavedChangesModal` を再利用することで、ペイン閉鎖の警告 UX が 2 経路で同一化（保存 / 破棄 / キャンセル の 3 ボタン）
+  - **メニューアイテムから accelerator を外した理由**: globalShortcut と menu accelerator を同じキーに二重登録すると、片方が登録失敗したり順序が不定になる事例があるため。globalShortcut が一次的に責任を持ち、メニューアイテムは「クリックでも実行できる UI ガイド」として残すだけにする
 
 #### 概要
 
@@ -162,22 +209,6 @@ T3-5 Claude Code Chat UI を MVP として完成させ、同時に Markdown エ�
   - **設定タブの並び**: 外観 / ターミナル / エディタ / ショートカット / ウィンドウ / 一般。「外観」を最上位に保つことでテーマ切替の発見可能性を維持し、「ターミナル」を 2 番目に置くことで本アプリの主用途に直結する。「一般」は最下位に置いて「設定全体に影響する大物」を物理的に区別
 - **計画書アーカイブ**: `.claude/archive/2026-04-29-customization-features.md` に Status=COMPLETED で移動済み
 
-### 2026-04-27 - サイドバー再帰検索 + 検索フィールド内ショートカット passthrough
-
-#### 概要
-
-サイドバーの検索フィールドが「展開中ディレクトリの兄弟ノードのみ」をフィルタする実装になっていたため、`.claude/MEMORY.md` のように展開していないサブディレクトリ内のファイルが検索クエリ「MEMORY」で全くヒットせず、`ME` まで打っても直下の `README.md` しか出ない問題を修正。Main プロセスに `searchTree(rootPath, query)` を追加し、ルート配下を再帰探索（最大 500 件 / 深度 10、`node_modules` と `.git` のみスキップ、symlink ディレクトリは再帰せずループ回避、`.claude` 等の dotfile は探索対象）。Renderer 側は検索クエリが非空のときに既存ツリー描画を `SearchResultsPanel` のフラットリストに切り替え、150ms デバウンス + cancelled フラグで race condition 回避。各結果行は「ファイル名 + ルートからの相対ディレクトリ」を 2 行表示し、クリック選択 / `.md` シングルクリックで Markdown エディタ起動 / 右クリックで既存コンテキストメニュー（コピー / VSCode / 名称変更 / 移動 / 削除）を提供。あわせて、検索フィールド内で `cmd+delete` `cmd+←` `cmd+→` `cmd+z` `cmd+shift+z` 等のテキスト編集ショートカットが効かない問題も修正。`App.tsx` の capture-phase keydown ハンドラがこれらを横取りして端末に送っていたため、`EDITABLE_PASSTHROUGH_IDS` を導入し editable target にフォーカスがある場合はマッチしてもブラウザ標準動作へ委譲する。
-
-#### 変更点
-
-- **file-system-handler.ts**: `searchTree(rootPath, query, options?)` を新規追加。`fs.promises.readdir(withFileTypes)` で再帰探索し、ファイル名の case-insensitive 部分一致で `DirEntry[]` を返す。探索順はディレクトリ優先 + ロケール順で安定化、symlink は `fs.promises.stat` で実体解決し isDirectory を正しく判定。シンボリックリンクのディレクトリは再帰しない（ループ回避）。`{ entries, truncated }` を返し、上限到達は呼び出し側で警告表示できるようにした
-- **ipc-handlers.ts**: `fs:searchTree` IPC ハンドラ登録。`validatePath` でルートパスを検証してから `searchTree` を呼ぶ既存パターン踏襲。返却型は `{ ok: true, entries, truncated } | { ok: false, error }`
-- **preload/index.ts**: `window.api.fs.searchTree(rootPath, query)` を公開。型シグネチャを明示し renderer 側で型補完が効くようにした
-- **DirectoryTree.tsx (検索 UI)**: 検索クエリ非空のとき `SearchResultsPanel` をツリーの代わりに描画。`SearchState = idle/loading/ready/error` の discriminated union で状態管理。150ms `setTimeout` + `cancelled` フラグでデバウンス + race condition 対策（unmount や次回入力時に古い結果が state を上書きしない）。`SearchResultRow` は `{ name, relativeDir }` の 2 行表示、`isMarkdownPath` 判定で `.md` シングルクリック → `onRequestEditMarkdown`、右クリックで既存 `handleContextMenu` 経由のコンテキストメニュー（buildMenuItems で構築される 8 項目）を発火
-- **App.tsx (editable passthrough)**: `EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId>` を新設し、`kill-line-backward` / `kill-line-forward` / `move-line-start` / `move-line-end` / `kill-word-backward` / `kill-word-forward` / `move-word-left` / `move-word-right` / `undo` / `redo` を含めた。`handleKeyDown` のディスパッチループで `inEditable && EDITABLE_PASSTHROUGH_IDS.has(def.id)` のとき preventDefault せずに早期 return し、ブラウザ標準のテキスト編集動作（cmd+delete で行頭まで削除、cmd+←/→ で行頭/行末移動、cmd+z で undo 等）が input 要素に届くようにした。`isEditableTarget` は xterm の helper textarea を除外する既存実装をそのまま流用（端末側のショートカット動作は不変）
-- **新規テスト**: `main/__tests__/searchTree.test.ts`（9 件）— 一時ディレクトリで実ファイルツリーを構築してテスト。検証項目: ルート直下マッチ / サブディレクトリ再帰マッチ（`.claude/MEMORY.md`）/ 大文字小文字無視 / `node_modules` スキップ / 深い階層 / 空クエリ・whitespace-only クエリ / `maxResults` 超過時の `truncated=true` / `maxDepth` 制限 / `isDirectory`・`isSymlink` フラグ
-- **テスト合計**: 28 ファイル / 388 件グリーン（修正前 379 から +9 件）
-
-> 2026-04-29 ローリングアーカイブ: 「Settings カラー編集の簡略化（セマンティック 6 色化）」、「Markdown エディタ dark モード背景修正」「サイドバーファイル名アイコンずれ修正」、および 2026-04-26 の 2 エントリを [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-04-29 ローリングアーカイブ: 「サイドバー再帰検索 + 検索フィールド内ショートカット passthrough」「Settings カラー編集の簡略化（セマンティック 6 色化）」、「Markdown エディタ dark モード背景修正」「サイドバーファイル名アイコンずれ修正」、および 2026-04-26 の 2 エントリを [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 > 2026-04-27 ローリングアーカイブ: これ以前の 30 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

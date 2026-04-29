@@ -40,12 +40,6 @@ const Header: React.FC = React.memo(() => {
     }
   }, [activeTerminalId, canSplitNow, splitTerminal]);
 
-  const handleClose = useCallback((): void => {
-    if (activeTerminalId && canClose) {
-      closeTerminal(activeTerminalId);
-    }
-  }, [activeTerminalId, canClose, closeTerminal]);
-
   const handleChangeDirectory = useCallback(async (): Promise<void> => {
     if (!activeTerminalId) return;
 
@@ -74,7 +68,13 @@ const Header: React.FC = React.memo(() => {
       gap: theme.spacing.xs,
       transition: "background-color 0.15s ease",
     }),
-    [],
+    [
+      theme.spacing.xs,
+      theme.spacing.md,
+      theme.colors.text,
+      theme.colors.border,
+      theme.borderRadius,
+    ],
   );
 
   const disabledStyle = useMemo<React.CSSProperties>(
@@ -86,21 +86,13 @@ const Header: React.FC = React.memo(() => {
     [buttonStyle],
   );
 
-  const closeButtonStyle = useMemo<React.CSSProperties>(
-    () =>
-      canClose
-        ? { ...buttonStyle, border: `1px solid ${theme.colors.danger}` }
-        : disabledStyle,
-    [buttonStyle, disabledStyle, canClose],
-  );
-
   const handleSplitButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (canSplitNow) {
         e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
       }
     },
-    [canSplitNow],
+    [canSplitNow, theme.colors.buttonHover],
   );
 
   const handleButtonLeave = useCallback(
@@ -110,44 +102,24 @@ const Header: React.FC = React.memo(() => {
     [],
   );
 
-  const handleCloseButtonEnter = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      if (canClose) {
-        e.currentTarget.style.backgroundColor = theme.colors.danger;
-        e.currentTarget.style.border = `1px solid ${theme.colors.danger}`;
-      }
-    },
-    [canClose],
-  );
-
-  const handleCloseButtonLeave = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.currentTarget.style.backgroundColor = "transparent";
-      if (canClose) {
-        e.currentTarget.style.border = `1px solid ${theme.colors.danger}`;
-      }
-    },
-    [canClose],
-  );
-
   const handleDirectoryButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       if (activeTerminalId) {
         e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
       }
     },
-    [activeTerminalId],
+    [activeTerminalId, theme.colors.buttonHover],
   );
 
   const handleOpenSettings = useCallback(() => {
     useSettingsModalStore.getState().open();
   }, []);
 
-  const handleShortcutsButtonEnter = useCallback(
+  const handleSettingsButtonEnter = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
     },
-    [],
+    [theme.colors.buttonHover],
   );
 
   return (
@@ -283,7 +255,7 @@ const Header: React.FC = React.memo(() => {
           onClick={handleOpenSettings}
           style={buttonStyle}
           title="設定 (Cmd+,)"
-          onMouseEnter={handleShortcutsButtonEnter}
+          onMouseEnter={handleSettingsButtonEnter}
           onMouseLeave={handleButtonLeave}
         >
           <svg
@@ -300,57 +272,6 @@ const Header: React.FC = React.memo(() => {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
           設定
-        </button>
-
-        <select
-          value={currentTheme.id}
-          onChange={handleThemeChange}
-          title="テーマ選択"
-          style={{
-            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
-            backgroundColor: "transparent",
-            color: theme.colors.text,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: theme.borderRadius,
-            cursor: "pointer",
-            fontSize: "12px",
-            outline: "none",
-          }}
-        >
-          {availableThemes.map((t) => (
-            <option
-              key={t.id}
-              value={t.id}
-              style={{
-                backgroundColor: theme.colors.headerBackground,
-                color: theme.colors.text,
-              }}
-            >
-              {t.name}
-            </option>
-          ))}
-        </select>
-
-        <button
-          onClick={handleClose}
-          disabled={!canClose}
-          style={closeButtonStyle}
-          title="閉じる (Cmd+W)"
-          onMouseEnter={handleCloseButtonEnter}
-          onMouseLeave={handleCloseButtonLeave}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-          閉じる
         </button>
       </div>
     </header>

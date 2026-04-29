@@ -2,6 +2,22 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-27 - サイドバー再帰検索 + 検索フィールド内ショートカット passthrough
+
+#### 概要
+
+サイドバーの検索フィールドが「展開中ディレクトリの兄弟ノードのみ」をフィルタする実装になっていたため、`.claude/MEMORY.md` のように展開していないサブディレクトリ内のファイルが検索クエリ「MEMORY」で全くヒットせず、`ME` まで打っても直下の `README.md` しか出ない問題を修正。Main プロセスに `searchTree(rootPath, query)` を追加し、ルート配下を再帰探索（最大 500 件 / 深度 10、`node_modules` と `.git` のみスキップ、symlink ディレクトリは再帰せずループ回避、`.claude` 等の dotfile は探索対象）。Renderer 側は検索クエリが非空のときに既存ツリー描画を `SearchResultsPanel` のフラットリストに切り替え、150ms デバウンス + cancelled フラグで race condition 回避。各結果行は「ファイル名 + ルートからの相対ディレクトリ」を 2 行表示し、クリック選択 / `.md` シングルクリックで Markdown エディタ起動 / 右クリックで既存コンテキストメニュー（コピー / VSCode / 名称変更 / 移動 / 削除）を提供。あわせて、検索フィールド内で `cmd+delete` `cmd+←` `cmd+→` `cmd+z` `cmd+shift+z` 等のテキスト編集ショートカットが効かない問題も修正。`App.tsx` の capture-phase keydown ハンドラがこれらを横取りして端末に送っていたため、`EDITABLE_PASSTHROUGH_IDS` を導入し editable target にフォーカスがある場合はマッチしてもブラウザ標準動作へ委譲する。
+
+#### 変更点
+
+- **file-system-handler.ts**: `searchTree(rootPath, query, options?)` を新規追加。`fs.promises.readdir(withFileTypes)` で再帰探索し、ファイル名の case-insensitive 部分一致で `DirEntry[]` を返す。探索順はディレクトリ優先 + ロケール順で安定化、symlink は `fs.promises.stat` で実体解決し isDirectory を正しく判定。シンボリックリンクのディレクトリは再帰しない（ループ回避）。`{ entries, truncated }` を返し、上限到達は呼び出し側で警告表示できるようにした
+- **ipc-handlers.ts**: `fs:searchTree` IPC ハンドラ登録。`validatePath` でルートパスを検証してから `searchTree` を呼ぶ既存パターン踏襲。返却型は `{ ok: true, entries, truncated } | { ok: false, error }`
+- **preload/index.ts**: `window.api.fs.searchTree(rootPath, query)` を公開。型シグネチャを明示し renderer 側で型補完が効くようにした
+- **DirectoryTree.tsx (検索 UI)**: 検索クエリ非空のとき `SearchResultsPanel` をツリーの代わりに描画。`SearchState = idle/loading/ready/error` の discriminated union で状態管理。150ms `setTimeout` + `cancelled` フラグでデバウンス + race condition 対策（unmount や次回入力時に古い結果が state を上書きしない）。`SearchResultRow` は `{ name, relativeDir }` の 2 行表示、`isMarkdownPath` 判定で `.md` シングルクリック → `onRequestEditMarkdown`、右クリックで既存 `handleContextMenu` 経由のコンテキストメニュー（buildMenuItems で構築される 8 項目）を発火
+- **App.tsx (editable passthrough)**: `EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId>` を新設し、`kill-line-backward` / `kill-line-forward` / `move-line-start` / `move-line-end` / `kill-word-backward` / `kill-word-forward` / `move-word-left` / `move-word-right` / `undo` / `redo` を含めた。`handleKeyDown` のディスパッチループで `inEditable && EDITABLE_PASSTHROUGH_IDS.has(def.id)` のとき preventDefault せずに早期 return し、ブラウザ標準のテキスト編集動作（cmd+delete で行頭まで削除、cmd+←/→ で行頭/行末移動、cmd+z で undo 等）が input 要素に届くようにした。`isEditableTarget` は xterm の helper textarea を除外する既存実装をそのまま流用（端末側のショートカット動作は不変）
+- **新規テスト**: `main/__tests__/searchTree.test.ts`（9 件）— 一時ディレクトリで実ファイルツリーを構築してテスト。検証項目: ルート直下マッチ / サブディレクトリ再帰マッチ（`.claude/MEMORY.md`）/ 大文字小文字無視 / `node_modules` スキップ / 深い階層 / 空クエリ・whitespace-only クエリ / `maxResults` 超過時の `truncated=true` / `maxDepth` 制限 / `isDirectory`・`isSymlink` フラグ
+- **テスト合計**: 28 ファイル / 388 件グリーン（修正前 379 から +9 件）
+
 ### 2026-04-27 - Settings カラー編集の簡略化（セマンティック 6 色化）
 
 #### 概要

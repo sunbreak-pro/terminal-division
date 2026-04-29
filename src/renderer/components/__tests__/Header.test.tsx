@@ -2,25 +2,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import Header from "../Header";
 
-// terminalStoreモック
+// terminalStoreモック（Header は閉じるボタンを持たないため close 系は不要）
 const mockSplitTerminal = vi.fn();
-const mockCloseTerminal = vi.fn();
 const mockSetActiveTerminal = vi.fn();
 
 vi.mock("../../stores/terminalStore", () => ({
   useActiveTerminalId: vi.fn(() => "terminal-1"),
-  useTerminalCount: vi.fn(() => 1),
   useCanSplit: vi.fn(() => () => true),
   useTerminalActions: vi.fn(() => ({
     splitTerminal: mockSplitTerminal,
-    closeTerminal: mockCloseTerminal,
     setActiveTerminal: mockSetActiveTerminal,
   })),
 }));
 
-// themeStoreモック
-const mockSetTheme = vi.fn();
-
+// themeStoreモック（テーマセレクタは Settings に移動したのでここでは最低限）
 vi.mock("../../stores/themeStore", () => ({
   useCurrentTheme: () => ({
     id: "dark",
@@ -40,11 +35,6 @@ vi.mock("../../stores/themeStore", () => ({
     },
     xterm: {},
   }),
-  useAvailableThemes: () => [
-    { id: "dark", name: "Dark", colors: {}, xterm: {} },
-    { id: "light", name: "Light", colors: {}, xterm: {} },
-  ],
-  useSetTheme: () => mockSetTheme,
   useThemeConfig: () => ({
     spacing: {
       xs: "4px",
@@ -69,7 +59,6 @@ import * as terminalStore from "../../stores/terminalStore";
 describe("Header", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // window.api.dialogのモックをリセット
     vi.mocked(window.api.dialog.selectDirectory).mockResolvedValue(null);
   });
 
@@ -77,19 +66,26 @@ describe("Header", () => {
     vi.clearAllMocks();
   });
 
-  it("renders all buttons", () => {
+  it("renders the kept buttons (split / directory / settings)", () => {
     render(<Header />);
 
     expect(screen.getByTitle("縦に分割 (Cmd+D)")).toBeInTheDocument();
     expect(screen.getByTitle("横に分割 (Cmd+Shift+D)")).toBeInTheDocument();
-    expect(screen.getByTitle("閉じる (Cmd+W)")).toBeInTheDocument();
     expect(screen.getByTitle("ディレクトリを移動")).toBeInTheDocument();
-    // ショートカット一覧表示は Settings モーダル内のタブに統合された
     expect(screen.getByTitle("設定 (Cmd+,)")).toBeInTheDocument();
   });
 
+  it("does NOT render the close button (moved to per-pane SubHeader)", () => {
+    render(<Header />);
+    expect(screen.queryByTitle("閉じる (Cmd+W)")).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the theme selector (moved to Settings)", () => {
+    render(<Header />);
+    expect(screen.queryByTitle("テーマ選択")).not.toBeInTheDocument();
+  });
+
   it("split buttons disabled when canSplit=false", () => {
-    // canSplitがfalseを返すようにモック
     vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => false);
 
     render(<Header />);
@@ -99,28 +95,6 @@ describe("Header", () => {
 
     expect(verticalSplitButton).toBeDisabled();
     expect(horizontalSplitButton).toBeDisabled();
-  });
-
-  it("close button disabled when single terminal", () => {
-    // ターミナルが1つの場合
-    vi.mocked(terminalStore.useTerminalCount).mockReturnValue(1);
-    vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
-
-    render(<Header />);
-
-    const closeButton = screen.getByTitle("閉じる (Cmd+W)");
-    expect(closeButton).toBeDisabled();
-  });
-
-  it("close button enabled when multiple terminals", () => {
-    // ターミナルが2つ以上の場合
-    vi.mocked(terminalStore.useTerminalCount).mockReturnValue(2);
-    vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
-
-    render(<Header />);
-
-    const closeButton = screen.getByTitle("閉じる (Cmd+W)");
-    expect(closeButton).not.toBeDisabled();
   });
 
   it('calls splitTerminal("horizontal") on vertical split button click', () => {
@@ -145,34 +119,9 @@ describe("Header", () => {
     expect(mockSplitTerminal).toHaveBeenCalledWith("terminal-1", "vertical");
   });
 
-  it("calls closeTerminal on close button click", () => {
-    vi.mocked(terminalStore.useTerminalCount).mockReturnValue(2);
-    vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
-
-    render(<Header />);
-
-    const closeButton = screen.getByTitle("閉じる (Cmd+W)");
-    fireEvent.click(closeButton);
-
-    expect(mockCloseTerminal).toHaveBeenCalledWith("terminal-1");
-  });
-
-  it("theme selector changes theme", () => {
-    vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
-
-    render(<Header />);
-
-    const themeSelect = screen.getByTitle("テーマ選択");
-    fireEvent.change(themeSelect, { target: { value: "light" } });
-
-    expect(mockSetTheme).toHaveBeenCalledWith("light");
-  });
-
   it("opens settings modal store on settings button click", async () => {
     vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
 
-    // SettingsModal 自体は別ファイルでテストする方針。ここでは Header の
-    // 「設定ボタン → settingsModalStore.open()」配線のみを確認する。
     const { useSettingsModalStore } =
       await import("../../stores/settingsModalStore");
     useSettingsModalStore.setState({

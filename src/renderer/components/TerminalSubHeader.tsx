@@ -4,6 +4,7 @@ import {
   useTerminalMetaStore,
   type MdTab,
 } from "../stores/terminalMetaStore";
+import { useTerminalActions, useTerminalCount } from "../stores/terminalStore";
 import { useChatSessionStore } from "../stores/chatSessionStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { useTerminalSettings } from "../stores/settingsStore";
@@ -195,6 +196,68 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     const handleStartChat = useCallback((): void => {
       useTerminalMetaStore.getState().setViewMode(id, "chat");
     }, [id]);
+
+    // ペインを閉じる × ボタン。Header のグローバル閉じるボタンを廃止して
+    // ペインごとに配置する（操作対象が明確になり、誤操作も減る）。
+    // dirty な MD タブがある場合は警告フローに乗せず、本体ペイン閉鎖は
+    // App.tsx の close-pane ショートカット側で扱っている dirty チェックを
+    // ここでは省略して即時閉鎖する（タブ単位の警告は既存 × ボタンで担保）。
+    const { closeTerminal } = useTerminalActions();
+    const terminalCount = useTerminalCount();
+    const canClosePane = terminalCount > 1;
+    const handleClosePane = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>): void => {
+        e.stopPropagation();
+        if (!canClosePane) return;
+        // dirty な MD タブが当該ペインにあれば閉じる前に警告
+        const meta = useTerminalMetaStore.getState().metas.get(id);
+        const dirtyTab = meta?.mdTabs.find((t) => t.dirty);
+        if (dirtyTab) {
+          useMarkdownDialogStore.getState().showUnsaved({
+            filePath: dirtyTab.filePath,
+            paneId: id,
+            tabId: dirtyTab.id,
+            reason: "close-pane",
+            onSave: async () => {
+              const dialogStore = useMarkdownDialogStore.getState();
+              const editorApi = markdownEditorRegistry.getApi(dirtyTab.id);
+              const ok = editorApi ? await editorApi.save() : false;
+              if (!ok) {
+                showErrorToast("保存に失敗しました");
+                return;
+              }
+              dialogStore.dismiss();
+              closeTerminal(id);
+            },
+            onDiscard: () => {
+              useMarkdownDialogStore.getState().dismiss();
+              closeTerminal(id);
+            },
+          });
+          return;
+        }
+        closeTerminal(id);
+      },
+      [canClosePane, id, closeTerminal],
+    );
+
+    const handleCloseButtonEnter = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        if (canClosePane) {
+          e.currentTarget.style.backgroundColor = theme.colors.danger;
+          e.currentTarget.style.color = "#fff";
+        }
+      },
+      [canClosePane, theme.colors.danger],
+    );
+
+    const handleCloseButtonLeave = useCallback(
+      (e: React.MouseEvent<HTMLButtonElement>) => {
+        e.currentTarget.style.backgroundColor = "transparent";
+        e.currentTarget.style.color = theme.colors.textSecondary;
+      },
+      [theme.colors.textSecondary],
+    );
 
     // ===== MD タブピッカードロップダウン =====
     const plusButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -662,6 +725,40 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               </svg>
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleClosePane}
+            onMouseEnter={handleCloseButtonEnter}
+            onMouseLeave={handleCloseButtonLeave}
+            disabled={!canClosePane}
+            title={
+              canClosePane
+                ? "このペインを閉じる (Cmd+W)"
+                : "最後のペインは閉じられません"
+            }
+            aria-label="ペインを閉じる"
+            style={{
+              ...iconButtonStyle,
+              borderColor: canClosePane
+                ? theme.colors.danger
+                : theme.colors.border,
+              opacity: canClosePane ? 1 : 0.4,
+              cursor: canClosePane ? "pointer" : "not-allowed",
+            }}
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+            >
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
         </div>
         {clearMenuPos && (
           <ContextMenu

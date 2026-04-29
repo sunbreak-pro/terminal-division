@@ -27,6 +27,7 @@ const mockCloseTerminal = vi.fn();
 
 vi.mock("../../stores/terminalStore", () => ({
   useActiveTerminalId: vi.fn(() => "terminal-1"),
+  useTerminalCount: vi.fn(() => 2),
   useTerminalActions: vi.fn(() => ({
     setActiveTerminal: mockSetActiveTerminal,
     closeTerminal: mockCloseTerminal,
