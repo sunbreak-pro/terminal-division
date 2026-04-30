@@ -61,6 +61,14 @@ export interface EditorSettings {
   softWrap: boolean;
 }
 
+// ===== Chat カスタマイズ =====
+
+// Chat ペインの本文（メッセージバブル / 入力欄）に適用するフォントサイズ。
+// Cmd+= / Cmd+- / Cmd+0 がアクティブペインの viewMode=chat 時に本値を更新する。
+export interface ChatSettings {
+  fontSize: number;
+}
+
 // ===== 一般 =====
 
 export interface GeneralSettings {
@@ -68,6 +76,9 @@ export interface GeneralSettings {
   restoreSessionOnLaunch: boolean;
   // PTY が異常終了したときに macOS 通知を出すか
   ptyExitNotification: boolean;
+  // アプリ全体（ウィンドウ）の表示倍率。webFrame.setZoomFactor(value) で適用。
+  // ターミナル個別のフォントズーム (Cmd+= / Cmd+-) とは独立。
+  appZoomFactor: number;
 }
 
 export interface AppSettings {
@@ -77,6 +88,7 @@ export interface AppSettings {
   window: WindowSettings;
   terminal: TerminalSettings;
   editor: EditorSettings;
+  chat: ChatSettings;
   general: GeneralSettings;
 }
 
@@ -92,6 +104,13 @@ export const SCROLLBACK_MIN = 1000;
 export const SCROLLBACK_MAX = 100000;
 export const EDITOR_FONT_SIZE_MIN = 10;
 export const EDITOR_FONT_SIZE_MAX = 32;
+export const CHAT_FONT_SIZE_MIN = 10;
+export const CHAT_FONT_SIZE_MAX = 28;
+// アプリ全体ズームの安全範囲。Electron の webFrame は 0.25-5 を許容するが
+// UI が破綻しない実用域に限定する。
+export const APP_ZOOM_MIN = 0.5;
+export const APP_ZOOM_MAX = 2.0;
+export const APP_ZOOM_STEP = 0.1;
 
 // 既定値（freeze で書換ガード）
 export const DEFAULT_TERMINAL_FONT_FAMILY =
@@ -129,9 +148,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fontFamily: DEFAULT_EDITOR_FONT_FAMILY,
     softWrap: true,
   },
+  chat: {
+    fontSize: 13.5,
+  },
   general: {
     restoreSessionOnLaunch: true,
     ptyExitNotification: false,
+    appZoomFactor: 1.0,
   },
 };
 
@@ -143,6 +166,7 @@ export type PartialAppSettings = {
   window?: Partial<WindowSettings>;
   terminal?: Partial<TerminalSettings>;
   editor?: Partial<EditorSettings>;
+  chat?: Partial<ChatSettings>;
   general?: Partial<GeneralSettings>;
 };
 
@@ -303,6 +327,27 @@ function validateGeneralSettings(raw: unknown): GeneralSettings {
       typeof obj.ptyExitNotification === "boolean"
         ? obj.ptyExitNotification
         : DEFAULT_SETTINGS.general.ptyExitNotification,
+    appZoomFactor: clampNumber(
+      obj.appZoomFactor,
+      APP_ZOOM_MIN,
+      APP_ZOOM_MAX,
+      DEFAULT_SETTINGS.general.appZoomFactor,
+    ),
+  };
+}
+
+function validateChatSettings(raw: unknown): ChatSettings {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    fontSize: clampNumber(
+      obj.fontSize,
+      CHAT_FONT_SIZE_MIN,
+      CHAT_FONT_SIZE_MAX,
+      DEFAULT_SETTINGS.chat.fontSize,
+    ),
   };
 }
 
@@ -336,6 +381,7 @@ export function validateAppSettings(raw: unknown): AppSettings {
   const shortcuts = validateShortcutBindings(obj.shortcuts);
   const terminal = validateTerminalSettings(obj.terminal);
   const editor = validateEditorSettings(obj.editor);
+  const chat = validateChatSettings(obj.chat);
   const general = validateGeneralSettings(obj.general);
 
   return {
@@ -345,6 +391,7 @@ export function validateAppSettings(raw: unknown): AppSettings {
     window,
     terminal,
     editor,
+    chat,
     general,
   };
 }
@@ -361,6 +408,7 @@ export function mergeSettings(
     window: { ...base.window },
     terminal: { ...base.terminal },
     editor: { ...base.editor },
+    chat: { ...base.chat },
     general: { ...base.general },
   };
 
@@ -402,6 +450,13 @@ export function mergeSettings(
     });
   }
 
+  if (patch.chat) {
+    next.chat = validateChatSettings({
+      ...base.chat,
+      ...patch.chat,
+    });
+  }
+
   if (patch.general) {
     next.general = validateGeneralSettings({
       ...base.general,
@@ -423,6 +478,7 @@ function cloneDefaults(): AppSettings {
     window: { ...DEFAULT_SETTINGS.window },
     terminal: { ...DEFAULT_SETTINGS.terminal },
     editor: { ...DEFAULT_SETTINGS.editor },
+    chat: { ...DEFAULT_SETTINGS.chat },
     general: { ...DEFAULT_SETTINGS.general },
   };
 }

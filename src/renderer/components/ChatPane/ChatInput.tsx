@@ -1,17 +1,22 @@
 import React, {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { useCurrentTheme } from "../../stores/themeStore";
+import { useChatSettings } from "../../stores/settingsStore";
+import { SlashMenu, type SlashItem } from "./SlashMenu";
 
 interface ChatInputProps {
   onSubmit: (text: string) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled?: boolean;
+  // スラッシュ候補取得のための CWD。空文字なら project スキルは取得しない。
+  cwd: string;
 }
 
 const MAX_INPUT_BYTES = 64 * 1024; // 64KB 警告閾値（送信は許容）
@@ -19,27 +24,48 @@ const MIN_ROWS = 1;
 const MAX_ROWS = 3;
 
 /**
- * チャット入力欄。Phase 0 plan Q5:
- * - 1〜3 行までは textarea 高さ自動拡張
- * - 4 行以上は固定高さ + 内部スクロール
+ * チャット入力欄。
+ * - 1〜3 行までは textarea 高さ自動拡張、4 行以上は固定高さ + 内部スクロール
  * - Enter 送信 / Shift+Enter 改行 / Cmd+Enter 送信
  * - IME 確定中の Enter は誤送信防止
  * - streaming 中は送信ボタンを「停止」に切り替える
+ * - `/` 入力で SlashMenu を表示。Tab/Enter で挿入、↑↓ で選択、Esc で閉じる
  */
 const ChatInput: React.FC<ChatInputProps> = React.memo(
-  ({ onSubmit, onStop, isStreaming, disabled }) => {
+  ({ onSubmit, onStop, isStreaming, disabled, cwd }) => {
     const currentTheme = useCurrentTheme();
     const colors = currentTheme.colors;
+    const chatSettings = useChatSettings();
     const [value, setValue] = useState("");
     const [isComposing, setIsComposing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+    // スラッシュ候補
+    const [allItems, setAllItems] = useState<SlashItem[]>([]);
+    const [slashOpen, setSlashOpen] = useState(false);
+    const [slashIndex, setSlashIndex] = useState(0);
+
+    // CWD 変化時に候補をプリフェッチ。失敗は黙って無視（候補が空になるだけ）。
+    useEffect(() => {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const items = await window.api.chat.listSlashItems(cwd);
+          if (!cancelled) setAllItems(items);
+        } catch {
+          if (!cancelled) setAllItems([]);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [cwd]);
+
     // textarea 高さを 1〜MAX_ROWS 行で auto-resize する。
-    // 4 行以上は max-height で打ち切り、overflow-y: auto で内部スクロールに切替。
+    // fontSize 変更時にも line-height 換算が変わるので依存に含める。
     useLayoutEffect(() => {
       const ta = textareaRef.current;
       if (!ta) return;
-      // 一旦リセットして scrollHeight を計測
       ta.style.height = "auto";
       const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20;
       const padding =
@@ -49,9 +75,47 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
       const minHeight = lineHeight * MIN_ROWS + padding;
       const desired = Math.min(Math.max(ta.scrollHeight, minHeight), maxHeight);
       ta.style.height = `${desired}px`;
-      // 4 行以上のときだけ縦スクロール
       ta.style.overflowY = ta.scrollHeight > maxHeight ? "auto" : "hidden";
-    }, [value]);
+    }, [value, chatSettings.fontSize]);
+
+    // value 末尾の `/<query>` を抽出。`/` の前は行頭または空白でなければならない（URL 等を巻き込まないため）。
+    const slashQuery = useMemo(() => extractSlashQuery(value), [value]);
+
+    // クエリ変化時にメニューの開閉とインデックスを調整
+    useEffect(() => {
+      if (slashQuery === null) {
+        setSlashOpen(false);
+        return;
+      }
+      setSlashOpen(true);
+      setSlashIndex(0);
+    }, [slashQuery]);
+
+    const filteredItems = useMemo<SlashItem[]>(() => {
+      if (slashQuery === null) return [];
+      const q = slashQuery.toLowerCase();
+      if (q.length === 0) return allItems;
+      return allItems.filter((it) => it.label.toLowerCase().includes(q));
+    }, [allItems, slashQuery]);
+
+    const insertSlashItem = useCallback(
+      (item: SlashItem) => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        const replaced = replaceSlashAtEnd(value, item.insert);
+        setValue(replaced);
+        setSlashOpen(false);
+        // textarea のキャレットを末尾に
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            textareaRef.current.selectionStart =
+              textareaRef.current.selectionEnd = replaced.length;
+            textareaRef.current.focus();
+          }
+        });
+      },
+      [value],
+    );
 
     const handleSubmit = useCallback((): void => {
       const trimmed = value.trim();
@@ -59,12 +123,48 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
       if (isStreaming) return;
       onSubmit(trimmed);
       setValue("");
+      setSlashOpen(false);
     }, [value, isStreaming, onSubmit]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-        // IME 中は Enter / Cmd+Enter を一切処理しない（IME 確定の Enter を保護）
+        // IME 中は一切処理しない
         if (isComposing || e.nativeEvent.isComposing) return;
+
+        // SlashMenu が開いているとき: 上下選択、Tab/Enter で挿入、Esc で閉じる
+        if (slashOpen && filteredItems.length > 0) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setSlashIndex((i) => (i + 1) % filteredItems.length);
+            return;
+          }
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setSlashIndex(
+              (i) => (i - 1 + filteredItems.length) % filteredItems.length,
+            );
+            return;
+          }
+          if (e.key === "Tab") {
+            e.preventDefault();
+            const sel = filteredItems[slashIndex];
+            if (sel) insertSlashItem(sel);
+            return;
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setSlashOpen(false);
+            return;
+          }
+          if (e.key === "Enter" && !e.shiftKey) {
+            // メニュー開いている状態の素 Enter は挿入扱い（送信より優先）
+            e.preventDefault();
+            const sel = filteredItems[slashIndex];
+            if (sel) insertSlashItem(sel);
+            return;
+          }
+        }
+
         if (e.key === "Enter") {
           if (e.metaKey || e.ctrlKey) {
             e.preventDefault();
@@ -72,14 +172,20 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
             return;
           }
           if (e.shiftKey) {
-            // 改行: textarea のデフォルト動作に任せる
             return;
           }
           e.preventDefault();
           handleSubmit();
         }
       },
-      [handleSubmit, isComposing],
+      [
+        handleSubmit,
+        isComposing,
+        slashOpen,
+        filteredItems,
+        slashIndex,
+        insertSlashItem,
+      ],
     );
 
     const oversize = useMemo(
@@ -99,8 +205,18 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
           display: "flex",
           flexDirection: "column",
           gap: 6,
+          position: "relative",
         }}
       >
+        {slashOpen && (
+          <SlashMenu
+            items={filteredItems}
+            query={slashQuery ?? ""}
+            selectedIndex={slashIndex}
+            onSelect={insertSlashItem}
+            onHoverIndex={setSlashIndex}
+          />
+        )}
         <div
           style={{
             display: "flex",
@@ -119,7 +235,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
             onKeyDown={handleKeyDown}
             onCompositionStart={() => setIsComposing(true)}
             onCompositionEnd={() => setIsComposing(false)}
-            placeholder="メッセージを入力（Enter 送信 / Shift+Enter で改行）"
+            placeholder="メッセージを入力（Enter 送信 / Shift+Enter で改行 / `/` で候補）"
             disabled={disabled}
             rows={1}
             style={{
@@ -130,7 +246,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
               outline: "none",
               background: "transparent",
               color: colors.text,
-              fontSize: 13.5,
+              fontSize: chatSettings.fontSize,
               lineHeight: 1.5,
               fontFamily:
                 '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif',
@@ -199,5 +315,25 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
 );
 
 ChatInput.displayName = "ChatInput";
+
+// 入力末尾の `/<query>` を抽出する。`/` の前は文字列先頭か空白でなければ null（URL 内 `/` を巻き込まない）。
+// 改行を含むクエリは無効。
+export function extractSlashQuery(value: string): string | null {
+  // 末尾から `/` を探す
+  const lastSlash = value.lastIndexOf("/");
+  if (lastSlash === -1) return null;
+  const before = lastSlash === 0 ? "" : value[lastSlash - 1];
+  if (before !== "" && !/\s/.test(before)) return null;
+  const query = value.slice(lastSlash + 1);
+  if (/[\s]/.test(query)) return null;
+  return query;
+}
+
+// 入力末尾の `/<query>` を `insert` に置き換える。前後の空白は維持。
+export function replaceSlashAtEnd(value: string, insert: string): string {
+  const lastSlash = value.lastIndexOf("/");
+  if (lastSlash === -1) return value + insert;
+  return value.slice(0, lastSlash) + insert + " ";
+}
 
 export { ChatInput };

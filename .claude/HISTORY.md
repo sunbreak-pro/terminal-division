@@ -1,5 +1,43 @@
 # HISTORY.md - 変更履歴
 
+### 2026-04-30 - アプリ全体ズーム機能追加 + per-pane フォントズームを MD/Chat に拡張
+
+#### 概要
+
+ユーザー要望「Cmd+= / Cmd+- が現状ターミナルに絞られているが、本来はアプリ画面全体の拡大縮小を意図したかった。今のターミナル個別ズームは残したまま、別途アプリ全体ズーム機能を追加してほしい。さらにターミナルの拡大縮小は markdown / chat にも対応させてほしい」を実装。アプリ全体ズームは `general.appZoomFactor`（既定 1.0、範囲 0.5〜2.0、step 0.1）を新設し、preload で `webFrame.setZoomFactor` を直接ブリッジ（contextIsolation 下でも preload は webFrame を呼べるため IPC 不要）。Renderer の App.tsx で `useSettingsStore` を購読し設定変更ごとに即時適用（idempotent setter なのでクリーンアップ不要）。Settings の「一般」タブに − / 倍率表示 / + / リセット + 範囲スライダーを追加。per-pane ズーム（Cmd+= / Cmd+- / Cmd+0）はアクティブペインの `viewMode` に応じてターゲットを切替: `cli` → `terminal.fontSize`（既存挙動維持）/ `md` → `editor.fontSize`（MarkdownEditor は元から `editorSettings.fontSize` を参照していたため自動連動）/ `chat` → 新規 `chat.fontSize`（既定 13.5、範囲 10〜28、ChatInput と MessageBubble の本文に反映）。`adjustGlobalFontSize` / `resetGlobalFontSize` を viewMode 分岐に書き直し、各々のクランプ範囲・既定値で動かす。`shared/settings.ts` に `ChatSettings` 型 / `validateChatSettings` / `mergeSettings` の chat 対応 / `APP_ZOOM_MIN/MAX/STEP` / `CHAT_FONT_SIZE_MIN/MAX` 定数を追加し、`general.appZoomFactor` も `clampNumber` で範囲検証。ChatInput の textarea 自動高さ計算に `chatSettings.fontSize` を依存追加してフォントサイズ変更時に即追従。設定 UI のリセット / 増減ボタンは APP_ZOOM_MIN/MAX 端点で disabled。テスト合計 37 ファイル / 514 件グリーン（chat / appZoomFactor の clamp / fallback / 破損ブロック復元の 4 ケース追加）。CLAUDE.md §8 T2-10 を新仕様（viewMode 分岐 + アプリ全体ズーム）に更新。
+
+#### 変更点
+
+- **shared/settings.ts**: `ChatSettings { fontSize: number }` を新規追加、`AppSettings` と `PartialAppSettings` に `chat` を組み込み。`general.appZoomFactor: number` を `GeneralSettings` に追加し、`validateGeneralSettings` で `clampNumber(value, APP_ZOOM_MIN, APP_ZOOM_MAX, default)` の検証を実装。`validateChatSettings` を新設し `clampNumber(value, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, default)` で fontSize 検証。定数 `APP_ZOOM_MIN=0.5` / `APP_ZOOM_MAX=2.0` / `APP_ZOOM_STEP=0.1` / `CHAT_FONT_SIZE_MIN=10` / `CHAT_FONT_SIZE_MAX=28` を export。`DEFAULT_SETTINGS.chat.fontSize=13.5` / `DEFAULT_SETTINGS.general.appZoomFactor=1.0`。`mergeSettings` / `cloneDefaults` / `validateAppSettings` の各所に `chat` の field-level マージを追加
+- **renderer/stores/settingsStore.ts**: `applyOptimistic` に `patch.chat` の浅マージを追加。新規セレクタ `useChatSettings` を export
+- **preload/index.ts**: `electron` から `webFrame` を import し、`window.api.window.setZoomFactor(value: number)` を新規公開。finite check + try/catch でガード（範囲外でも黙って無視）。webFrame は preload context で直接呼べるため Main 側の IPC ハンドラ不要
+- **renderer/App.tsx**:
+  - `resolveActiveViewMode()` ヘルパを新設（`useTerminalStore.getState().activeTerminalId` → `useTerminalMetaStore.getState().metas.get(id)?.viewMode` を返す、null フォールバック）
+  - `adjustGlobalFontSize(delta)` を viewMode 分岐に書き直し: `md` → `editor.fontSize` をクランプ更新 / `chat` → `chat.fontSize` をクランプ更新 / `cli` or null → `terminal.fontSize`（既存挙動）。各々 no-op early return + クランプ範囲は対応定数を使用
+  - `resetGlobalFontSize()` も同様の分岐: `md` → `DEFAULT_SETTINGS.editor.fontSize` / `chat` → `DEFAULT_SETTINGS.chat.fontSize` / `cli` or null → `terminal.fontSize=14` + `clearAllFontSizeOverrides()`
+  - `useTerminalStore` を import に追加（既存の selector hook と並行して getState 用）
+  - 新規 `useEffect`: `useSettingsStore((s) => s.settings.general.appZoomFactor)` を購読し変化時に `window.api.window.setZoomFactor(appZoomFactor)` を呼ぶ。起動直後 1.0 で 1 度走り、`load()` 完了後の永続化値で再走する
+- **renderer/components/settings/GeneralSettings.tsx**: 「アプリ全体の表示倍率」セクションを追加。`setAppZoom(next)` で小数 2 桁丸め + クランプ + `update({ general: { appZoomFactor } })` を発火。− / 倍率%表示 / + / リセットボタン + range スライダー (`APP_ZOOM_MIN`〜`APP_ZOOM_MAX`、step `APP_ZOOM_STEP`)。端点で disabled、リセットボタンは既定値との差が < 1e-6 のとき disabled。説明文に「ターミナル個別フォントズーム (⌘+ / ⌘− / ⌘0) と独立で併用可能」を明記
+- **renderer/components/ChatPane/ChatInput.tsx**: `useChatSettings` を import、textarea の `fontSize: 13.5` ハードコードを `chatSettings.fontSize` に置換。textarea 高さ自動計算 `useLayoutEffect` の依存配列に `chatSettings.fontSize` を追加（フォントサイズ変更時に line-height 換算が変わるため即時 re-fit が必要）
+- **renderer/components/ChatPane/MessageBubble.tsx**: `useChatSettings` を import、`bubbleStyle` 内の `fontSize: 13.5` を `chatSettings.fontSize` に置換し useMemo deps に追加
+- **`.claude/CLAUDE.md` §8 T2-10**: 「カスタマイズ拡張」の説明を新仕様に更新。`AppSettings` の構成を `terminal / editor / chat / general` に拡張、`appZoomFactor` を一般設定に追加、フォントズームを「viewMode に応じて cli → terminal.fontSize / md → editor.fontSize / chat → chat.fontSize に分岐するグローバル設定直接更新」と再記述、アプリ全体ズームを「preload 経由 webFrame.setZoomFactor で適用、50%〜200%、ターミナル個別ズームと独立併用可」と追記
+- **新規テスト 4 件 (`shared/__tests__/settings.test.ts`)**:
+  - `merges chat patch and clamps fontSize`: 下限 1 → 10 / 上限 999 → 28 / 範囲内 16 → 16 を確認
+  - `merges general.appZoomFactor and clamps to APP_ZOOM bounds`: 下限 0.1 → 0.5 / 上限 5 → 2.0 / 範囲内 1.25 → 1.25 を確認
+  - `falls back appZoomFactor to default for non-numeric values`: `"big"` → DEFAULT
+  - `validateAppSettings restores chat defaults for malformed chat block`: `"garbage"` → `DEFAULT_SETTINGS.chat`
+- **既存テスト更新**: `mergeSettings` の `base` AppSettings に `chat: { ...DEFAULT_SETTINGS.chat }` を追加（必須フィールド追加に伴う TS エラー解消）
+- **テスト合計**: 37 ファイル / 514 件グリーン（修正前 510 から +4 件）+ `npm run build` 通過
+- **設計判断**:
+  - **アプリ全体ズームを `webFrame.setZoomFactor` 経由にした理由**: CSS `zoom` / `transform: scale` ではターミナルの ResizeObserver / xterm.fit と整合せず cols/rows が乖離しやすい。`webFrame.setZoomFactor` は Chromium がレンダリング全体に均一スケールを適用するため CSS 計算値（getComputedStyle 等）を含めて綺麗に拡縮される。Electron の標準 zoom 機構なのでメインプロセスを介さずに preload から直接呼べるのも利点
+  - **preload で webFrame を直接呼ぶ vs Main 経由 IPC**: contextIsolation 下でも preload は Electron API にフルアクセスできるため、ズーム適用のような副作用なし・即時 setter は preload で完結させた方がレイテンシゼロで簡潔。ウィンドウ間の同期も不要（各ウィンドウが独立して同じ settings を購読する設計のため、自然に揃う）
+  - **viewMode 分岐 vs ペイン別 fontSize**: 「Chat ペインだけ大きく / MD ペインだけ小さく」というユースケースは現状想定されないため、各タイプ共通のグローバル設定を更新する形にした。既存ターミナルの挙動と一貫し、Settings UI のスライダーと常に同期する利点も継承
+  - **chat fontSize は本文（バブル + 入力欄）のみに適用、ステータスバー等は据え置き**: チャット UI 内には fontSize ハードコードが多数（ステータスバー / Welcome / Trust Panel / SlashMenu 等）あるが、これらは補助 UI で本文ではない。Cmd+= で本文のみ拡縮するのがユーザー期待（メッセージを読みやすくしたい）に合致し、補助 UI まで拡縮するとレイアウト崩れリスクが上がる
+  - **ChatInput の textarea 高さ依存に fontSize を追加**: useLayoutEffect が `[value]` のみ依存だと、フォントサイズだけ変わって `value` が同じケース（拡大直後など）に高さ再計算が走らず、line-height ベース計算と実際の表示にズレが出る。依存追加で初回拡縮直後から正しい高さに収束
+  - **アプリ全体ズームの範囲を 0.5〜2.0 に絞った理由**: Electron の webFrame は 0.25〜5.0 を許容するが、0.25 ではトラフィックライト等の OS UI と崩れ、3.0 以上ではターミナルの cols が 10 を切って実用にならない。実用域として 50%〜200% に限定
+  - **既存ターミナル挙動の互換性維持**: `viewMode === "cli"` または `null`（ペイン未確定）時は元の `terminal.fontSize` 更新ロジックを完全保持。`Cmd+0` の reset 値も既存の 14 を踏襲（`DEFAULT_SETTINGS.terminal.fontSize=13` との差は旧仕様からの引き継ぎで、エディタ/チャットだけ DEFAULT_SETTINGS から値を取る）
+  - **General settings タブで完結 vs ショートカット追加**: ユーザー要望「Settings の場所は一般タブで OK」に従い、ショートカットは追加せずスライダー + ボタンのみ。後日要望があればショートカット ID `app-zoom-in/out/reset` を追加できるよう registry を拡張可能な状態に保つ
+
 ### 2026-04-29 - フォントズームのキーバインド修正（globalShortcut + Settings 連動）+ Header 整理 + per-pane close button
 
 #### 概要

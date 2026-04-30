@@ -139,6 +139,7 @@ describe("mergeSettings", () => {
     window: { opacity: 1.0, vibrancyEnabled: false },
     terminal: { ...DEFAULT_SETTINGS.terminal },
     editor: { ...DEFAULT_SETTINGS.editor },
+    chat: { ...DEFAULT_SETTINGS.chat },
     general: { ...DEFAULT_SETTINGS.general },
   };
 
@@ -253,5 +254,43 @@ describe("mergeSettings", () => {
     });
     expect(result.theme.customThemes).toHaveLength(1);
     expect(result.theme.customThemes[0].id).toBe("good");
+  });
+
+  it("merges chat patch and clamps fontSize", () => {
+    const lo = mergeSettings(base, { chat: { fontSize: 1 } });
+    const hi = mergeSettings(base, { chat: { fontSize: 999 } });
+    expect(lo.chat.fontSize).toBe(10); // CHAT_FONT_SIZE_MIN
+    expect(hi.chat.fontSize).toBe(28); // CHAT_FONT_SIZE_MAX
+    const inRange = mergeSettings(base, { chat: { fontSize: 16 } });
+    expect(inRange.chat.fontSize).toBe(16);
+  });
+
+  it("merges general.appZoomFactor and clamps to APP_ZOOM bounds", () => {
+    const lo = mergeSettings(base, { general: { appZoomFactor: 0.1 } });
+    const hi = mergeSettings(base, { general: { appZoomFactor: 5 } });
+    expect(lo.general.appZoomFactor).toBe(0.5); // APP_ZOOM_MIN
+    expect(hi.general.appZoomFactor).toBe(2.0); // APP_ZOOM_MAX
+    const inRange = mergeSettings(base, {
+      general: { appZoomFactor: 1.25 },
+    });
+    expect(inRange.general.appZoomFactor).toBe(1.25);
+  });
+
+  it("falls back appZoomFactor to default for non-numeric values", () => {
+    const r = validateAppSettings({
+      version: SETTINGS_VERSION,
+      general: { appZoomFactor: "big" },
+    });
+    expect(r.general.appZoomFactor).toBe(
+      DEFAULT_SETTINGS.general.appZoomFactor,
+    );
+  });
+
+  it("validateAppSettings restores chat defaults for malformed chat block", () => {
+    const result = validateAppSettings({
+      version: SETTINGS_VERSION,
+      chat: "garbage",
+    });
+    expect(result.chat).toEqual(DEFAULT_SETTINGS.chat);
   });
 });

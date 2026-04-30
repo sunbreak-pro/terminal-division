@@ -15,6 +15,7 @@ import {
   useNodes,
   useRootId,
   useTerminalActions,
+  useTerminalStore,
 } from "./stores/terminalStore";
 import {
   useCurrentTheme,
@@ -44,15 +45,60 @@ import {
   resolveShortcutKey,
   type ShortcutId,
 } from "./shortcuts/registry";
-import { FONT_SIZE_MIN, FONT_SIZE_MAX, clampNumber } from "../shared/settings";
+import {
+  FONT_SIZE_MIN,
+  FONT_SIZE_MAX,
+  EDITOR_FONT_SIZE_MIN,
+  EDITOR_FONT_SIZE_MAX,
+  CHAT_FONT_SIZE_MIN,
+  CHAT_FONT_SIZE_MAX,
+  DEFAULT_SETTINGS,
+  clampNumber,
+} from "../shared/settings";
 
-// グローバル Settings.terminal.fontSize を delta だけ動かす（Cmd+= / Cmd+-）。
+// アクティブペインの viewMode を返す。null = アクティブ無し or meta 不在。
+// CLI / md / chat の判定で Cmd+= / Cmd+- / Cmd+0 のターゲットを切り替える。
+function resolveActiveViewMode(): "cli" | "md" | "chat" | null {
+  const activeId = useTerminalStore.getState().activeTerminalId;
+  if (!activeId) return null;
+  const meta = useTerminalMetaStore.getState().metas.get(activeId);
+  return meta?.viewMode ?? null;
+}
+
+// Cmd+= / Cmd+- 共通: アクティブペインの viewMode に応じて
+// terminal / editor / chat いずれかの fontSize を delta だけ動かす。
 // per-pane override ではなく Settings 自体を直接更新するので、Settings UI の
-// スライダー値とターミナル表示が常に同期する。settingsStore.update が
+// スライダー値と表示が常に同期する。settingsStore.update が
 // clearAllFontSizeOverrides も呼ぶので、過去の override は自動的に解除される。
 function adjustGlobalFontSize(delta: number): void {
-  const settings = useSettingsStore.getState().settings.terminal;
-  const current = settings.fontSize;
+  const mode = resolveActiveViewMode();
+  const settings = useSettingsStore.getState().settings;
+  if (mode === "md") {
+    const current = settings.editor.fontSize;
+    const next = clampNumber(
+      current + delta,
+      EDITOR_FONT_SIZE_MIN,
+      EDITOR_FONT_SIZE_MAX,
+      current,
+    );
+    if (next === current) return;
+    useSettingsStore.getState().update({ editor: { fontSize: next } });
+    return;
+  }
+  if (mode === "chat") {
+    const current = settings.chat.fontSize;
+    const next = clampNumber(
+      current + delta,
+      CHAT_FONT_SIZE_MIN,
+      CHAT_FONT_SIZE_MAX,
+      current,
+    );
+    if (next === current) return;
+    useSettingsStore.getState().update({ chat: { fontSize: next } });
+    return;
+  }
+  // cli or null（アクティブ無し）はターミナル設定を更新する（既存挙動）
+  const current = settings.terminal.fontSize;
   const next = clampNumber(
     current + delta,
     FONT_SIZE_MIN,
@@ -63,9 +109,23 @@ function adjustGlobalFontSize(delta: number): void {
   useSettingsStore.getState().update({ terminal: { fontSize: next } });
 }
 
-// Cmd+0: ファクトリーデフォルト (14) に戻す。
-// シェアード Settings にも書き込み、override も消えるため Settings と完全同期。
+// Cmd+0: viewMode に応じてファクトリーデフォルトに戻す。
+// 既存の terminal は 14（旧仕様の reset 値）を維持。editor / chat は
+// DEFAULT_SETTINGS の値を使う。
 function resetGlobalFontSize(): void {
+  const mode = resolveActiveViewMode();
+  if (mode === "md") {
+    useSettingsStore.getState().update({
+      editor: { fontSize: DEFAULT_SETTINGS.editor.fontSize },
+    });
+    return;
+  }
+  if (mode === "chat") {
+    useSettingsStore.getState().update({
+      chat: { fontSize: DEFAULT_SETTINGS.chat.fontSize },
+    });
+    return;
+  }
   useSettingsStore.getState().update({ terminal: { fontSize: 14 } });
   // 念のため override もクリア（settingsStore 側でクリアされるが、
   // 14 が現在値と同じだった場合 fontSize 変更判定に引っかからないため）
@@ -564,6 +624,17 @@ const App: React.FC = () => {
   useEffect(() => {
     return startSessionPersist();
   }, []);
+
+  // アプリ全体ズームを WebFrame に反映する。settings.general.appZoomFactor が
+  // 変わるたびに preload 経由で webFrame.setZoomFactor を呼ぶ。
+  // 起動直後は load() が完了する前 (DEFAULT 1.0) に走るが、その後 load 完了で
+  // 永続化値で再呼出しされて正しい倍率に揃う。
+  const appZoomFactor = useSettingsStore(
+    (s) => s.settings.general.appZoomFactor,
+  );
+  useEffect(() => {
+    window.api.window.setZoomFactor(appZoomFactor);
+  }, [appZoomFactor]);
 
   // 起動時に settings をロードし、永続化された currentThemeId を themeStore に反映する。
   // 各ウィンドウは起動時の 1 回だけ反映し、以降は独立してテーマを切り替え可能にする。

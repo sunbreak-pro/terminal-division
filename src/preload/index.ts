@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer, webUtils, webFrame } from "electron";
 
 // セッション永続化 IPC 用の DTO 型は shared モジュールに集約
 import type { SerializedLayout } from "../shared/session-state-validator";
@@ -57,6 +57,17 @@ const api = {
     // 不透明度を即時反映（再起動不要）
     setOpacity: (value: number): void =>
       ipcRenderer.send("window:setOpacity", value),
+    // アプリ全体（このウィンドウの WebFrame）のズーム倍率を即時反映。
+    // settings.general.appZoomFactor の更新フックから呼ばれる。
+    // contextIsolation が有効でも webFrame は preload から呼べるため IPC 経由ではなく直接呼ぶ。
+    setZoomFactor: (value: number): void => {
+      if (typeof value !== "number" || !Number.isFinite(value)) return;
+      try {
+        webFrame.setZoomFactor(value);
+      } catch {
+        // 範囲外などは黙って無視（renderer 側で clamp 済みのため通常は起きない）
+      }
+    },
   },
   app: {
     // vibrancy 切替後の再起動。renderer 側で確認モーダルを出してから呼ぶ。
@@ -230,6 +241,24 @@ const api = {
     onClaudeDetected: createIpcListener<{ paneId: string }>(
       "chat:claudeDetected",
     ),
+    // Chat 起動前の信頼確認用。$HOME か未信頼 CWD なら Renderer 側でモーダルを出す。
+    checkTrust: (
+      cwd: string,
+    ): Promise<{ cwd: string; isHome: boolean; trusted: boolean }> =>
+      ipcRenderer.invoke("chat:checkTrust", cwd),
+    trust: (cwd: string): void => ipcRenderer.send("chat:trust", cwd),
+    // / 入力時のスラッシュ候補（builtin command + skills）
+    listSlashItems: (
+      cwd: string,
+    ): Promise<
+      Array<{
+        insert: string;
+        label: string;
+        description: string;
+        scope: "global" | "project" | "builtin";
+        kind: "command" | "skill";
+      }>
+    > => ipcRenderer.invoke("chat:listSlashItems", cwd),
   },
   // 表示メニューからのフォントズーム IPC。
   // Chromium が Cmd+= / Cmd+- / Cmd+0 をブラウザ層で消費するため、
