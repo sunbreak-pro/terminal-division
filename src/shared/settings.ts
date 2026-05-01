@@ -61,14 +61,6 @@ export interface EditorSettings {
   softWrap: boolean;
 }
 
-// ===== Chat カスタマイズ =====
-
-// Chat ペインの本文（メッセージバブル / 入力欄）に適用するフォントサイズ。
-// Cmd+= / Cmd+- / Cmd+0 がアクティブペインの viewMode=chat 時に本値を更新する。
-export interface ChatSettings {
-  fontSize: number;
-}
-
 // ===== 一般 =====
 
 export interface GeneralSettings {
@@ -88,7 +80,6 @@ export interface AppSettings {
   window: WindowSettings;
   terminal: TerminalSettings;
   editor: EditorSettings;
-  chat: ChatSettings;
   general: GeneralSettings;
 }
 
@@ -104,8 +95,6 @@ export const SCROLLBACK_MIN = 1000;
 export const SCROLLBACK_MAX = 100000;
 export const EDITOR_FONT_SIZE_MIN = 10;
 export const EDITOR_FONT_SIZE_MAX = 32;
-export const CHAT_FONT_SIZE_MIN = 10;
-export const CHAT_FONT_SIZE_MAX = 28;
 // アプリ全体ズームの安全範囲。Electron の webFrame は 0.25-5 を許容するが
 // UI が破綻しない実用域に限定する。
 export const APP_ZOOM_MIN = 0.5;
@@ -148,9 +137,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fontFamily: DEFAULT_EDITOR_FONT_FAMILY,
     softWrap: true,
   },
-  chat: {
-    fontSize: 13.5,
-  },
   general: {
     restoreSessionOnLaunch: true,
     ptyExitNotification: false,
@@ -166,7 +152,6 @@ export type PartialAppSettings = {
   window?: Partial<WindowSettings>;
   terminal?: Partial<TerminalSettings>;
   editor?: Partial<EditorSettings>;
-  chat?: Partial<ChatSettings>;
   general?: Partial<GeneralSettings>;
 };
 
@@ -336,21 +321,6 @@ function validateGeneralSettings(raw: unknown): GeneralSettings {
   };
 }
 
-function validateChatSettings(raw: unknown): ChatSettings {
-  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<
-    string,
-    unknown
-  >;
-  return {
-    fontSize: clampNumber(
-      obj.fontSize,
-      CHAT_FONT_SIZE_MIN,
-      CHAT_FONT_SIZE_MAX,
-      DEFAULT_SETTINGS.chat.fontSize,
-    ),
-  };
-}
-
 // 設定全体を検証して、違反フィールドはデフォルトに置換した正規化済み設定を返す。
 // セッション永続化（全否定）と異なり、設定はフィールド単位でフォールバックする。
 // ユーザーの大半の設定を救えた方がストレスが少ないため。
@@ -381,7 +351,6 @@ export function validateAppSettings(raw: unknown): AppSettings {
   const shortcuts = validateShortcutBindings(obj.shortcuts);
   const terminal = validateTerminalSettings(obj.terminal);
   const editor = validateEditorSettings(obj.editor);
-  const chat = validateChatSettings(obj.chat);
   const general = validateGeneralSettings(obj.general);
 
   return {
@@ -391,7 +360,6 @@ export function validateAppSettings(raw: unknown): AppSettings {
     window,
     terminal,
     editor,
-    chat,
     general,
   };
 }
@@ -408,7 +376,6 @@ export function mergeSettings(
     window: { ...base.window },
     terminal: { ...base.terminal },
     editor: { ...base.editor },
-    chat: { ...base.chat },
     general: { ...base.general },
   };
 
@@ -450,13 +417,6 @@ export function mergeSettings(
     });
   }
 
-  if (patch.chat) {
-    next.chat = validateChatSettings({
-      ...base.chat,
-      ...patch.chat,
-    });
-  }
-
   if (patch.general) {
     next.general = validateGeneralSettings({
       ...base.general,
@@ -478,7 +438,6 @@ function cloneDefaults(): AppSettings {
     window: { ...DEFAULT_SETTINGS.window },
     terminal: { ...DEFAULT_SETTINGS.terminal },
     editor: { ...DEFAULT_SETTINGS.editor },
-    chat: { ...DEFAULT_SETTINGS.chat },
     general: { ...DEFAULT_SETTINGS.general },
   };
 }
