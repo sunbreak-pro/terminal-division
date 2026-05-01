@@ -1,5 +1,22 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-02 - Chat UI 完全廃止（T3-5 撤回）
+
+#### 概要
+
+T3-5 として実装した Claude Code Chat UI を機能ごと撤回。Claude サブスクリプション認証を内蔵したまま第三者にビルドが渡るリスク（規約上グレー〜アウト）を避けるため、コードを残さず完全削除した。`viewMode: "cli" | "md" | "chat"` を `"cli" | "md"` に縮約、`AppSettings.chat` を schema から除去、`chat:*` IPC 10 チャネル全廃。削除直前のコードは `pre-chat-removal` タグで保全しているため、復活時は git history から個別 cherry-pick 可能。テスト 479 件・electron-vite build 全グリーン。（計画書: archive/2026-04-30-remove-chat-ui.md）
+
+#### 変更点
+
+- **削除（17 ファイル）**: `src/renderer/components/ChatPane/` 配下 8 ファイル（ChatPaneView / MessageList / MessageBubble / ChatInput / ChatStatusBar / ChatWelcome / ChatTrustPanel / SlashMenu）、`src/renderer/stores/chatSessionStore.ts` + テスト、`src/renderer/services/chatBridge.ts`、`src/renderer/types/chat.ts`、`src/main/chat-session-manager.ts`、`src/main/claude-process-detector.ts` + テスト、`src/main/slash-items.ts` + テスト、`src/main/trusted-dirs.ts` + テスト、`src/shared/chat-events.ts`
+- **部分修正（17 ファイル）**: `src/main/ipc-handlers.ts`（chat:_ ハンドラ 8 種 + import 3 行 + before-quit の killAll 削除）、`src/main/window-manager.ts`（chatSessionManager / claudeProcessDetector の register/unregister 削除）、`src/main/pty-manager.ts`（claudeProcessDetector.feedChunk / reset 3 箇所削除）、`src/preload/index.ts`（`window.api.chat` ブリッジ全削除 + ChatEventEnvelope import 削除）、`src/renderer/main.tsx`（initChatBridge 削除）、`src/renderer/App.tsx`（CHAT*FONT_SIZE*_ import 削除、resolveActiveViewMode の戻り型を `"cli" \| "md" \| null` に縮約、adjustGlobalFontSize / resetGlobalFontSize から chat 分岐削除）、`src/renderer/components/TerminalPane.tsx`（ChatPaneView import / showChat / mountChat / hasChatSession 削除）、`src/renderer/components/TerminalSubHeader.tsx`（CLI/Chat segmented タブ + 「Chat 起動」吹き出しアイコン削除、handleClickChatTab / handleCloseChatTab / handleStartChat 削除、segmentStyle 関数削除）、`src/renderer/stores/terminalMetaStore.ts`（ViewMode を `"cli" \| "md"` に縮約）、`src/renderer/stores/terminalStore.ts`（chatSessionStore import + closeTerminal 内の chat.dispose / remove 削除）、`src/renderer/stores/settingsStore.ts`（patch.chat マージ + useChatSettings セレクタ削除）、`src/renderer/stores/__tests__/terminalStore.test.ts`（window.api.chat モック削除）、`src/shared/settings.ts`（ChatSettings 型 / validateChatSettings / CHAT_FONT_SIZE_MIN/MAX 定数 / DEFAULT_SETTINGS.chat / cloneDefaults / mergeSettings / validateAppSettings の chat フィールド全削除）、`src/shared/__tests__/settings.test.ts`（base AppSettings の chat フィールド + chat clamp 2 ケース削除）、`.claude/CLAUDE.md`（§T2-10 から chat 記述全削除）、`.claude/docs/known-issues/INDEX.md`（Issue 003 を Withdrawn セクションへ移動）
+- **アーカイブ移動**: `.claude/docs/known-issues/003-claude-cli-stream-json.md` → `.claude/docs/known-issues/archive/003-claude-cli-stream-json.md`（Status を Withdrawn に更新）
+- **既存 archive 更新**: `.claude/archive/2026-04-29-claude-code-chat-ui.md` の Status を COMPLETED → WITHDRAWN、Withdrawn 日付・理由を追記
+- **IPC チャネル削除**: `chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:checkTrust` / `chat:trust` / `chat:listSlashItems` / `chat:event` / `chat:claudeDetected` の計 10 種
+- **Branch / Tag**: `feat/remove-chat-ui` ブランチで作業中（main からは未マージ）。削除直前のスナップショットを `pre-chat-removal` タグで保全（main の HEAD = 41322e2 の `chore(chat): WIP polish snapshot before removal` を指す）。復活時は `git checkout pre-chat-removal -- <path>` で個別取得可能
+- **残存リスク（記録）**: 既存ユーザーの `userData/trusted-dirs.json` は削除されないが、Reader が消えたため不活性ファイル化するだけで実害なし。次バージョンで起動時 cleanup を入れるかは別タスクで判断
+- **Coding 判断**: trusted-dirs / slash-items / claude-process-detector は他用途への流用可能性があったが、構造的に chat 専用 API 形状（CWD 信頼確認 / `/` コマンド補完 / OSC 0 ✳ Claude Code バナー検出）であり、汎用的な再利用には設計しなおしが必要なので機能ごと削除した
+
 ### 2026-04-30 - アプリ全体ズーム機能追加 + per-pane フォントズームを MD/Chat に拡張
 
 #### 概要
@@ -196,11 +213,7 @@ T3-5 Claude Code Chat UI を MVP として完成させ、同時に Markdown エ�
   - **ペイン番号のフォントを設定追従に**: 旧実装の `13px + fontWeight 700` は SubHeader の周囲（12px 通常）と比べて顕著に大きく、視覚ノイズになっていた。`terminalSettings.fontSize` を参照することで、ユーザーがフォントを大きくすればペイン番号も比例して大きくなる「整合した拡縮」が成立する。強調は accent カラーのみで完結（数字は元々 tabular-nums で揃っているため bold が無くても識別性は十分）
   - **`PaneSelect` の番号のみ表示も縮小（32px → 16px）**: 旧実装では「ペインが 1 つだけ」のときのモーダル内表示が 32px の巨大数字でうるさかった。<select> 表示時の 14px 系と同寸感に揃える
 
-### 2026-04-29 - T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）
-
-#### 概要
-
-ユーザー要望の「フォントの拡大・縮小機能 + 標準ターミナル / AI エディタとして必要なカスタマイズ機能」を一括導入。`AppSettings` を `terminal` / `editor` / `general` の 3 ブロックで拡張し、`SettingsModal` に 3 タブ（ターミナル / エディタ / 一般）を追加。フォントズームはスコープ C（全ペイン共通の永続化グローバル + ペイン毎の揮発オーバーライド）を採用し、`Cmd+=` / `Cmd+-` / `Cmd+0` でアクティブペインのみ ±1px / リセットする iTerm2 互換の振る舞いを実装。グローバル既定値は `settings.terminal.fontSize` で永続化され、新規ペイン作成時の初期値として使われる。フォントファミリー / 行間 / カーソルスタイル + blink / スクロールバック行数 / Bell（none/visual/sound）/ 単語区切り / デフォルトシェル / デフォルト CWD のターミナル設定、フォントサイズ / ファミリー / softWrap の Markdown エディタ設定、セッション復元 ON/OFF / PTY 異常終了通知の一般設定をすべて永続化。`pty:create` IPC は `options: { shell?, defaultCwd? }` 受領に拡張し、`pty-manager.ts` でカスタムシェル指定（実在チェック付き、不在時は `$SHELL` フォールバック）と既定 CWD（`initialCwd` 未指定時のフォールバック）に対応。ペインタイトル手動 rename を `TerminalSubHeader` のダブルクリック inline edit で導入し、`terminalMetaStore` の `customTitle` フィールドが null（CWD 由来の自動表示）と任意文字列を切替。Bell の sound は WebAudio で 880Hz 80ms の短ビープ、visual は 120ms ペインフラッシュ。PTY 異常終了通知は `Notification` API で exitCode != 0 のときだけ発火（許可ダイアログは初回 ON 時に自動要求）。MarkdownEditor は `EditorView.lineWrapping` を `editor.softWrap` で動的トグル。
+> 2026-05-02 ローリングアーカイブ: 「T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 #### 変更点
 

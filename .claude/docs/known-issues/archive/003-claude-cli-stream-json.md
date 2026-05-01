@@ -1,9 +1,9 @@
 # 003: Claude CLI stream-json プロトコル仕様 (Phase 0 検証ログ)
 
-**Status**: Monitoring
+**Status**: Withdrawn (2026-05-02 — Chat UI 機能ごと撤回。subscription redistribution リスクのため。詳細は `.claude/archive/2026-04-29-claude-code-chat-ui.md` の Withdrawn 注記参照)
 **Discovered**: 2026-04-29（Phase 0 事前検証）
 **Resolved**: -
-**Related**: `.claude/2026-04-29-claude-code-chat-ui.md` (T3-5 候補 / Phase 0 - 0-5)
+**Related**: `.claude/archive/2026-04-29-claude-code-chat-ui.md` (T3-5 / Withdrawn)
 
 ---
 

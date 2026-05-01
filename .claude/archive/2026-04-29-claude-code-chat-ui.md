@@ -1,8 +1,10 @@
 ---
-Status: COMPLETED
+Status: WITHDRAWN
 Created: 2026-04-29
-Updated: 2026-04-29 (実装完了 + 複数 MD タブ対応も同時実装)
-Task: T3-5 Claude Code Chat UI 実装 + 複数 MD タブ対応
+Updated: 2026-05-02 (機能ごと撤回)
+Withdrawn: 2026-05-02
+WithdrawnReason: Claude サブスクリプション認証を経由する Chat UI を同梱するアプリの第三者配布は規約上グレー〜アウトのリスクが高く、機能ごと削除した。`pre-chat-removal` タグに削除直前のコードが残っており、復活時はそこから個別 cherry-pick できる。
+Task: T3-5 Claude Code Chat UI 実装 + 複数 MD タブ対応（Chat UI 部分のみ撤回、複数 MD タブ対応は本体に残存）
 Project: /Users/newlife/dev/apps/terminal-division
 ---
 

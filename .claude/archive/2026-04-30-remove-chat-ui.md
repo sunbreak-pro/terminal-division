@@ -1,9 +1,10 @@
 ---
-Status: ACTIVE
+Status: COMPLETED
 Created: 2026-04-30
+Completed: 2026-05-02
 Task: チャット UI 機能の完全廃止
 Project: terminal-division
-Related: archive 候補 → `.claude/2026-04-29-claude-code-chat-ui.md`（実装プラン本体）
+Related: `.claude/archive/2026-04-29-claude-code-chat-ui.md`（旧 T3-5 実装プラン、Status=WITHDRAWN に更新済み）
 ---
 
 # Plan: Remove Chat UI (T3-5 撤回)
