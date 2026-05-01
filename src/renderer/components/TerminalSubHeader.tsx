@@ -5,7 +5,6 @@ import {
   type MdTab,
 } from "../stores/terminalMetaStore";
 import { useTerminalActions, useTerminalCount } from "../stores/terminalStore";
-import { useChatSessionStore } from "../stores/chatSessionStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { useTerminalSettings } from "../stores/settingsStore";
 import { promptAndInsertFiles } from "../utils/insertFiles";
@@ -15,7 +14,6 @@ import { useMarkdownDialogStore } from "../stores/markdownDialogStore";
 import { getFileName } from "../utils/markdownFile";
 import { showErrorToast } from "./Sidebar/ErrorToast";
 import { ContextMenu, ContextMenuItem } from "./Sidebar/ContextMenu";
-import { disposeChatSession } from "../services/chatBridge";
 import { MdTabPickerDropdown } from "./MdTabPickerDropdown";
 
 interface TerminalSubHeaderProps {
@@ -96,20 +94,16 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [id],
     );
 
-    // ===== Markdown / Chat タブ操作 =====
+    // ===== Markdown タブ操作 =====
     const mdTabs = meta?.mdTabs ?? [];
     const activeMdTabId = meta?.activeMdTabId ?? null;
     const isMd = meta?.viewMode === "md";
-    const isChat = meta?.viewMode === "chat";
     const canOpenMore = mdTabs.length < 8;
 
-    // Chat セッションが Renderer 側に存在するかどうか（タブ表示判定 + 会話履歴有無）。
-    const hasChatSession = useChatSessionStore((s) => s.sessions.has(id));
-    const showChatTab = isChat || hasChatSession;
-    const showTabs = mdTabs.length > 0 || showChatTab;
+    const showTabs = mdTabs.length > 0;
 
     const switchToMode = useCallback(
-      (mode: "cli" | "md" | "chat"): void => {
+      (mode: "cli" | "md"): void => {
         if (meta?.viewMode === mode) return;
         useTerminalMetaStore.getState().setViewMode(id, mode);
       },
@@ -170,32 +164,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       },
       [id],
     );
-
-    // Chat タブをクリック: viewMode=chat に切替
-    const handleClickChatTab = useCallback(
-      (e: React.MouseEvent<HTMLButtonElement>) => {
-        e.stopPropagation();
-        switchToMode("chat");
-      },
-      [switchToMode],
-    );
-
-    // Chat タブを閉じる: chat session を破棄して viewMode を cli に戻す
-    const handleCloseChatTab = useCallback(
-      (e: React.MouseEvent<HTMLElement>) => {
-        e.stopPropagation();
-        disposeChatSession(id);
-        if (meta?.viewMode === "chat") {
-          useTerminalMetaStore.getState().setViewMode(id, "cli");
-        }
-      },
-      [id, meta?.viewMode],
-    );
-
-    // Chat タブを手動で起動するためのトリガー（吹き出しアイコン）。
-    const handleStartChat = useCallback((): void => {
-      useTerminalMetaStore.getState().setViewMode(id, "chat");
-    }, [id]);
 
     // ペインを閉じる × ボタン。Header のグローバル閉じるボタンを廃止して
     // ペインごとに配置する（操作対象が明確になり、誤操作も減る）。
@@ -501,93 +469,14 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               overflowY: "hidden",
             }}
           >
-            {showChatTab ? (
-              // Chat セッションがある時は CLI / Chat を 1 つの segmented タブにまとめる。
-              // 別々のタブにすると幅を取りすぎるため、コンパクトに視覚化する。
-              <div
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  background: theme.colors.background,
-                  border: `1px solid ${theme.colors.border}`,
-                  borderRadius: 4,
-                  overflow: "hidden",
-                  height: 20,
-                  alignSelf: "center",
-                  flexShrink: 0,
-                }}
-                role="tablist"
-                aria-label="CLI / Chat 表示切替"
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={meta?.viewMode === "cli"}
-                  onClick={handleClickCliTab}
-                  title="ターミナル表示に切替"
-                  style={segmentStyle(meta?.viewMode === "cli", theme.colors)}
-                >
-                  CLI
-                </button>
-                <span
-                  aria-hidden
-                  style={{
-                    width: 1,
-                    height: 14,
-                    background: theme.colors.border,
-                    flexShrink: 0,
-                  }}
-                />
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={isChat}
-                  onClick={handleClickChatTab}
-                  title="Chat 表示に切替（Claude Code）"
-                  style={segmentStyle(isChat, theme.colors)}
-                >
-                  Chat
-                </button>
-                <span
-                  role="button"
-                  aria-label="Chat タブを閉じる"
-                  onClick={handleCloseChatTab}
-                  title="Chat セッションを破棄して CLI に戻る"
-                  style={{
-                    width: 18,
-                    height: "100%",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: theme.colors.textSecondary,
-                    fontSize: 12,
-                    cursor: "pointer",
-                    borderLeft: `1px solid ${theme.colors.border}`,
-                    flexShrink: 0,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor =
-                      theme.colors.buttonHover;
-                    e.currentTarget.style.color = theme.colors.text;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = "transparent";
-                    e.currentTarget.style.color = theme.colors.textSecondary;
-                  }}
-                >
-                  ×
-                </span>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={handleClickCliTab}
-                title="ターミナル表示に切替"
-                style={tabButtonStyle(meta?.viewMode === "cli")}
-              >
-                CLI
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleClickCliTab}
+              title="ターミナル表示に切替"
+              style={tabButtonStyle(meta?.viewMode === "cli")}
+            >
+              CLI
+            </button>
             {mdTabs.map((tab) => {
               const fileName = getFileName(tab.filePath);
               const active = isMd && activeMdTabId === tab.id;
@@ -681,7 +570,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
                 +
               </button>
             )}
-            {/* Chat タブは上の segmented control に統合済みのため、ここでは描画しない */}
           </div>
         )}
         <div
@@ -742,30 +630,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
-          {!showChatTab && (
-            <button
-              type="button"
-              onClick={handleStartChat}
-              onMouseEnter={handleIconButtonEnter}
-              onMouseLeave={handleIconButtonLeave}
-              title="Claude Code Chat を起動"
-              aria-label="Chat を起動"
-              style={iconButtonStyle}
-            >
-              <svg
-                width="11"
-                height="11"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            </button>
-          )}
           <button
             type="button"
             onClick={handleClosePane}
@@ -822,27 +686,5 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
 );
 
 TerminalSubHeader.displayName = "TerminalSubHeader";
-
-// Segmented control の各セグメント用スタイル。アクティブ時は accent 背景で塗りつぶす。
-function segmentStyle(
-  active: boolean,
-  colors: { accent: string; text: string; textSecondary: string },
-): React.CSSProperties {
-  return {
-    background: active ? `${colors.accent}33` : "transparent",
-    border: "none",
-    color: active ? colors.text : colors.textSecondary,
-    fontSize: 11,
-    fontWeight: active ? 700 : 500,
-    fontFamily: "inherit",
-    letterSpacing: "0.02em",
-    padding: "0 10px",
-    height: "100%",
-    cursor: "pointer",
-    display: "inline-flex",
-    alignItems: "center",
-    flexShrink: 0,
-  };
-}
 
 export { TerminalSubHeader };

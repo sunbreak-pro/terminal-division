@@ -110,9 +110,6 @@ function applyOptimistic(
   if (patch.editor) {
     next.editor = { ...next.editor, ...patch.editor };
   }
-  if (patch.chat) {
-    next.chat = { ...next.chat, ...patch.chat };
-  }
   if (patch.general) {
     next.general = { ...next.general, ...patch.general };
   }
@@ -134,9 +131,6 @@ export const useTerminalSettings = (): AppSettings["terminal"] =>
 
 export const useEditorSettings = (): AppSettings["editor"] =>
   useSettingsStore((s) => s.settings.editor);
-
-export const useChatSettings = (): AppSettings["chat"] =>
-  useSettingsStore((s) => s.settings.chat);
 
 export const useGeneralSettings = (): AppSettings["general"] =>
   useSettingsStore((s) => s.settings.general);

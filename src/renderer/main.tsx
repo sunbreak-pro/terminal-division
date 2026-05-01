@@ -3,7 +3,6 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/globals.css";
 import { restoreSession } from "./services/sessionRestore";
-import { initChatBridge } from "./services/chatBridge";
 
 // React マウント前にセッション復元を試みる。
 // terminalStore は module load 時に「初期 1 ペイン」を作るため、TerminalPane が
@@ -23,9 +22,6 @@ async function bootstrap(): Promise<void> {
   } catch (e) {
     console.warn("[bootstrap] session restore failed:", e);
   }
-
-  // Chat バックエンドの IPC リスナーを 1 度だけ登録する（多重登録防止のためモジュール内 flag で制御）
-  initChatBridge();
 
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>

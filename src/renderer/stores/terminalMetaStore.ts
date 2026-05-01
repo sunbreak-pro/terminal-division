@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type ViewMode = "cli" | "md" | "chat";
+export type ViewMode = "cli" | "md";
 
 // 1 ペインで開ける MD タブの最大数。仕様で確定済み（ユーザー回答 4）。
 export const MD_TABS_MAX = 8;
@@ -25,7 +25,7 @@ export interface TerminalMeta {
   lastActiveAt: number;
   // ペインがレイアウトに追加された順を保持（タブの並び順に使用）
   createdAt: number;
-  // ペイン内の表示モード。MD/Chat 編集中も PTY は生存させ display:none で隠す。
+  // ペイン内の表示モード。MD 編集中も PTY は生存させ display:none で隠す。
   viewMode: ViewMode;
   // 開かれている MD タブ群（最大 MD_TABS_MAX = 8）。viewMode=md のとき activeMdTabId のタブを表示する。
   mdTabs: MdTab[];
@@ -68,7 +68,7 @@ interface TerminalMetaStore {
   ) =>
     | { ok: true; tabId: string; existed: boolean }
     | { ok: false; reason: "limit" };
-  // viewMode 変更（CLI <-> MD <-> Chat タブ切替）
+  // viewMode 変更（CLI <-> MD タブ切替）
   setViewMode: (id: string, mode: ViewMode) => void;
   // アクティブ MD タブ変更
   setActiveMdTab: (id: string, tabId: string | null) => void;
@@ -265,7 +265,6 @@ export const useTerminalMetaStore = create<TerminalMetaStore>((set, get) => {
       if (meta.activeMdTabId === tabId) {
         if (newTabs.length === 0) {
           newActiveId = null;
-          // viewMode が md だったなら cli に戻す（chat だったらそのまま）
           if (meta.viewMode === "md") newViewMode = "cli";
         } else {
           const fallback = newTabs[Math.max(0, idx - 1)] ?? newTabs[0];

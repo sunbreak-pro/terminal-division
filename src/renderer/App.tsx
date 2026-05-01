@@ -50,15 +50,13 @@ import {
   FONT_SIZE_MAX,
   EDITOR_FONT_SIZE_MIN,
   EDITOR_FONT_SIZE_MAX,
-  CHAT_FONT_SIZE_MIN,
-  CHAT_FONT_SIZE_MAX,
   DEFAULT_SETTINGS,
   clampNumber,
 } from "../shared/settings";
 
 // アクティブペインの viewMode を返す。null = アクティブ無し or meta 不在。
-// CLI / md / chat の判定で Cmd+= / Cmd+- / Cmd+0 のターゲットを切り替える。
-function resolveActiveViewMode(): "cli" | "md" | "chat" | null {
+// CLI / md の判定で Cmd+= / Cmd+- / Cmd+0 のターゲットを切り替える。
+function resolveActiveViewMode(): "cli" | "md" | null {
   const activeId = useTerminalStore.getState().activeTerminalId;
   if (!activeId) return null;
   const meta = useTerminalMetaStore.getState().metas.get(activeId);
@@ -66,7 +64,7 @@ function resolveActiveViewMode(): "cli" | "md" | "chat" | null {
 }
 
 // Cmd+= / Cmd+- 共通: アクティブペインの viewMode に応じて
-// terminal / editor / chat いずれかの fontSize を delta だけ動かす。
+// terminal / editor いずれかの fontSize を delta だけ動かす。
 // per-pane override ではなく Settings 自体を直接更新するので、Settings UI の
 // スライダー値と表示が常に同期する。settingsStore.update が
 // clearAllFontSizeOverrides も呼ぶので、過去の override は自動的に解除される。
@@ -85,18 +83,6 @@ function adjustGlobalFontSize(delta: number): void {
     useSettingsStore.getState().update({ editor: { fontSize: next } });
     return;
   }
-  if (mode === "chat") {
-    const current = settings.chat.fontSize;
-    const next = clampNumber(
-      current + delta,
-      CHAT_FONT_SIZE_MIN,
-      CHAT_FONT_SIZE_MAX,
-      current,
-    );
-    if (next === current) return;
-    useSettingsStore.getState().update({ chat: { fontSize: next } });
-    return;
-  }
   // cli or null（アクティブ無し）はターミナル設定を更新する（既存挙動）
   const current = settings.terminal.fontSize;
   const next = clampNumber(
@@ -110,19 +96,13 @@ function adjustGlobalFontSize(delta: number): void {
 }
 
 // Cmd+0: viewMode に応じてファクトリーデフォルトに戻す。
-// 既存の terminal は 14（旧仕様の reset 値）を維持。editor / chat は
+// 既存の terminal は 14（旧仕様の reset 値）を維持。editor は
 // DEFAULT_SETTINGS の値を使う。
 function resetGlobalFontSize(): void {
   const mode = resolveActiveViewMode();
   if (mode === "md") {
     useSettingsStore.getState().update({
       editor: { fontSize: DEFAULT_SETTINGS.editor.fontSize },
-    });
-    return;
-  }
-  if (mode === "chat") {
-    useSettingsStore.getState().update({
-      chat: { fontSize: DEFAULT_SETTINGS.chat.fontSize },
     });
     return;
   }
@@ -168,8 +148,8 @@ const EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId> = new Set([
   "move-word-right",
   "undo",
   "redo",
-  // Shift+Enter: 通常の input/textarea（Chat 入力欄など）では改行のデフォルト動作を
-  // 維持する。xterm の helper textarea は isEditableTarget で false 扱いなので、
+  // Shift+Enter: 通常の input/textarea では改行のデフォルト動作を維持する。
+  // xterm の helper textarea は isEditableTarget で false 扱いなので、
   // CLI ターミナルでは引き続き writeWithHistory("\n") が走る。
   "insert-newline",
 ]);
