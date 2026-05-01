@@ -318,7 +318,7 @@ ChatInput.displayName = "ChatInput";
 
 // 入力末尾の `/<query>` を抽出する。`/` の前は文字列先頭か空白でなければ null（URL 内 `/` を巻き込まない）。
 // 改行を含むクエリは無効。
-export function extractSlashQuery(value: string): string | null {
+function extractSlashQuery(value: string): string | null {
   // 末尾から `/` を探す
   const lastSlash = value.lastIndexOf("/");
   if (lastSlash === -1) return null;
@@ -330,7 +330,7 @@ export function extractSlashQuery(value: string): string | null {
 }
 
 // 入力末尾の `/<query>` を `insert` に置き換える。前後の空白は維持。
-export function replaceSlashAtEnd(value: string, insert: string): string {
+function replaceSlashAtEnd(value: string, insert: string): string {
   const lastSlash = value.lastIndexOf("/");
   if (lastSlash === -1) return value + insert;
   return value.slice(0, lastSlash) + insert + " ";

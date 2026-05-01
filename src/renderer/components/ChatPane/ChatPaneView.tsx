@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useCurrentTheme } from "../../stores/themeStore";
 import { useChatState } from "../../stores/chatSessionStore";
 import { useTerminalMetaStore } from "../../stores/terminalMetaStore";
@@ -10,15 +16,23 @@ import {
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
 import { ChatStatusBar } from "./ChatStatusBar";
+import { ChatTrustPanel } from "./ChatTrustPanel";
+import { ChatWelcome } from "./ChatWelcome";
 
 interface ChatPaneViewProps {
   id: string;
 }
 
+type TrustState =
+  | { phase: "checking" }
+  | { phase: "needs-confirm"; cwd: string; isHome: boolean }
+  | { phase: "trusted" }
+  | { phase: "denied" };
+
 /**
  * Chat ビューのコンテナ。
- * - mount で chat:start を 1 回だけ呼ぶ。chat 状態の変化では再 start しない
- *   （二重 start を防ぐため startedRef + 依存は [id] のみに固定）
+ * - mount で先に信頼確認 (chat:checkTrust) を行い、必要ならモーダルを出してから chat:start
+ * - $HOME そのものは毎回確認、未信頼 CWD は最初の 1 回だけ確認
  * - unmount では dispose しない（タブ切替で hidden になっても会話履歴を保持するため。MD と同じ戦略）
  * - 停止後に再度メッセージを送ると、自動で `--resume <sessionId>` で再起動してから送信
  */
@@ -28,6 +42,9 @@ const ChatPaneView: React.FC<ChatPaneViewProps> = React.memo(({ id }) => {
   const chat = useChatState(id);
 
   const startedRef = useRef(false);
+  const [trustState, setTrustState] = useState<TrustState>({
+    phase: "checking",
+  });
 
   // 最新の chat 状態を ref で保持して useEffect の依存を増やさない
   const chatRef = useRef(chat);
@@ -43,23 +60,75 @@ const ChatPaneView: React.FC<ChatPaneViewProps> = React.memo(({ id }) => {
     [id],
   );
 
-  // 初回マウントで 1 度だけ起動する。再 mount（StrictMode の二重マウント）でも startedRef で
-  // ガードされるため、chat:start が二重に呼ばれて session_already_started になることを防ぐ。
+  // 初回マウントで信頼確認 → 必要なら start。
+  // 既に session が動いている / 履歴があるケースは start をスキップしつつ trustState は trusted に揃える。
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+
     const current = chatRef.current;
-    // 既に session が動いている / 履歴がある場合はそのまま再利用する
-    if (
+    const alreadyRunning =
       current &&
       (current.status === "starting" ||
         current.status === "streaming" ||
-        current.messages.length > 0)
-    ) {
+        current.messages.length > 0);
+
+    if (alreadyRunning) {
+      // 既に起動済み（再 mount 等）。信頼確認は省略。
+      setTrustState({ phase: "trusted" });
       return;
     }
-    void ensureStart(current?.sessionId ?? undefined);
+
+    const meta = useTerminalMetaStore.getState().metas.get(id);
+    const cwd = meta?.cwd ?? "";
+    void (async () => {
+      // dev hot-reload 等で preload が更新されていない場合は IPC が未定義になりうる。
+      // その場合は信頼チェックをスキップして起動する（UX を止めないため、安全側ではなく寛容側に倒す）。
+      const checkTrust = window.api.chat.checkTrust;
+      if (typeof checkTrust !== "function") {
+        console.warn(
+          "[Chat] window.api.chat.checkTrust が未定義です。Electron アプリを再起動してください。信頼チェックをスキップして起動します。",
+        );
+        setTrustState({ phase: "trusted" });
+        void ensureStart(current?.sessionId ?? undefined);
+        return;
+      }
+      try {
+        const trust = await checkTrust(cwd);
+        if (trust.trusted) {
+          setTrustState({ phase: "trusted" });
+          void ensureStart(current?.sessionId ?? undefined);
+          return;
+        }
+        // $HOME または未信頼 CWD → 信頼確認パネル
+        setTrustState({
+          phase: "needs-confirm",
+          cwd: trust.cwd,
+          isHome: trust.isHome,
+        });
+      } catch (e) {
+        console.warn("[Chat] checkTrust failed:", e);
+        // IPC エラー時もスタックを止めず起動する
+        setTrustState({ phase: "trusted" });
+        void ensureStart(current?.sessionId ?? undefined);
+      }
+    })();
   }, [id, ensureStart]);
+
+  const handleTrustConfirm = useCallback((): void => {
+    if (trustState.phase !== "needs-confirm") return;
+    if (!trustState.isHome) {
+      // $HOME 以外は永続化（Main 側で $HOME は弾かれる）
+      window.api.chat.trust(trustState.cwd);
+    }
+    setTrustState({ phase: "trusted" });
+    const current = chatRef.current;
+    void ensureStart(current?.sessionId ?? undefined);
+  }, [trustState, ensureStart]);
+
+  const handleTrustCancel = useCallback((): void => {
+    setTrustState({ phase: "denied" });
+  }, []);
 
   const handleSubmit = useCallback(
     async (text: string) => {
@@ -107,6 +176,12 @@ const ChatPaneView: React.FC<ChatPaneViewProps> = React.memo(({ id }) => {
   const streamingText = chat?.currentAssistantBuffer ?? "";
   const streamingMessageId = chat?.currentMessageId ?? null;
 
+  // 信頼確認が完了するまでは入力をロック（cancel で denied になるとそのままロック維持）
+  const inputDisabled =
+    trustState.phase !== "trusted" ||
+    chat === undefined ||
+    chat.status === "starting";
+
   const containerStyle = useMemo<React.CSSProperties>(
     () => ({
       position: "absolute",
@@ -119,14 +194,69 @@ const ChatPaneView: React.FC<ChatPaneViewProps> = React.memo(({ id }) => {
     [colors.background, colors.text],
   );
 
-  return (
-    <div style={containerStyle}>
+  // メッセージ未送信 + idle/checking の状態で Welcome を出す。
+  // streaming 中や error / ended のときは Welcome を出さない。
+  // 信頼確認 / denied のときは Welcome ではなく専用パネル。
+  const showWelcome =
+    (chat?.messages.length ?? 0) === 0 &&
+    !isStreaming &&
+    chat?.status !== "error" &&
+    chat?.status !== "ended" &&
+    trustState.phase === "trusted";
+
+  // メイン領域はトップレベルの状態で 1 つだけ描画する：
+  // 1. needs-confirm / checking → 信頼確認パネル（インライン）
+  // 2. denied                   → 拒否バナー（再試行可）
+  // 3. welcome                  → スタートUI
+  // 4. それ以外                  → メッセージ一覧
+  let mainArea: React.ReactNode;
+  if (trustState.phase === "needs-confirm") {
+    mainArea = (
+      <ChatTrustPanel
+        cwd={trustState.cwd}
+        isHome={trustState.isHome}
+        onTrust={handleTrustConfirm}
+        onCancel={handleTrustCancel}
+      />
+    );
+  } else if (trustState.phase === "checking") {
+    // 通常は数 ms で終わるが、IPC 完了前のフラッシュ防止のため最小限の表示にする
+    mainArea = <CheckingPanel />;
+  } else if (trustState.phase === "denied") {
+    mainArea = (
+      <DeniedBanner
+        onRetry={() => {
+          const meta = useTerminalMetaStore.getState().metas.get(id);
+          const cwd = meta?.cwd ?? "";
+          void (async () => {
+            const trust = await window.api.chat.checkTrust(cwd);
+            setTrustState({
+              phase: "needs-confirm",
+              cwd: trust.cwd,
+              isHome: trust.isHome,
+            });
+          })();
+        }}
+      />
+    );
+  } else if (showWelcome) {
+    mainArea = (
+      <ChatWelcome phase={chat?.status === "starting" ? "starting" : "ready"} />
+    );
+  } else {
+    mainArea = (
       <MessageList
         messages={chat?.messages ?? []}
         streamingMessageId={streamingMessageId}
         streamingText={streamingText}
         isStreaming={isStreaming}
       />
+    );
+  }
+
+  return (
+    <div style={containerStyle}>
+      {mainArea}
       <ChatStatusBar
         status={chat?.status ?? "idle"}
         error={chat?.lastError ?? null}
@@ -144,14 +274,100 @@ const ChatPaneView: React.FC<ChatPaneViewProps> = React.memo(({ id }) => {
         onSubmit={handleSubmit}
         onStop={handleStop}
         isStreaming={isStreaming}
-        // 入力は streaming 中以外は常に有効にする。ended/error 状態でも入力できるようにし、
-        // 入力時に handleSubmit 側が必要に応じて自動再起動する。
-        disabled={false}
+        disabled={inputDisabled}
+        cwd={useTerminalMetaStore.getState().metas.get(id)?.cwd ?? ""}
       />
     </div>
   );
 });
 
+const CheckingPanel: React.FC = () => {
+  const currentTheme = useCurrentTheme();
+  const colors = currentTheme.colors;
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: colors.textSecondary,
+        fontSize: 12.5,
+        gap: 1,
+      }}
+    >
+      <span>確認中</span>
+      <BouncingDots color={colors.textSecondary} />
+    </div>
+  );
+};
+
+/**
+ * 三点ドットを順番に上下バウンスさせるローディング表現。
+ * 確認中 / 起動中など「処理待ち」を視覚化する用途で使う。
+ */
+const BouncingDots: React.FC<{ color: string }> = ({ color }) => {
+  const dotStyle = (delay: number): React.CSSProperties => ({
+    display: "inline-block",
+    width: "0.4em",
+    color,
+    animation: "td-chat-dot-bounce 1.1s ease-in-out infinite",
+    animationDelay: `${delay}ms`,
+  });
+  return (
+    <span aria-hidden style={{ display: "inline-flex" }}>
+      <span style={dotStyle(0)}>.</span>
+      <span style={dotStyle(160)}>.</span>
+      <span style={dotStyle(320)}>.</span>
+      <style>{`
+        @keyframes td-chat-dot-bounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
+          30% { transform: translateY(-3px); opacity: 1; }
+        }
+      `}</style>
+    </span>
+  );
+};
+
 ChatPaneView.displayName = "ChatPaneView";
+
+const DeniedBanner: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
+  const currentTheme = useCurrentTheme();
+  const colors = currentTheme.colors;
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 12,
+        padding: 24,
+        color: colors.textSecondary,
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontSize: 14, color: colors.text }}>
+        このディレクトリを信頼しないと Chat を開始できません
+      </div>
+      <button
+        type="button"
+        onClick={onRetry}
+        style={{
+          padding: "6px 14px",
+          background: "transparent",
+          color: colors.accent,
+          border: `1px solid ${colors.accent}`,
+          borderRadius: 4,
+          cursor: "pointer",
+          fontSize: 12,
+        }}
+      >
+        確認をやり直す
+      </button>
+    </div>
+  );
+};
 
 export { ChatPaneView };

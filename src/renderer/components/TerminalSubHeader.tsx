@@ -501,14 +501,93 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               overflowY: "hidden",
             }}
           >
-            <button
-              type="button"
-              onClick={handleClickCliTab}
-              title="ターミナル表示に切替"
-              style={tabButtonStyle(meta?.viewMode === "cli")}
-            >
-              CLI
-            </button>
+            {showChatTab ? (
+              // Chat セッションがある時は CLI / Chat を 1 つの segmented タブにまとめる。
+              // 別々のタブにすると幅を取りすぎるため、コンパクトに視覚化する。
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: theme.colors.background,
+                  border: `1px solid ${theme.colors.border}`,
+                  borderRadius: 4,
+                  overflow: "hidden",
+                  height: 20,
+                  alignSelf: "center",
+                  flexShrink: 0,
+                }}
+                role="tablist"
+                aria-label="CLI / Chat 表示切替"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={meta?.viewMode === "cli"}
+                  onClick={handleClickCliTab}
+                  title="ターミナル表示に切替"
+                  style={segmentStyle(meta?.viewMode === "cli", theme.colors)}
+                >
+                  CLI
+                </button>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 1,
+                    height: 14,
+                    background: theme.colors.border,
+                    flexShrink: 0,
+                  }}
+                />
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isChat}
+                  onClick={handleClickChatTab}
+                  title="Chat 表示に切替（Claude Code）"
+                  style={segmentStyle(isChat, theme.colors)}
+                >
+                  Chat
+                </button>
+                <span
+                  role="button"
+                  aria-label="Chat タブを閉じる"
+                  onClick={handleCloseChatTab}
+                  title="Chat セッションを破棄して CLI に戻る"
+                  style={{
+                    width: 18,
+                    height: "100%",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: theme.colors.textSecondary,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    borderLeft: `1px solid ${theme.colors.border}`,
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor =
+                      theme.colors.buttonHover;
+                    e.currentTarget.style.color = theme.colors.text;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = "transparent";
+                    e.currentTarget.style.color = theme.colors.textSecondary;
+                  }}
+                >
+                  ×
+                </span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleClickCliTab}
+                title="ターミナル表示に切替"
+                style={tabButtonStyle(meta?.viewMode === "cli")}
+              >
+                CLI
+              </button>
+            )}
             {mdTabs.map((tab) => {
               const fileName = getFileName(tab.filePath);
               const active = isMd && activeMdTabId === tab.id;
@@ -602,45 +681,7 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
                 +
               </button>
             )}
-            {showChatTab && (
-              <button
-                type="button"
-                onClick={handleClickChatTab}
-                title="Chat 表示に切替（Claude Code）"
-                style={tabButtonStyle(isChat)}
-              >
-                <span>Chat</span>
-                <span
-                  role="button"
-                  aria-label="Chat タブを閉じる"
-                  onClick={handleCloseChatTab}
-                  style={{
-                    marginLeft: 2,
-                    width: 14,
-                    height: 14,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    borderRadius: 3,
-                    color: theme.colors.textSecondary,
-                    fontSize: 12,
-                    lineHeight: 1,
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor =
-                      theme.colors.buttonHover;
-                    e.currentTarget.style.color = theme.colors.text;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = "transparent";
-                    e.currentTarget.style.color = theme.colors.textSecondary;
-                  }}
-                >
-                  ×
-                </span>
-              </button>
-            )}
+            {/* Chat タブは上の segmented control に統合済みのため、ここでは描画しない */}
           </div>
         )}
         <div
@@ -781,5 +822,27 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
 );
 
 TerminalSubHeader.displayName = "TerminalSubHeader";
+
+// Segmented control の各セグメント用スタイル。アクティブ時は accent 背景で塗りつぶす。
+function segmentStyle(
+  active: boolean,
+  colors: { accent: string; text: string; textSecondary: string },
+): React.CSSProperties {
+  return {
+    background: active ? `${colors.accent}33` : "transparent",
+    border: "none",
+    color: active ? colors.text : colors.textSecondary,
+    fontSize: 11,
+    fontWeight: active ? 700 : 500,
+    fontFamily: "inherit",
+    letterSpacing: "0.02em",
+    padding: "0 10px",
+    height: "100%",
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    flexShrink: 0,
+  };
+}
 
 export { TerminalSubHeader };

@@ -2,6 +2,8 @@ import { ipcMain, BrowserWindow, app, dialog, shell } from "electron";
 import fs from "fs";
 import { ptyManager } from "./pty-manager";
 import { chatSessionManager } from "./chat-session-manager";
+import { trustedDirsManager } from "./trusted-dirs";
+import { listSlashItems } from "./slash-items";
 import { createWindow, canCreateWindow } from "./window-manager";
 import { recentDirectoryManager } from "./recent-directories";
 import { fileSystemManager } from "./file-system-handler";
@@ -506,6 +508,31 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle("chat:getSessionId", (_, paneId: string) => {
     return chatSessionManager.getSessionId(paneId);
+  });
+
+  // Chat 起動前の信頼確認。CWD が $HOME そのもの または未信頼なら
+  // Renderer 側で確認モーダルを出させる。
+  ipcMain.handle("chat:checkTrust", (_, cwd: string) => {
+    const safe = cwd ? validatePath(cwd) : null;
+    const finalCwd = safe ?? cwd ?? "";
+    return {
+      cwd: finalCwd,
+      isHome: trustedDirsManager.isHome(finalCwd),
+      trusted: trustedDirsManager.isTrusted(finalCwd),
+    };
+  });
+
+  // 信頼リストへ追加（$HOME は無視される仕様）
+  ipcMain.on("chat:trust", (_, cwd: string) => {
+    const safe = cwd ? validatePath(cwd) : null;
+    if (!safe) return;
+    trustedDirsManager.trust(safe);
+  });
+
+  // / 入力時の候補（builtin command + skills）を返す。
+  ipcMain.handle("chat:listSlashItems", (_, cwd: string) => {
+    const safe = cwd ? validatePath(cwd) : null;
+    return listSlashItems(safe ?? "");
   });
 
   app.on("before-quit", () => {

@@ -1,8 +1,7 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useCurrentTheme } from "../../stores/themeStore";
 import { useChatSettings } from "../../stores/settingsStore";
 import type { ChatMessage, ChatToolUse } from "../../types/chat";
-import { ToolDetailPopover } from "./ToolDetailPopover";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -109,10 +108,18 @@ const MessageBubble: React.FC<MessageBubbleProps> = React.memo(
             </details>
           )}
           {message.toolUses.length > 0 && !isUser && (
-            <ToolUseList
-              tools={message.toolUses}
-              hasFollowingText={Boolean(rendered)}
-            />
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                marginBottom: rendered ? 8 : 0,
+              }}
+            >
+              {message.toolUses.map((t) => (
+                <ToolUseChip key={t.id} tool={t} />
+              ))}
+            </div>
           )}
           {rendered}
           {message.errorMessage && (
@@ -242,153 +249,54 @@ const ClaudeAvatar: React.FC<ClaudeAvatarProps> = React.memo(
 );
 ClaudeAvatar.displayName = "ClaudeAvatar";
 
-// ============== Tool use list (compact + popover) ==============
-// チャット内でのツール使用表示は "薄く・小さく・トグル" の方針。
-// - リスト全体は集約トグル「▸ N tools」で開閉できる
-// - 各 chip は 1 行サマリ。クリックで ToolDetailPopover を開いて詳細閲覧
-// - inline 展開は廃止（チャット肥大化を避けるため）
-
-interface ToolUseListProps {
-  tools: ChatToolUse[];
-  hasFollowingText: boolean;
-}
-
-const ToolUseList: React.FC<ToolUseListProps> = React.memo(
-  ({ tools, hasFollowingText }) => {
-    const currentTheme = useCurrentTheme();
-    const colors = currentTheme.colors;
-    const [collapsed, setCollapsed] = useState(false);
-    const [activeTool, setActiveTool] = useState<{
-      tool: ChatToolUse;
-      anchorRect: { left: number; top: number; right: number; bottom: number };
-    } | null>(null);
-
-    const errorCount = useMemo(
-      () => tools.filter((t) => t.resultIsError).length,
-      [tools],
-    );
-
-    const handleChipClick = useCallback(
-      (tool: ChatToolUse, e: React.MouseEvent<HTMLButtonElement>) => {
-        const r = e.currentTarget.getBoundingClientRect();
-        setActiveTool({
-          tool,
-          anchorRect: {
-            left: r.left,
-            top: r.top,
-            right: r.right,
-            bottom: r.bottom,
-          },
-        });
-      },
-      [],
-    );
-
-    const closePopover = useCallback(() => setActiveTool(null), []);
-
-    return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          marginBottom: hasFollowingText ? 8 : 0,
-          opacity: 0.78,
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setCollapsed((v) => !v)}
-          aria-expanded={!collapsed}
-          title={collapsed ? "ツール実行を表示" : "ツール実行を折りたたむ"}
-          style={{
-            background: "transparent",
-            border: "none",
-            color: colors.textSecondary,
-            cursor: "pointer",
-            padding: "2px 0",
-            fontSize: 10,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            opacity: 0.85,
-            alignSelf: "flex-start",
-          }}
-        >
-          <span style={{ fontSize: 9 }}>{collapsed ? "▸" : "▾"}</span>
-          <span>
-            {tools.length} tool{tools.length === 1 ? "" : "s"}
-          </span>
-          {errorCount > 0 && (
-            <span style={{ color: colors.danger, fontWeight: 600 }}>
-              ({errorCount} error)
-            </span>
-          )}
-        </button>
-        {!collapsed && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            {tools.map((t) => (
-              <ToolUseChip key={t.id} tool={t} onClick={handleChipClick} />
-            ))}
-          </div>
-        )}
-        {activeTool && (
-          <ToolDetailPopover
-            tool={activeTool.tool}
-            anchorRect={activeTool.anchorRect}
-            onClose={closePopover}
-          />
-        )}
-      </div>
-    );
-  },
-);
-ToolUseList.displayName = "ToolUseList";
-
+// ============== Tool use chip ==============
+// メッセージ内に inline で表示するツール使用のミニカード。
+// 折りたたみで input / result を確認できる。
 interface ToolUseChipProps {
   tool: ChatToolUse;
-  onClick: (tool: ChatToolUse, e: React.MouseEvent<HTMLButtonElement>) => void;
 }
 
-const ToolUseChip: React.FC<ToolUseChipProps> = React.memo(
-  ({ tool, onClick }) => {
-    const currentTheme = useCurrentTheme();
-    const colors = currentTheme.colors;
-    const summary = formatToolSummary(tool);
-    const hasResult = tool.resultText !== null;
-    const isError = tool.resultIsError;
+const ToolUseChip: React.FC<ToolUseChipProps> = React.memo(({ tool }) => {
+  const [open, setOpen] = useState(false);
+  const summary = formatToolSummary(tool);
+  const hasResult = tool.resultText !== null;
+  const isError = tool.resultIsError;
 
-    return (
+  return (
+    <div
+      style={{
+        border: `1px solid ${
+          isError ? "rgba(255,80,80,0.4)" : "rgba(255,255,255,0.12)"
+        }`,
+        borderRadius: 6,
+        background: "rgba(255,255,255,0.03)",
+        fontSize: 12,
+      }}
+    >
       <button
         type="button"
-        onClick={(e) => onClick(tool, e)}
-        title="クリックで詳細を表示"
+        onClick={() => setOpen((v) => !v)}
         style={{
-          textAlign: "left",
           width: "100%",
+          textAlign: "left",
           background: "transparent",
-          border: `1px dashed ${
-            isError ? `${colors.danger}80` : `${colors.border}`
-          }`,
-          borderRadius: 4,
-          padding: "2px 6px",
+          border: "none",
+          padding: "4px 8px",
           color: "inherit",
           fontFamily:
             '"SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-          fontSize: 10.5,
+          fontSize: 11.5,
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
           gap: 6,
-          lineHeight: 1.5,
         }}
       >
-        <span style={{ fontWeight: 600, color: colors.textSecondary }}>
-          {tool.name}
-        </span>
+        <span style={{ opacity: 0.7, fontSize: 10 }}>{open ? "▾" : "▸"}</span>
+        <span style={{ fontWeight: 600 }}>{tool.name}</span>
         <span
           style={{
-            opacity: 0.65,
+            opacity: 0.75,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -402,20 +310,70 @@ const ToolUseChip: React.FC<ToolUseChipProps> = React.memo(
           <span
             style={{
               marginLeft: "auto",
-              fontSize: 9,
-              opacity: 0.75,
-              color: isError ? colors.danger : colors.textSecondary,
-              fontWeight: 600,
-              flexShrink: 0,
+              opacity: 0.7,
+              fontSize: 10,
+              color: isError ? "rgba(255,90,90,0.95)" : undefined,
             }}
           >
-            {isError ? "ERROR" : "OK"}
+            {isError ? "error" : "ok"}
           </span>
         )}
       </button>
-    );
-  },
-);
+      {open && (
+        <div
+          style={{
+            borderTop: "1px solid rgba(255,255,255,0.08)",
+            padding: "6px 8px",
+            fontFamily:
+              '"SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+            fontSize: 11.5,
+          }}
+        >
+          {Object.keys(tool.input).length > 0 && (
+            <div style={{ marginBottom: hasResult ? 6 : 0 }}>
+              <div style={{ opacity: 0.6, fontSize: 10, marginBottom: 2 }}>
+                input
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  background: "rgba(0,0,0,0.3)",
+                  padding: "4px 6px",
+                  borderRadius: 4,
+                }}
+              >
+                {JSON.stringify(tool.input, null, 2)}
+              </pre>
+            </div>
+          )}
+          {hasResult && tool.resultText && (
+            <div>
+              <div style={{ opacity: 0.6, fontSize: 10, marginBottom: 2 }}>
+                {isError ? "error" : "result"}
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  background: "rgba(0,0,0,0.3)",
+                  padding: "4px 6px",
+                  borderRadius: 4,
+                  maxHeight: 160,
+                  overflow: "auto",
+                }}
+              >
+                {tool.resultText}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
 ToolUseChip.displayName = "ToolUseChip";
 
 function formatToolSummary(tool: ChatToolUse): string {
