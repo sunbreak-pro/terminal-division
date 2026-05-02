@@ -461,6 +461,12 @@ export function destroy(id: string): void {
   registry.delete(id);
   // サイズキャッシュのクリーンアップ
   lastSizes.delete(id);
+  // 保留中の pty.resize timer をクリア（破棄済みペインへ resize IPC が飛ぶのを防ぐ）
+  const pending = pendingPtyResizes.get(id);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingPtyResizes.delete(id);
+  }
   // パス履歴バッファのクリーンアップ
   pathBuffers.delete(id);
 }
@@ -521,20 +527,69 @@ export function invalidateLastSize(id: string): void {
   lastSizes.delete(id);
 }
 
+// pty.resize の呼び出しをトレーリング debounce で集約する。
+// 用途: ユーザがペイン境界を drag したり、CSS transition 中に ResizeObserver / Panel.onResize
+// がフレーム単位で発火すると、毎フレーム pty.resize → SIGWINCH → 前面 TUI（Claude CLI 等）
+// が再描画 → 古い描画が scrollback に残るループに入り、長文が縦に大量複製される。
+// xterm 側の reflow（fitAddon.fit / terminal.resize）は即時実行して見た目を維持しつつ、
+// PTY への通知だけ「最終サイズ」に集約することでこの再描画スパムを止める。
+const PTY_RESIZE_DEBOUNCE_MS = 80;
+const pendingPtyResizes = new Map<
+  string,
+  { cols: number; rows: number; timer: ReturnType<typeof setTimeout> }
+>();
+
+function schedulePtyResize(id: string, cols: number, rows: number): void {
+  const existing = pendingPtyResizes.get(id);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    pendingPtyResizes.delete(id);
+    try {
+      window.api.pty.resize(id, cols, rows);
+    } catch {
+      // window.api 未注入のテスト環境では握りつぶす
+    }
+  }, PTY_RESIZE_DEBOUNCE_MS);
+  pendingPtyResizes.set(id, { cols, rows, timer });
+}
+
+// テスト用: pending pty.resize をすべてキャンセルする
+export function cancelPendingPtyResizes(): void {
+  for (const [, entry] of pendingPtyResizes) {
+    clearTimeout(entry.timer);
+  }
+  pendingPtyResizes.clear();
+}
+
 /**
  * Fit terminal to its container
  * @returns サイズが変更された場合は新しいサイズ、変更がない場合はnull
  */
+// 提案サイズがこの cols 未満なら DOM レイアウト過渡状態の異常値とみなして fit を見送る。
+// xterm.js の MINIMUM_COLS=2 まで落ちると scrollback がその cols で破壊的に再 wrap され、
+// 後で広い cols へ戻しても元の見た目には戻らない（reflow がロスを伴うため）。
+const MIN_REASONABLE_COLS = 5;
+
 export function fit(id: string): { cols: number; rows: number } | null {
   const instance = registry.get(id);
   if (!instance) return null;
 
   const tryFit = (): { cols: number; rows: number } | null => {
     try {
+      // proposeDimensions で先に妥当性チェックして、異常値なら fit() を呼ばない。
+      // fit() は内部で terminal.resize を呼んで scrollback を再 wrap するので、
+      // 呼んだ後で「実は cols=2 だった」と判定しても手遅れになる。
+      const proposed = instance.fitAddon.proposeDimensions();
+      if (!proposed) return null;
+      if (!Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) {
+        return null;
+      }
+      if (proposed.cols < MIN_REASONABLE_COLS || proposed.rows <= 0) {
+        return null;
+      }
       instance.fitAddon.fit();
       const cols = instance.terminal.cols;
       const rows = instance.terminal.rows;
-      // 0 / NaN は DOM サイズ不定の兆候。呼び出し側でリトライさせるため null。
       if (!Number.isFinite(cols) || !Number.isFinite(rows)) return null;
       if (cols <= 0 || rows <= 0) return null;
       return { cols, rows };
@@ -556,12 +611,8 @@ export function fit(id: string): { cols: number; rows: number } | null {
           return;
         }
         lastSizes.set(id, retried);
-        // リトライ成功時は呼び出し側に直接返せないので、ここで pty.resize を直接送る
-        try {
-          window.api.pty.resize(id, retried.cols, retried.rows);
-        } catch {
-          // window.api 未注入のテスト環境などで失敗しても致命ではない
-        }
+        // リトライ成功も debounce 経由で集約する（drag 中のスパム抑止）
+        schedulePtyResize(id, retried.cols, retried.rows);
       });
     }
     return null;
@@ -578,6 +629,8 @@ export function fit(id: string): { cols: number; rows: number } | null {
   }
 
   lastSizes.set(id, newSize);
+  // PTY への通知は debounce で集約。caller の重複呼び出しは結果的に最後の 1 回に集約される。
+  schedulePtyResize(id, newSize.cols, newSize.rows);
   return newSize;
 }
 

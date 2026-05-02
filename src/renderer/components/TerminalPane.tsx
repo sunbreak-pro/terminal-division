@@ -84,10 +84,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
     }, [isActive, id]);
 
     const handleFit = useCallback(() => {
-      const result = terminalManager.fit(id);
-      if (result) {
-        window.api.pty.resize(id, result.cols, result.rows);
-      }
+      // pty.resize は terminalManager.fit() 内部で trailing-debounce 経由に集約される。
+      // ここで二重に呼ぶと debounce を素通りして SIGWINCH スパムを再導入してしまうので NG。
+      terminalManager.fit(id);
     }, [id]);
 
     // 直前のオーバーレイ表示状態（md）を保持して、cli への復帰エッジだけを検出する。
@@ -289,8 +288,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
 
     // 設定変更（フォント / カーソル / scrollback 等）に反応して xterm へ再適用する。
     // フォントサイズ系（セルサイズ変動）は applyOptions が fit して pty.resize を発火する。
+    // pty.resize は terminalManager 内部の debounce 経由なので、ここでは結果を握りつぶす。
     useEffect(() => {
-      const result = terminalManager.applyOptions(id, {
+      terminalManager.applyOptions(id, {
         fontFamily: terminalSettings.fontFamily,
         fontSize: effectiveFontSize,
         lineHeight: terminalSettings.lineHeight,
@@ -299,9 +299,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
         scrollback: terminalSettings.scrollback,
         wordSeparator: terminalSettings.wordSeparator,
       });
-      if (result) {
-        window.api.pty.resize(id, result.cols, result.rows);
-      }
     }, [
       id,
       terminalSettings.fontFamily,

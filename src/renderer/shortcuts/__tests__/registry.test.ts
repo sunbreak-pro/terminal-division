@@ -177,8 +177,8 @@ describe("resolveShortcutKey", () => {
     expect(resolveShortcutKey("split-vertical", {})).toBe("Cmd+D");
   });
 
-  it("font-zoom-in default is Cmd+Plus", () => {
-    expect(resolveShortcutKey("font-zoom-in", {})).toBe("Cmd+Plus");
+  it("font-zoom-in default is Cmd+;", () => {
+    expect(resolveShortcutKey("font-zoom-in", {})).toBe("Cmd+;");
   });
 
   it("returns user override when bindings has the id", () => {

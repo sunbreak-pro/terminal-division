@@ -283,15 +283,15 @@ describe("TerminalPane", () => {
     // 初期マウント分の呼び出しをクリアし、md→cli 遷移だけを観察
     mockInvalidateLastSize.mockClear();
     mockFit.mockClear();
-    vi.mocked(window.api.pty.resize).mockClear();
 
     // cli に戻す。React.memo を bypass するため paneNumber も変える
     mockUseTerminalMeta.mockReturnValue(undefined);
     rerender(<TerminalPane id="terminal-1" paneNumber={2} />);
 
+    // pty.resize は terminalManager.fit() 内部で debounce 経由に集約される。
+    // ここでは invalidate + fit が呼ばれることだけ確認する。
     expect(mockInvalidateLastSize).toHaveBeenCalledWith("terminal-1");
     expect(mockFit).toHaveBeenCalledWith("terminal-1");
-    expect(window.api.pty.resize).toHaveBeenCalledWith("terminal-1", 80, 24);
   });
 
   it("does not invalidate when staying in cli mode", () => {

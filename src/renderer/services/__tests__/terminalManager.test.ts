@@ -53,6 +53,8 @@ vi.mock("@xterm/xterm", () => {
 
 vi.mock("@xterm/addon-fit", () => {
   class MockFitAddon {
+    // 妥当な提案を返すよう既定でモックする。テスト側で個別に上書き可能。
+    proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
     fit = vi.fn();
   }
   return { FitAddon: MockFitAddon };
@@ -367,12 +369,16 @@ describe("terminalManager", () => {
           return 0 as unknown as number;
         });
 
+      // pty.resize は debounce 経由なので fake timer で進める
+      vi.useFakeTimers();
       mockPtyApi.resize.mockClear();
       const result = terminalManager.fit("test-fit-retry");
       // 1 回目は例外で null
       expect(result).toBeNull();
-      // rAF リトライで pty.resize が直接呼ばれている
+      // debounce 時間を進めて pty.resize を発火させる
+      vi.advanceTimersByTime(100);
       expect(mockPtyApi.resize).toHaveBeenCalledWith("test-fit-retry", 80, 24);
+      vi.useRealTimers();
       rafSpy.mockRestore();
     });
 
@@ -386,6 +392,123 @@ describe("terminalManager", () => {
       (instance.terminal as unknown as { cols: number; rows: number }).cols = 0;
       const result = terminalManager.fit("test-fit-zero");
       expect(result).toBeNull();
+    });
+
+    it("skips fit when proposeDimensions returns cols below MIN_REASONABLE_COLS", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-fit-tiny",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const proposeMock = instance.fitAddon
+        .proposeDimensions as unknown as ReturnType<typeof vi.fn>;
+      // 過渡状態の極小値を返す → fit を見送り（scrollback の破壊的 reflow を防ぐ）
+      proposeMock.mockReturnValueOnce({ cols: 2, rows: 24 });
+
+      const result = terminalManager.fit("test-fit-tiny");
+      expect(result).toBeNull();
+      // fitAddon.fit は呼ばれない（呼ぶと reflow が走ってしまう）
+      expect(instance.fitAddon.fit).not.toHaveBeenCalled();
+    });
+
+    it("skips fit when proposeDimensions returns undefined", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-fit-undef",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const proposeMock = instance.fitAddon
+        .proposeDimensions as unknown as ReturnType<typeof vi.fn>;
+      proposeMock.mockReturnValueOnce(undefined);
+
+      const result = terminalManager.fit("test-fit-undef");
+      expect(result).toBeNull();
+      expect(instance.fitAddon.fit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pty.resize trailing-debounce", () => {
+    // 再現対象のバグ: drag/transition 中に fit() が連続発火すると pty.resize も
+    // 連続発火 → SIGWINCH スパム → TUI 連続再描画 → scrollback の文章複製。
+    // 修正: 同一 id への連続 fit は最後の 1 回だけが PTY に届く。
+    it("coalesces rapid fit() calls into a single pty.resize (last value wins)", () => {
+      vi.useFakeTimers();
+      const instance = terminalManager.getOrCreate(
+        "test-debounce-coalesce",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const proposeMock = instance.fitAddon
+        .proposeDimensions as unknown as ReturnType<typeof vi.fn>;
+      mockPtyApi.resize.mockClear();
+
+      // 3 回連続で異なるサイズを返させる（drag 中の bouncing を模擬）
+      proposeMock.mockReturnValueOnce({ cols: 60, rows: 24 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        60;
+      terminalManager.fit("test-debounce-coalesce");
+
+      proposeMock.mockReturnValueOnce({ cols: 50, rows: 24 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        50;
+      terminalManager.fit("test-debounce-coalesce");
+
+      proposeMock.mockReturnValueOnce({ cols: 40, rows: 24 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        40;
+      terminalManager.fit("test-debounce-coalesce");
+
+      // debounce 期間中は IPC は飛んでいない
+      expect(mockPtyApi.resize).not.toHaveBeenCalled();
+
+      // debounce 経過後、最終サイズだけが 1 回 IPC される
+      vi.advanceTimersByTime(100);
+      expect(mockPtyApi.resize).toHaveBeenCalledTimes(1);
+      expect(mockPtyApi.resize).toHaveBeenCalledWith(
+        "test-debounce-coalesce",
+        40,
+        24,
+      );
+
+      vi.useRealTimers();
+    });
+
+    it("cancelPendingPtyResizes drops pending IPC", () => {
+      vi.useFakeTimers();
+      terminalManager.getOrCreate(
+        "test-debounce-cancel",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      mockPtyApi.resize.mockClear();
+
+      terminalManager.fit("test-debounce-cancel");
+      terminalManager.cancelPendingPtyResizes();
+
+      vi.advanceTimersByTime(200);
+      expect(mockPtyApi.resize).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+
+    it("destroy() cancels pending pty.resize for that id", () => {
+      vi.useFakeTimers();
+      terminalManager.getOrCreate(
+        "test-debounce-destroy",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      mockPtyApi.resize.mockClear();
+
+      terminalManager.fit("test-debounce-destroy");
+      // debounce 経過前に destroy（ペインを閉じた状況を模擬）
+      terminalManager.destroy("test-debounce-destroy");
+
+      vi.advanceTimersByTime(200);
+      // 破棄済みペインへ pty.resize は飛ばない
+      expect(mockPtyApi.resize).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
     });
   });
 

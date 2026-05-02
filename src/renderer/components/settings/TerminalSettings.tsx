@@ -162,7 +162,7 @@ export const TerminalSettings: React.FC = () => {
             fontSize: "11px",
           }}
         >
-          Cmd+= / Cmd+- でアクティブペインのみ拡縮、Cmd+0
+          Cmd+; / Cmd+- でアクティブペインのみ拡縮、Cmd+0
           でリセット。本設定は新規ペインの初期サイズになります。
         </p>
 

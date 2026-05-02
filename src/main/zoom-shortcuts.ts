@@ -18,19 +18,29 @@ interface ZoomBinding {
   accelerators: string[];
 }
 
-// Cmd+Shift+= が macOS 上で Cmd+= と同一キーコードに正規化される配列があるため
-// 拡大は両方登録する。縮小は "+" の同一視がない一方、JIS や IME 環境で "_"
-// (Shift+-) を押す利用者もいるので両方拾う。
+// 拡大は Cmd+; のみ。縮小は Cmd+- のみ。
 const BINDINGS: ZoomBinding[] = [
   {
     channel: "font-zoom:in",
-    accelerators: ["CommandOrControl+=", "CommandOrControl+Shift+="],
+    accelerators: ["CommandOrControl+;"],
   },
   {
     channel: "font-zoom:out",
-    accelerators: ["CommandOrControl+-", "CommandOrControl+Shift+-"],
+    accelerators: ["CommandOrControl+-"],
   },
   { channel: "font-zoom:reset", accelerators: ["CommandOrControl+0"] },
+];
+
+// Chromium のデフォルトズームショートカットを抑制するためのキー一覧。
+// これらは Chromium が prePerformKeyEquivalent: で webFrame zoom を勝手に発火する。
+// no-op の globalShortcut として登録することで、OS レベルで先取り消費させて
+// Chromium まで届かないようにする。これがないと Cmd+_ / Cmd+= 等が裏で
+// アプリ全体ズームを動かしてしまう（ユーザー要望: これらのキーを完全に無効化）。
+const SUPPRESS_ACCELERATORS: string[] = [
+  "CommandOrControl+=",
+  "CommandOrControl+Plus",
+  "CommandOrControl+Shift+=",
+  "CommandOrControl+Shift+-",
 ];
 
 const REGISTERED: string[] = [];
@@ -61,6 +71,17 @@ function registerAll(): void {
       } catch (e) {
         console.warn("[zoom-shortcut] register exception:", acc, e);
       }
+    }
+  }
+  // Chromium デフォルトの抑制（no-op コールバック）
+  for (const acc of SUPPRESS_ACCELERATORS) {
+    try {
+      const ok = globalShortcut.register(acc, () => {
+        // 意図的に何もしない（Chromium デフォルトを食い止めるためだけに register する）
+      });
+      if (ok) REGISTERED.push(acc);
+    } catch {
+      // 抑制登録失敗は致命ではない
     }
   }
 }

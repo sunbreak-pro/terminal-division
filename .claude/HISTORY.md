@@ -1,5 +1,52 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-02 - ズーム / split / scrollback 連鎖バグ修正（pty.resize debounce + Chromium 抑制）
+
+#### 概要
+
+ユーザー報告の 3 連続バグを根本原因まで掘り下げて修正。(1)「Cmd+\_ がまだ縮小として効く」: globalShortcut で intercept しないキーは Chromium が `prePerformKeyEquivalent:` で webFrame zoom として消費するため、`Cmd+= / Cmd+Plus / Cmd+Shift+= / Cmd+Shift+-` を no-op の SUPPRESS_ACCELERATORS として登録して抑制。フォントズームのアクティブショートカットは `Cmd+;`（拡大）と `Cmd+-`（縮小）と `Cmd+0`（リセット）の 3 つのみに整理。(2)「分割直後にスクロールバックが 2 文字幅で表示される」: `react-resizable-panels` を v2.1.7 → v4.5.9 にアップグレードした際の API 変更（数値 = ピクセル化）に追従漏れがあり、`defaultSize={50}` が 50% ではなく 50 ピクセルとして解釈されていた。`defaultSize="50%"` / `minSize="10%"` の percent string に修正。さらに `terminalManager.fit()` に `proposeDimensions()` の事前検証を追加し、`MIN_REASONABLE_COLS=5` 未満の異常値では `fitAddon.fit()` を呼ばない（呼ぶと scrollback が破壊的に reflow されて元に戻らない）。(3)「長文中に同じ文章が一つのパネル内に複数縦に並ぶ」: ペイン境界 drag や CSS transition で Panel.onResize / ResizeObserver がフレーム単位で発火し、毎フレーム `pty.resize` IPC → SIGWINCH → TUI（Claude CLI 等）が連続再描画 → 古い描画が scrollback に積層する SIGWINCH スパムが原因。`terminalManager.ts` に PTY 専用の trailing-debounce（80ms）を新設し、`fit()` 内部で `schedulePtyResize` を呼ぶ集中管理に切替。caller 側の `window.api.pty.resize` 二重呼び出し（TerminalPane.handleFit / applyOptions / SplitContainer.handlePanelResize）を撤去。`destroy(id)` でも保留中 timer をクリアして破棄済みペインへの IPC 漏洩を防止。テスト合計 33 ファイル / 484 件グリーン（修正前 479 から +5 件: proposeDimensions ガード 2 件 / pty.resize debounce 集約 + cancel + destroy クリーンアップ 3 件）。
+
+#### 変更点
+
+- **src/main/zoom-shortcuts.ts**: BINDINGS を `{ font-zoom:in: ["CommandOrControl+;"], font-zoom:out: ["CommandOrControl+-"], font-zoom:reset: ["CommandOrControl+0"] }` に統一。`SUPPRESS_ACCELERATORS = ["CommandOrControl+=", "CommandOrControl+Plus", "CommandOrControl+Shift+=", "CommandOrControl+Shift+-"]` を新設し、`registerAll()` 内で no-op コールバックの globalShortcut として登録 → OS レベルで先取り消費して Chromium のデフォルトズームに到達させない。`unregisterAll()` は SUPPRESS 分も REGISTERED に積んであるため自動的にクリーンアップされる
+- **src/renderer/shortcuts/registry.ts**: `font-zoom-in` の defaultKey を `"Cmd+Plus"` → `"Cmd+;"` に変更。`Cmd+Plus` 用に書かれていた Shift 省略コメントを削除
+- **src/renderer/App.tsx**: 早期 keydown ハンドラの `isZoomIn` マッチ条件を `e.key === "+" || (e.shiftKey && e.code === "Equal/Semicolon")` から `!e.shiftKey && (e.key === ";" || e.code === "Semicolon")` に書き換え。`Cmd+;` 単発の検出に純化
+- **src/renderer/components/SplitContainer.tsx**: `<Panel minSize={10} defaultSize={100 / children.length}>` を `<Panel minSize="10%" defaultSize={`${100 / children.length}%`}>` に修正（v4 で number = px、string = % という新仕様に追従）。`handlePanelResize` から `window.api.pty.resize(panelId, ...)` を撤去（`terminalManager.fit()` 内部の debounce で集約）
+- **src/renderer/services/terminalManager.ts**:
+  - 定数 `MIN_REASONABLE_COLS = 5` を新設。`fit()` の `tryFit()` 内で `fitAddon.proposeDimensions()` を先に呼んで cols/rows を検証し、`cols < MIN_REASONABLE_COLS || rows <= 0` のときは `fitAddon.fit()` を呼ばずに null 返却（scrollback の破壊的 reflow を防止）
+  - `PTY_RESIZE_DEBOUNCE_MS = 80` と `pendingPtyResizes: Map<id, { cols, rows, timer }>` を新設。`schedulePtyResize(id, cols, rows)` で既存予約を `clearTimeout` してから `setTimeout` で再スケジュール → 連続発火しても最終サイズだけが PTY に届く
+  - `fit()` 内のサイズ変化判定後（または rAF retry 成功後）で `schedulePtyResize` を呼ぶよう変更。これにより caller が `window.api.pty.resize` を直接呼ばなくても自動的に PTY に伝わる
+  - `destroy(id)` で `pendingPtyResizes.get(id)` を `clearTimeout` + `delete`（破棄済みペインへの IPC 漏洩防止）
+  - テスト用 export `cancelPendingPtyResizes()` を追加
+- **src/renderer/components/TerminalPane.tsx**:
+  - `handleFit` から `window.api.pty.resize(id, result.cols, result.rows)` を撤去。`terminalManager.fit(id)` のみに簡略化（重複呼び出しは debounce を素通りして SIGWINCH スパムを再導入するため NG）
+  - `applyOptions` の戻り値を握りつぶし、その後の `window.api.pty.resize` も撤去
+- **src/renderer/components/settings/TerminalSettings.tsx**: 説明テキストを「`Cmd+= / Cmd+-` でアクティブペインのみ拡縮」→「`Cmd+; / Cmd+-` でアクティブペインのみ拡縮」に変更
+- **新規テスト 5 件 (`renderer/services/__tests__/terminalManager.test.ts`)**:
+  - `skips fit when proposeDimensions returns cols below MIN_REASONABLE_COLS`: 提案 cols=2 のときは `fitAddon.fit()` が呼ばれず null 返却
+  - `skips fit when proposeDimensions returns undefined`: undefined 提案でも安全に null 返却
+  - `coalesces rapid fit() calls into a single pty.resize (last value wins)`: 異なる 3 サイズで連続 `fit()` → debounce 中は IPC 0 件 / 80ms 経過後に最終サイズ 1 件のみ IPC される
+  - `cancelPendingPtyResizes drops pending IPC`: pending を明示的にキャンセルすると 200ms 経過しても IPC されない
+  - `destroy() cancels pending pty.resize for that id`: debounce 経過前に destroy → タイマーが解除され破棄済み id への IPC が飛ばない
+- **既存テスト更新**:
+  - `MockFitAddon` に `proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }))` を追加（既定で妥当な提案を返す）
+  - `terminalManager` の rAF retry テストを fake timers に切替えて 100ms 進めて `pty.resize` の呼び出しを検証
+  - `SplitContainer.test.tsx` / `TerminalPane.test.tsx`: 「fit + 直 IPC」検証から「invalidate + fit のみ呼ばれる」検証に書き換え（pty.resize は terminalManager 内部の debounce 経由になったため、コンポーネント層では検証しない）
+  - `registry.test.ts`: `font-zoom-in default is Cmd+Plus` → `Cmd+;` に更新
+- **テスト合計**: 33 ファイル / 484 件グリーン（修正前 479 から +5 件）+ `npm run build` 通過
+- **設計判断**:
+  - **Chromium デフォルトズーム抑制を SUPPRESS_ACCELERATORS でやる根拠**: Electron の `webContents.setVisualZoomLevelLimits` は pinch zoom 専用で、キーボードショートカットには効かない。`before-input-event` で `preventDefault` する手もあるが、Chromium は `prePerformKeyEquivalent:` でこれより前にズームを発火する。OS レベルの globalShortcut は最も早い経路に乗り、no-op コールバックを置くだけで Chromium への到達を遮断できる
+  - **`Cmd+;` 単発を拡大に選んだ理由**: ユーザー要望「`Cmd+Shift+; / Cmd+Shift+=` の 2 候補を `Cmd+;` 一つだけにして」に従う。Shift なしの `;` キー単体は `Plus` キーと違って US/JIS の差を受けず一意で、`Cmd+,`（設定）の隣で運指も近い。Chromium のデフォルトとも衝突しない
+  - **`react-resizable-panels` v4 で number→px に変わった経緯**: v2/v3 は `defaultSize={50}` を 50% として解釈していたが、v4 で「数値 = px」「文字列 = %」と仕様変更された（CSS の他単位 `rem`/`vh` 対応のため）。マイグレーションガイドを見落としていたため `defaultSize={50}` が 50px として解釈され、splitter 直後にペイン幅が 50px → xterm fit-addon が `MINIMUM_COLS=2` までクランプ → scrollback が破壊的に再 wrap される連鎖が起きていた
+  - **`MIN_REASONABLE_COLS=5` 未満で fitAddon.fit を見送る理由**: xterm の MINIMUM_COLS=2 まで落ちると `terminal.resize(2, rows)` がそのまま走って scrollback が 2 文字幅で再 wrap される。reflow はロスを伴うため、後で広い cols に戻しても元の見た目には戻らない（80 文字行が 40 行 × 2 文字に分割されたまま固着）。`proposeDimensions()` で先に検証して `fitAddon.fit()` 自体を呼ばないことが正しい防御
+  - **PTY resize の trailing-debounce を 80ms に設定**: drag-resize の体感的な「区切り」（指がやや止まる瞬間）が 50〜100ms 程度。80ms は: (a) drag 中の連続発火を確実に集約、(b) drag 終了後の最終 SIGWINCH を素早く届ける、のバランス。長すぎると release 後にカーソル位置がしばらく古い cols のまま残る違和感が出る
+  - **xterm 側 reflow は即時 / PTY 側 SIGWINCH は debounce の二段構え**: xterm の `terminal.resize()`（fitAddon.fit 内部）は即時実行して見た目をスムーズに追従させ、PTY への通知だけ集約する。これにより drag 中の視覚的レスポンスは保ちつつ、TUI（Claude CLI / Vim 等）の連続再描画を防げる。debounce 中の 80ms 間は xterm.cols=40 / PTY.cols=80 の不整合があるが、PTY からの出力を xterm が wrap するだけなので実害なし
+  - **caller 側の `window.api.pty.resize` を撤去した理由**: `fit()` 内部で `schedulePtyResize` を呼ぶ仕様にしたあと、caller が直接 `window.api.pty.resize` を呼ぶと debounce を素通りして SIGWINCH スパムが復活する。「fit を呼んだら pty も resize される」という単一責務に統一し、TerminalPane.handleFit / applyOptions / SplitContainer.handlePanelResize の 3 箇所から重複呼び出しを撤去
+  - **`destroy(id)` で pendingPtyResizes をクリアする根拠**: ペイン close 直後にまだ debounce が経過していない pty.resize が残っていると、`window.api.pty.resize(deadId, ...)` が main プロセスへ飛ぶ。Main 側は知らない id を握りつぶすだけだが、IPC リソースの無駄遣い + ログノイズ + 将来 main 側で warn を出すようにすると誤報になる。同 destroy 内で `lastSizes.delete(id)` / `pathBuffers.delete(id)` をしているのと同じ性質のクリーンアップ
+  - **`pty.create` 直後の初期 resize は debounce 経由にしない**: TerminalPane の pty.create flow にある `window.api.pty.resize(id, cols, rows)` は startup の one-shot で、direct 呼び出しのまま残した。これは「PTY が初期出力を流す前に正しい cols を知っておく必要がある」一種の同期点で、80ms 遅らせると zsh 起動メッセージが小さい cols（24 cols のシェルデフォルト）で wrap されるため。fit 経由ではないので新 debounce path とは独立に動く
+  - **テスト書き換えの方針**: SplitContainer / TerminalPane の責務が「fit を呼ぶ」までになったので、コンポーネント層では `pty.resize` を検証しない。`pty.resize` の挙動は `terminalManager.test.ts` でドメインごとにカバー（debounce coalesce / cancel / destroy）。これにより責務境界が tests に反映され、将来 caller を増やしても terminalManager 側のテストでデバウンスが担保される
+  - **既知の Issue #002（scrollback cols 不整合）との関係**: 2026-04-27 のフィックスでは「fit が呼ばれない経路」を 5 つ塞いだが、今回見つかった「fit が**呼ばれすぎる**経路」は対角線の問題。`MIN_REASONABLE_COLS` ガード + pty.resize debounce で双方向の防御が揃う
+
 ### 2026-05-02 - Chat UI 完全廃止（T3-5 撤回）
 
 #### 概要
@@ -179,41 +226,7 @@ T3-5 Claude Code Chat UI を MVP として完成させ、同時に Markdown エ�
   - Verification: 機能受入 12 項目（自動切替 / 会話継続 / ストリーミング / IME 誤送信防止 / プロセスリーク無し / 64KB + 100 件メッセージのパフォーマンス受入）
 - **MEMORY.md（予定）**: T3-5（候補） Claude Code Chat UI in Pane を追加（計画書リンク + Phase 0 着手待ちの注記）
 
-### 2026-04-29 - ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整
-
-#### 概要
-
-ターミナル出力に流れた `~/dev/apps/terminal-division/README.md` のような Markdown ファイルパスを Cmd/Ctrl + クリックで開けるようにした。クリックされたパスがアクティブペインの CWD 配下なら確認なしで直接そのペインで開き、CWD 外なら確認ダイアログを出して既存ペイン or 新規パネルを選択させる。あわせて Sidebar からの「編集する」ダイアログにも「+ 新規パネルを作成」を選択肢として追加し、`splitTerminal` で分割した新ペインに開けるようにした。Markdown オープン処理は `services/markdownOpenService.ts` に集約し、Sidebar / Terminal の両起点が共通フローを使う構成。UI 改善として、ペインヘッダーの番号フォントが大きすぎる問題を是正し、`settings.terminal.fontSize` 追従の同寸 + アクセントカラーのみで強調する形に変更（fontWeight 700 を撤去）。
-
-#### 変更点
-
-- **新規 utils/markdownPath.ts**: 1 行から MD パスを検出する純粋関数群。`findMarkdownPaths(line)` が `~/foo.md` / `/abs/foo.md` / `./foo.md` / `dir/foo.md` / `README.md` を検出し、`http(s)://...md` 範囲とは重ならないよう URL を先抽出して除外。末尾装飾文字（`,` `.` `:` `;` `)`）を剥がし、同一範囲の重複マッチは長い方を残す。`resolveMarkdownPath(raw, cwd, home)` でチルダ展開 / 相対 (`./` `../`) 解決 / 絶対パス normalize（`..` のスタック解消、ルート越え禁止）。`isInsideCwd(abs, cwd)` は区切り境界を厳密判定（`/work-foo` を `/work` の配下とは判定しない）
-- **新規 services/markdownOpenService.ts**: Markdown オープン処理の集約サービス。`requestEditMarkdownFromTerminal(absPath, paneId)` は CWD 配下なら確認なしで直接開き、配下外なら `showOpenConfirm` で確認ダイアログ（`allowCreateNewPane: true` 付き）。`requestEditMarkdownFromSidebar(filePath, paneId)` は常にダイアログ。`NEW_PANE_CHOICE = "__new__"` sentinel が選ばれたら `splitTerminal(originatingPaneId, "horizontal")` で分割し、新ペイン id を `useTerminalStore.getState().activeTerminalId` 経由で取得して `openMarkdown` を発火。`canSplit()` 失敗時 / dirty MD 編集中は既存パターンで unsaved 警告を経由
-- **terminalManager.ts (link provider)**: `terminal.registerLinkProvider({ provideLinks })` を追加し、各 buffer 行で `findMarkdownPaths` を呼んで `ILink[]` を返す。`x` は 1-based、`y` は IBuffer の 1-based 行番号（`getLine(bufferLineNumber - 1)` で 0-based 配列にアクセス）。`activate(event, raw)` で Cmd/Ctrl 押下時のみ `event.preventDefault()` + コールバック発火。`TerminalCallbacks` に `onMarkdownLinkClick?: (raw: string) => void` を追加
-- **TerminalPane.tsx**: `getOrCreate` に `onMarkdownLinkClick` を渡す。コールバック内で自ペインの `meta.cwd` と `window.api.system.getHomeDir()` を取得し、`resolveMarkdownPath` で絶対パスに解決してから `requestEditMarkdownFromTerminal(abs, id)` を呼ぶ。解決失敗時は toast 表示
-- **markdownDialogStore.ts**: `OpenConfirmRequest.allowCreateNewPane?: boolean` を追加。true のとき OpenMarkdownModal が「新規パネルを作成」を選択肢として表示し、選択時には `onConfirm("__new__")` が呼ばれる規約
-- **OpenMarkdownModal.tsx**: `allowCreateNewPane` prop を追加。`<select>` に `+ 新規パネルを作成`（value=`__new__`）option を末尾に追加。`allowCreateNewPane=true` のときはペインが 1 つしか無くても select UI を表示。番号のみ表示時のフォントサイズも 32px → 16px に縮小（`PaneSelect` 共通の見た目を整理）。NEW_PANE_SENTINEL は markdownOpenService の `NEW_PANE_CHOICE` と一致
-- **App.tsx**: 旧 `handleRequestEditMarkdown` の本体を `requestEditMarkdownFromSidebar` に置換し、`openMarkdownInPane` ローカル定義 + `collectPaneIdsInOrder` import を撤去（サービスへ移管）。`<OpenMarkdownModal>` に `allowCreateNewPane={dialogRequest.allowCreateNewPane}` を配線
-- **TerminalSubHeader.tsx**: ペイン番号 span のスタイルを `fontSize: "13px" + fontWeight: 700` から `fontSize: ${terminalSettings.fontSize}px`（設定追従、デフォルト 13px）+ fontWeight 撤去 に変更。強調はアクセントカラーのみ。`useTerminalSettings` を新規 import
-- **新規テスト 38 件**:
-  - `utils/__tests__/markdownPath.test.ts` (22): 絶対 / チルダ / 相対 / 単独ファイル / `.markdown` / case-insensitive / 末尾装飾 / URL 除外 / 複数マッチ / `.txt` 不一致 / `~` 単独 / 絶対 normalize / 相対 cwd 解決 / cwd null フォールバック / home 空フォールバック / `..` ルート越え禁止 / isInsideCwd 等価 / 配下 / 配下外 / `/work-foo` 境界判定 / cwd null
-  - `services/__tests__/markdownOpenService.test.ts` (9): CWD 内なら no-dialog で直接 open / CWD 外なら `allowCreateNewPane: true` ダイアログ / cwd 不明時はフォールバックでダイアログ / 非 .md 防衛無視 / dirty MD で unsaved 警告 / Sidebar 起動は常にダイアログ / Sidebar 非 .md 防衛 / `NEW_PANE_CHOICE` で `splitTerminal("p1", "horizontal")` 発火 / `canSplit=false` で分割中止
-  - `components/__tests__/OpenMarkdownModal.test.tsx` (7): `isOpen=false` で非表示 / 確認で `onConfirm(defaultPaneId)` / ESC で `onCancel` / デフォルトは新規オプション非表示 / `allowCreateNewPane` で表示 / `__new__` を選んだら sentinel が onConfirm に渡る / 1 ペイン時も新規許可なら select 表示
-- **既存テスト更新**: `services/__tests__/terminalManager.test.ts` の MockTerminal に `registerLinkProvider` / `onBell` プロパティを追加（前 commit で抜けていた link provider 用 mock を補完）
-- **テスト合計**: 32 ファイル / 454 件グリーン（修正前 416 から +38 件）
-- **設計判断**:
-  - **「current 配下なら確認なし、配下外なら確認」のヒューリスティック**: 大半の場面（`cd ~/proj && cat README.md` のように開きたい）で確認ダイアログがクリックを 2 段階にして体験を悪化させる。一方、別プロジェクトの `.md` を不意に同ペインで開くと現在編集中のものを潰すリスクがある。`isInsideCwd` で区切り境界を厳密判定し、明らかな「同じプロジェクト」だけ直接開く設計
-  - **CWD 解決を起点ペイン基準に**: 相対パス（`README.md` / `./foo.md` / `dir/foo.md`）はクリックされた xterm 行が描画されているペインの CWD で resolve する。複数ペインで同じプロジェクトを開いていても、各ペインの CWD でローカル解決される
-  - **xterm `registerLinkProvider` を使う（WebLinks と分離）**: WebLinksAddon は URL のみで MD パスを拾わない。`registerLinkProvider` は同一行に複数のリンクを共存可能で、URL は WebLinks、MD パスは独自プロバイダで責務分離。`findMarkdownPaths` 内で URL 範囲との重複を除外することで両者の重なりを防ぐ
-  - **`activate` で `event.preventDefault()` を Cmd/Ctrl のときだけ呼ぶ**: 通常クリックのデフォルト動作（テキスト選択開始など）は妨げない。WebLinks と同じパターン
-  - **MD オープン処理を service に集約**: 旧 App.tsx の `handleRequestEditMarkdown` は 50 行超で複雑だった（dirty 判定 → unsaved 警告 → 通常ダイアログ → readFile → openMarkdown）。Sidebar / Terminal 双方が同じフローを必要とするため、`markdownOpenService` に切り出し App.tsx を簡素化。テストも service 単体で routing 判定をカバーできる
-  - **`__new__` sentinel 方式 vs callback 直接呼出**: OpenMarkdownModal の onConfirm シグネチャを `(paneId: string)` のまま保ち、特殊値で「新規」を表現する形に。signature を `(choice: string | { create: true })` 等に拡張すると既存テストや消費側の型変更が広がるため、sentinel + ドキュメント明示が局所影響で済む
-  - **`splitTerminal` の戻り値ではなく `activeTerminalId` 経由で新ペイン取得**: 既存 `splitTerminal` は `boolean` を返す API なのでシグネチャを変更しない。`splitTerminal` 内で `activeTerminalId` を新ペインに設定する既存挙動（terminalStore.ts:108）に依存する。Zustand の更新は同期なので `getState()` 直後に新 id が読める
-  - **新規ペイン分割方向を horizontal 固定**: 「縦並び（左右）と横並び（上下）」のどちらでも一長一短だが、Markdown は縦に長いことが多く、縦に並べるよりは横に並べる方がプレビューと作業ターミナルを両立しやすい。`SplitDirection.horizontal` = pane を horizontal な分割線で分ける = 上下 2 ペイン
-  - **ペイン番号のフォントを設定追従に**: 旧実装の `13px + fontWeight 700` は SubHeader の周囲（12px 通常）と比べて顕著に大きく、視覚ノイズになっていた。`terminalSettings.fontSize` を参照することで、ユーザーがフォントを大きくすればペイン番号も比例して大きくなる「整合した拡縮」が成立する。強調は accent カラーのみで完結（数字は元々 tabular-nums で揃っているため bold が無くても識別性は十分）
-  - **`PaneSelect` の番号のみ表示も縮小（32px → 16px）**: 旧実装では「ペインが 1 つだけ」のときのモーダル内表示が 32px の巨大数字でうるさかった。<select> 表示時の 14px 系と同寸感に揃える
-
-> 2026-05-02 ローリングアーカイブ: 「T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
+> 2026-05-02 ローリングアーカイブ: 「T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）」「ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 #### 変更点
 

@@ -478,11 +478,11 @@ const App: React.FC = () => {
           "font-zoom-reset",
           earlyBindings,
         );
-        // 拡大: Plus の物理キー（US: Equal+Shift, JIS: Semicolon+Shift）または e.key="+"
+        // 拡大: Cmd+; （Shift なし、";" キー単体）。
         const isZoomIn =
           zoomInKey !== null &&
-          (e.key === "+" ||
-            (e.shiftKey && (e.code === "Equal" || e.code === "Semicolon")));
+          !e.shiftKey &&
+          (e.key === ";" || e.code === "Semicolon");
         // 縮小: Shift なしで Minus の物理キー or "-" 文字 or 旧 keyCode 189
         // 旧 keyCode 189 を含めることで IME / 配列違いで e.key/e.code が想定外でも拾う
         const isZoomOut =

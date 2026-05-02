@@ -2,6 +2,27 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-29 - ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整
+
+#### 概要
+
+ターミナル出力に流れた `~/dev/apps/terminal-division/README.md` のような Markdown ファイルパスを Cmd/Ctrl + クリックで開けるようにした。クリックされたパスがアクティブペインの CWD 配下なら確認なしで直接そのペインで開き、CWD 外なら確認ダイアログを出して既存ペイン or 新規パネルを選択させる。あわせて Sidebar からの「編集する」ダイアログにも「+ 新規パネルを作成」を選択肢として追加し、`splitTerminal` で分割した新ペインに開けるようにした。Markdown オープン処理は `services/markdownOpenService.ts` に集約し、Sidebar / Terminal の両起点が共通フローを使う構成。UI 改善として、ペインヘッダーの番号フォントが大きすぎる問題を是正し、`settings.terminal.fontSize` 追従の同寸 + アクセントカラーのみで強調する形に変更（fontWeight 700 を撤去）。
+
+#### 変更点
+
+- **新規 utils/markdownPath.ts**: 1 行から MD パスを検出する純粋関数群。`findMarkdownPaths(line)` が `~/foo.md` / `/abs/foo.md` / `./foo.md` / `dir/foo.md` / `README.md` を検出し、`http(s)://...md` 範囲とは重ならないよう URL を先抽出して除外。末尾装飾文字（`,` `.` `:` `;` `)`）を剥がし、同一範囲の重複マッチは長い方を残す。`resolveMarkdownPath(raw, cwd, home)` でチルダ展開 / 相対 (`./` `../`) 解決 / 絶対パス normalize（`..` のスタック解消、ルート越え禁止）。`isInsideCwd(abs, cwd)` は区切り境界を厳密判定（`/work-foo` を `/work` の配下とは判定しない）
+- **新規 services/markdownOpenService.ts**: Markdown オープン処理の集約サービス。`requestEditMarkdownFromTerminal(absPath, paneId)` は CWD 配下なら確認なしで直接開き、配下外なら `showOpenConfirm` で確認ダイアログ（`allowCreateNewPane: true` 付き）。`requestEditMarkdownFromSidebar(filePath, paneId)` は常にダイアログ。`NEW_PANE_CHOICE = "__new__"` sentinel が選ばれたら `splitTerminal(originatingPaneId, "horizontal")` で分割し、新ペイン id を `useTerminalStore.getState().activeTerminalId` 経由で取得して `openMarkdown` を発火。`canSplit()` 失敗時 / dirty MD 編集中は既存パターンで unsaved 警告を経由
+- **terminalManager.ts (link provider)**: `terminal.registerLinkProvider({ provideLinks })` を追加し、各 buffer 行で `findMarkdownPaths` を呼んで `ILink[]` を返す。`x` は 1-based、`y` は IBuffer の 1-based 行番号（`getLine(bufferLineNumber - 1)` で 0-based 配列にアクセス）。`activate(event, raw)` で Cmd/Ctrl 押下時のみ `event.preventDefault()` + コールバック発火。`TerminalCallbacks` に `onMarkdownLinkClick?: (raw: string) => void` を追加
+- **TerminalPane.tsx**: `getOrCreate` に `onMarkdownLinkClick` を渡す。コールバック内で自ペインの `meta.cwd` と `window.api.system.getHomeDir()` を取得し、`resolveMarkdownPath` で絶対パスに解決してから `requestEditMarkdownFromTerminal(abs, id)` を呼ぶ。解決失敗時は toast 表示
+- **markdownDialogStore.ts**: `OpenConfirmRequest.allowCreateNewPane?: boolean` を追加。true のとき OpenMarkdownModal が「新規パネルを作成」を選択肢として表示し、選択時には `onConfirm("__new__")` が呼ばれる規約
+- **OpenMarkdownModal.tsx**: `allowCreateNewPane` prop を追加。`<select>` に `+ 新規パネルを作成`（value=`__new__`）option を末尾に追加。`allowCreateNewPane=true` のときはペインが 1 つしか無くても select UI を表示。番号のみ表示時のフォントサイズも 32px → 16px に縮小（`PaneSelect` 共通の見た目を整理）。NEW_PANE_SENTINEL は markdownOpenService の `NEW_PANE_CHOICE` と一致
+- **App.tsx**: 旧 `handleRequestEditMarkdown` の本体を `requestEditMarkdownFromSidebar` に置換し、`openMarkdownInPane` ローカル定義 + `collectPaneIdsInOrder` import を撤去（サービスへ移管）。`<OpenMarkdownModal>` に `allowCreateNewPane={dialogRequest.allowCreateNewPane}` を配線
+- **TerminalSubHeader.tsx**: ペイン番号 span のスタイルを `fontSize: "13px" + fontWeight: 700` から `fontSize: ${terminalSettings.fontSize}px`（設定追従、デフォルト 13px）+ fontWeight 撤去 に変更。強調はアクセントカラーのみ。`useTerminalSettings` を新規 import
+- **新規テスト 38 件**: utils/**tests**/markdownPath.test.ts (22)、services/**tests**/markdownOpenService.test.ts (9)、components/**tests**/OpenMarkdownModal.test.tsx (7)
+- **既存テスト更新**: terminalManager.test.ts の MockTerminal に registerLinkProvider / onBell プロパティを追加
+- **テスト合計**: 32 ファイル / 454 件グリーン（修正前 416 から +38 件）
+- **設計判断**: 「CWD 配下なら確認なし、配下外なら確認」のヒューリスティック（`isInsideCwd` で区切り境界厳密判定）、CWD 解決を起点ペイン基準に、xterm `registerLinkProvider` を使い WebLinks と分離、`activate` で Cmd/Ctrl 押下時のみ preventDefault、MD オープン処理を service に集約、`__new__` sentinel 方式で onConfirm シグネチャ温存、`activeTerminalId` 経由で新ペイン id 取得、新規ペイン分割方向 horizontal 固定、ペイン番号フォントを設定追従に、PaneSelect 番号のみ表示も 32px → 16px に縮小
+
 ### 2026-04-29 - T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）
 
 #### 概要

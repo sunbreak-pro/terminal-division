@@ -39,10 +39,10 @@ const SplitContainer: React.FC = React.memo(() => {
       if (typeof panelId !== "string") return;
       if (!paneNumberMap.has(panelId)) return;
       terminalManager.invalidateLastSize(panelId);
-      const result = terminalManager.fit(panelId);
-      if (result) {
-        window.api.pty.resize(panelId, result.cols, result.rows);
-      }
+      // pty.resize は terminalManager.fit() 内部で trailing-debounce 経由に集約。
+      // ここで明示的に呼ぶと drag 中に毎フレーム SIGWINCH が走り、TUI が連続再描画して
+      // scrollback が前回描画で汚染される（同じ文章が縦に大量複製される現象）。
+      terminalManager.fit(panelId);
     },
     [paneNumberMap],
   );
@@ -89,8 +89,8 @@ const SplitContainer: React.FC = React.memo(() => {
                 <React.Fragment key={childId}>
                   <Panel
                     id={childId}
-                    minSize={10}
-                    defaultSize={100 / splitNode.children.length}
+                    minSize="10%"
+                    defaultSize={`${100 / splitNode.children.length}%`}
                     onResize={handlePanelResize}
                   >
                     {renderNode(childId)}

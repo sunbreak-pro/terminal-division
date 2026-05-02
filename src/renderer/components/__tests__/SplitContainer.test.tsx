@@ -274,7 +274,7 @@ describe("SplitContainer", () => {
     panelOnResizeMap.clear();
     mockFit.mockReset();
     mockFit.mockReturnValue({ cols: 100, rows: 30 });
-    vi.mocked(window.api.pty.resize).mockClear();
+    mockInvalidateLastSize.mockClear();
 
     render(<SplitContainer />);
 
@@ -287,8 +287,10 @@ describe("SplitContainer", () => {
       inPixels: 480,
     });
 
+    // pty.resize は terminalManager.fit() 内部で debounce 経由に集約される。
+    // SplitContainer 側は invalidate + fit を呼ぶことだけが責務。
+    expect(mockInvalidateLastSize).toHaveBeenCalledWith("terminal-1");
     expect(mockFit).toHaveBeenCalledWith("terminal-1");
-    expect(window.api.pty.resize).toHaveBeenCalledWith("terminal-1", 100, 30);
   });
 
   it("Panel.onResize ignored when fit() returns null (size unchanged)", () => {
@@ -301,13 +303,10 @@ describe("SplitContainer", () => {
     panelOnResizeMap.clear();
     mockFit.mockReset();
     mockFit.mockReturnValue(null);
-    vi.mocked(window.api.pty.resize).mockClear();
 
     render(<SplitContainer />);
 
-    // 葉ペインがルートの場合は Panel が作られないので、ここでは
-    // 「葉以外（split node）の id は paneNumberMap に無い」ケースを別途検証
-    // Panel が存在しなくても何も呼ばれないことだけを確認する
-    expect(window.api.pty.resize).not.toHaveBeenCalled();
+    // 葉ペインがルートの場合は Panel が作られないので、fit も呼ばれない
+    expect(mockFit).not.toHaveBeenCalled();
   });
 });

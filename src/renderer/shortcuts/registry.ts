@@ -204,10 +204,8 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   {
     id: "font-zoom-in",
     category: "Font",
-    // "+" は Shift を伴って入力されるが、ショートカット表記としては
-    // Shift を含めず "Cmd+Plus"（表示は "⌘ +"）で統一する。JIS / US 両対応。
     label: "フォントを拡大（アクティブペイン）",
-    defaultKey: "Cmd+Plus",
+    defaultKey: "Cmd+;",
   },
   {
     id: "font-zoom-out",
