@@ -21,14 +21,7 @@ export type SerializedNode = SerializedTerminalPane | SerializedSplitNode;
 
 export interface SerializedMeta {
   cwd: string | null;
-  // 開かれていた MD タブの絶対パス配列（順序を保持）。最大 8 件。
-  // 復元時は各タブが MarkdownEditor の mount で個別に IPC でファイル内容を読み込む。
-  // dirty 状態は永続化対象外。空配列 / 未指定どちらも許容する。
-  mdTabFilePaths?: string[];
 }
-
-// 1 ペインで開ける MD タブの最大数（terminalMetaStore.MD_TABS_MAX と一致）。
-export const SESSION_STATE_MAX_MD_TABS = 8;
 
 export interface SerializedLayout {
   version: 1;
@@ -132,25 +125,11 @@ export function validateSerializedLayout(
     if (!meta || typeof meta !== "object") return null;
     const m = meta as Record<string, unknown>;
     if (!(m.cwd === null || typeof m.cwd === "string")) return null;
-    // mdTabFilePaths（任意）の検証: 文字列配列 / 最大 8 件 / 各要素は非空
-    let mdTabFilePaths: string[] | undefined = undefined;
-    if (m.mdTabFilePaths !== undefined) {
-      if (!Array.isArray(m.mdTabFilePaths)) return null;
-      if (m.mdTabFilePaths.length > SESSION_STATE_MAX_MD_TABS) return null;
-      const filtered: string[] = [];
-      for (const fp of m.mdTabFilePaths) {
-        if (typeof fp !== "string" || fp.length === 0) return null;
-        filtered.push(fp);
-      }
-      mdTabFilePaths = filtered;
-    }
-    // 未知の id は無視（葉のみ採用）
+    // 旧フォーマットの mdTabFilePaths が残っていても黙って無視する（後方互換）。
+    // 未知の id は無視（葉のみ採用）。
     const node = nodeMap.get(id);
     if (!node || ("type" in node && node.type === "split")) continue;
-    metaMap.set(id, {
-      cwd: m.cwd,
-      ...(mdTabFilePaths ? { mdTabFilePaths } : {}),
-    });
+    metaMap.set(id, { cwd: m.cwd });
   }
 
   return {

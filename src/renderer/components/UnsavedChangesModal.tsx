@@ -2,7 +2,9 @@ import React, { useCallback, useEffect } from "react";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { getFileName } from "../utils/markdownFile";
 
-export type UnsavedReason = "switch-to-cli" | "open-other" | "close-pane";
+// "open-other": 別 Markdown を開く / 現在のタブを閉じる際の警告。
+// 旧仕様の "switch-to-cli" / "close-pane" は右サイドバー一本化により廃止。
+export type UnsavedReason = "open-other";
 
 interface UnsavedChangesModalProps {
   isOpen: boolean;
@@ -15,12 +17,8 @@ interface UnsavedChangesModalProps {
 
 function reasonText(reason: UnsavedReason): string {
   switch (reason) {
-    case "switch-to-cli":
-      return "CLI に切り替えると編集中の表示は隠されますが、ファイルへは保存されません。";
     case "open-other":
-      return "別の Markdown を開くと、現在の編集内容は失われます。";
-    case "close-pane":
-      return "このペインを閉じると、編集中の内容は失われます。";
+      return "このタブを閉じると、編集中の内容は失われます。";
   }
 }
 

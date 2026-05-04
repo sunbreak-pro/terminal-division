@@ -7,17 +7,16 @@ import React, {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { useCurrentTheme } from "../stores/themeStore";
-import { useTerminalMetaStore } from "../stores/terminalMetaStore";
+import { useCurrentTheme } from "../../stores/themeStore";
+import { useTerminalMetaStore } from "../../stores/terminalMetaStore";
 import {
   listMarkdownFilesAcrossPanes,
   type MdFileEntry,
-} from "../utils/mdFileListing";
-import { openMarkdownDirect } from "../services/markdownOpenService";
-import { showErrorToast } from "./Sidebar/ErrorToast";
+} from "../../utils/mdFileListing";
+import { openMarkdownInRightSidebar } from "../../services/markdownOpenService";
+import { showErrorToast } from "../Sidebar/ErrorToast";
 
-interface MdTabPickerDropdownProps {
-  paneId: string;
+interface RightSidebarFilePickerProps {
   anchorEl: HTMLElement | null;
   onClose: () => void;
 }
@@ -26,15 +25,9 @@ const DROPDOWN_WIDTH = 320;
 const DROPDOWN_MAX_HEIGHT = 360;
 const ITEM_HEIGHT = 26;
 
-/**
- * 「+ ボタン」の隣に表示するドロップダウン。
- * - 検索フィールドで MD ファイル名を絞り込み
- * - 全 watch 中ペインの CWD 配下を再帰検索（最大 50 件）
- * - 横スクロール対応（白なし）: ファイル名が長い場合 max-width を固定して overflow-x: auto
- * - 一番下に「ファイルを選択...」(OS ダイアログ)
- */
-export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
-  paneId,
+// 右サイドバー上部の「+」ボタンから開く Markdown ファイル選択ドロップダウン。
+// 既存の MdTabPickerDropdown と同じ UX だがペイン非依存に書き直したもの。
+export const RightSidebarFilePicker: React.FC<RightSidebarFilePickerProps> = ({
   anchorEl,
   onClose,
 }) => {
@@ -48,7 +41,6 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
   const [loading, setLoading] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
-  // anchor の下に位置決め。viewport 端で右にはみ出る場合は左寄せ。
   useLayoutEffect(() => {
     if (!anchorEl) return;
     const r = anchorEl.getBoundingClientRect();
@@ -60,12 +52,10 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
     setPos({ top, left });
   }, [anchorEl]);
 
-  // フォーカスを検索フィールドに自動で当てる
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // 外部クリック / Escape で閉じる
   useEffect(() => {
     const onMouseDown = (e: MouseEvent): void => {
       const target = e.target as Node | null;
@@ -88,7 +78,6 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
     };
   }, [onClose, anchorEl]);
 
-  // ファイル一覧を取得（query 変化で都度実行）。連投時は前回結果を破棄。
   useEffect(() => {
     let canceled = false;
     setLoading(true);
@@ -111,27 +100,24 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
   const handleSelect = useCallback(
     (filePath: string) => {
       onClose();
-      void openMarkdownDirect(paneId, filePath);
+      void openMarkdownInRightSidebar(filePath);
     },
-    [paneId, onClose],
+    [onClose],
   );
 
   const handleSelectFromDialog = useCallback(async () => {
     onClose();
     const result = await window.api.dialog.selectFiles();
     if (!result || result.length === 0) return;
-    // 複数選択時は順に開く（上限到達したら toast。openMarkdownDirect 側でハンドル）
     for (const fp of result) {
       const lower = fp.toLowerCase();
       if (!lower.endsWith(".md") && !lower.endsWith(".markdown")) {
         showErrorToast(`Markdown 以外は開けません: ${fp}`);
         continue;
       }
-      // openMarkdownDirect は Promise を返すが、シーケンシャルに上限チェックさせる
-      // 並列だと openMarkdown(N) が同時に走って上限判定がレースする可能性
-      await openMarkdownDirect(paneId, fp);
+      await openMarkdownInRightSidebar(fp);
     }
-  }, [paneId, onClose]);
+  }, [onClose]);
 
   const itemStyle: React.CSSProperties = useMemo(
     () => ({
@@ -175,7 +161,6 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
       role="listbox"
       aria-label="Markdown ファイルを選択"
     >
-      {/* 検索フィールド */}
       <div
         style={{
           padding: "6px 8px",
@@ -201,7 +186,6 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
           }}
         />
       </div>
-      {/* リスト本体: 縦スクロール + 横スクロール（長いパスのため） */}
       <div
         style={{
           flex: 1,
@@ -285,7 +269,6 @@ export const MdTabPickerDropdown: React.FC<MdTabPickerDropdownProps> = ({
           </div>
         )}
       </div>
-      {/* 末尾: ファイル選択ダイアログ */}
       <div
         onMouseDown={(e) => {
           e.preventDefault();

@@ -41,12 +41,9 @@ export function startSessionPersist(): () => void {
   });
 
   const unsubMeta = useTerminalMetaStore.subscribe((state, prev) => {
-    // CWD / mdTabs[].filePath 変化を検出。dirty / loadedAt 等の頻繁な変動は無視する。
+    // CWD 変化のみ検出（lastActiveAt / customTitle 等の頻繁な変動は無視する）。
     if (state.metas === prev.metas) return;
-    if (
-      hasCwdChanged(prev.metas, state.metas) ||
-      hasMdTabPathsChanged(prev.metas, state.metas)
-    ) {
+    if (hasCwdChanged(prev.metas, state.metas)) {
       scheduleSave();
     }
   });
@@ -78,24 +75,6 @@ function hasCwdChanged(
   for (const [id, meta] of next.entries()) {
     const before = prev.get(id);
     if (!before || before.cwd !== meta.cwd) return true;
-  }
-  return false;
-}
-
-// mdTabs の filePath 配列に変化があるか（追加 / 削除 / 並び替え）。
-// 永続化は filePath のみ対象なので、dirty / savedContent / loadedAt 変動は無視する。
-function hasMdTabPathsChanged(
-  prev: Map<string, { mdTabs: { filePath: string }[] }>,
-  next: Map<string, { mdTabs: { filePath: string }[] }>,
-): boolean {
-  if (prev.size !== next.size) return true;
-  for (const [id, meta] of next.entries()) {
-    const before = prev.get(id);
-    if (!before) return true;
-    if (before.mdTabs.length !== meta.mdTabs.length) return true;
-    for (let i = 0; i < meta.mdTabs.length; i++) {
-      if (before.mdTabs[i].filePath !== meta.mdTabs[i].filePath) return true;
-    }
   }
   return false;
 }

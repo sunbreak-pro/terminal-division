@@ -1,5 +1,67 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-04 - Markdown 表示を右サイドバーに一本化（ペイン内 viewMode 廃止）
+
+#### 概要
+
+ユーザー要望「現在 markdown を表示するとパネル選択が必要だが、右サイドバーを新設してそこに表示させたい。リサイズ可能で最大幅は中央付近まで、Markdown クリックで自動オープン、未選択時は『ファイルを選択してください』と表示」を実装。設計判断 3 点をユーザーに確認: (A) ペイン内 MD 機能（CLI/MD タブ UI / `viewMode` / OpenMarkdownModal）を**完全廃止して右サイドバー一本化**、(B) 複数タブを残して既存 mdTabs 機能を**グローバル化（ペイン非依存の単一ストア）**、(C) Header 右側にパネルアイコンを追加し**自動開閉のみ**（ショートカット追加なし）。サイドバー幅は絶対値 px で永続化し、表示時に `window.innerWidth × 0.5` を上限として実行時 clamp。`viewMode` 概念と `mdTabs` をペインスコープから外し、`markdownTabsStore`（グローバル MD タブ）+ `rightSidebarStore`（開閉 / 幅）を新設。`MarkdownEditor` は `paneId` 依存を撤去して `tabId` のみで動作するよう書き換え。`TerminalPane` から `viewMode` / `mdTabs` / md→cli 復帰時の re-fit ロジックを撤去（xterm 常時表示）。`TerminalSubHeader` から CLI/MD タブ UI と dirty 警告フローを撤去（タイトル rename / clear / insert / close は維持）。Sidebar からの「編集する」/シングルクリックは `openMarkdownInRightSidebar(filePath)` に簡素化し、自動オープン。Header 右側に `PanelRightIcon` のトグルボタンを追加。session-state スキーマから `mdTabFilePaths` を削除（後方互換: 旧 JSON が残っていても validator で黙って無視）。発見した起動時レースコンディション（永続化値読込前の `setOpen(false)` 上書き）を `openInitialized` フラグで解消。テスト 480 件（既存 467 + 新規 22 [markdownTabsStore 9 + rightSidebarStore 13]）+ `npm run build` グリーン。
+
+#### 変更点
+
+- **新規 `src/main/right-sidebar-state.ts`**: `right-sidebar-state.json` で width / isOpen を永続化。`width` は MIN=320 / 物理上限 4000 で clamp（実際の上限は renderer 側でウィンドウ幅の 50% に再 clamp）、save は 250ms debounce
+- **新規 `src/renderer/stores/rightSidebarStore.ts`**: `isOpen` / `width` / `setOpen` / `toggleOpen` / `setWidth`（clamp 経由）。`effectiveMaxWidth()` で `window.innerWidth × RIGHT_SIDEBAR_MAX_RATIO(=0.5)` を返し、`clampRightSidebarWidth()` でドラッグ中・mount 時に再 clamp
+- **新規 `src/renderer/stores/markdownTabsStore.ts`**: ペイン非依存の単一 MD タブ管理。`tabs: MdTab[]` / `activeTabId` / `openMarkdown(filePath, content)` / `setActive` / `closeTab` / `setDirty` / `markSaved` / `canOpenMore` / `clearAll`、上限 `MD_TABS_MAX = 8` を踏襲。`useMdTab(tabId)` セレクタ提供
+- **新規 `src/renderer/components/RightSidebar/RightSidebar.tsx`**: aside ルート + タブ列（既存 mdTabs UI のスタイル踏襲）+ MarkdownEditor + 左端 ResizeHandle + 空状態「ファイルを選択してください」。dirty タブ close 時は `UnsavedChangesModal`（reason="open-other"）で警告。永続化値読込完了まで `setOpen` IPC 送信を保留する `openInitialized` フラグで起動時レース解消。`window.resize` イベントで現在幅を再 clamp
+- **新規 `src/renderer/components/RightSidebar/RightSidebarResizeHandle.tsx`**: 左端ドラッグハンドル。`rect.right - e.clientX + 2` で「右端からの距離 = 新しい幅」を計算（左サイドバーと逆方向）
+- **新規 `src/renderer/components/RightSidebar/RightSidebarFilePicker.tsx`**: 「+」ボタンから開く Portal ドロップダウン。検索フィールド + 全 watch 中 CWD の .md 最大 50 件 + 末尾「ファイルを選択...」（`dialog.selectFiles`）。旧 `MdTabPickerDropdown` のペイン依存版を置き換え
+- **`src/main/ipc-handlers.ts`**: `rightSidebar:getWidth` / `setWidth` / `getOpen` / `setOpen` の 4 ハンドラを追加
+- **`src/preload/index.ts`**: `window.api.rightSidebar.{getWidth,setWidth,getOpen,setOpen}` を公開
+- **`src/renderer/components/MarkdownEditor.tsx`**: `paneId` props 削除、`tabId` のみで動作。`useMdTab(tabId)` で `markdownTabsStore` から tab を購読。`onMouseDownCapture` の `setActiveTerminal(paneId)` を撤去（右サイドバーは terminal とは独立）
+- **`src/renderer/components/TerminalPane.tsx`**:
+  - `MarkdownEditor` import / `viewMode` / `mdTabs` / `activeMdTabId` / `isOverlayed` / `prevOverlayedRef` / md→cli 復帰時の `useLayoutEffect` re-fit ロジックを全削除
+  - xterm container を常時 `display: block` に（`isOverlayed ? "none" : "block"` を撤廃）
+  - `requestEditMarkdownFromTerminal(abs, id)` → `requestEditMarkdownFromTerminal(abs)` に変更（paneId 不要）
+- **`src/renderer/components/TerminalSubHeader.tsx`**: CLI/MD タブ UI（`showTabs` / `mdTabs.map` / `+` ボタン / `MdTabPickerDropdown` 起動 / `handleClickCliTab` / `handleClickMdTab` / `handleCloseMdTab`）を全削除。`handleClosePane` の dirty 警告ロジックも撤去（MD はペイン非依存になったため）。タイトル rename / process display / scrollback clear / file insert / close pane は維持
+- **`src/renderer/services/markdownOpenService.ts`**: 大幅簡素化（314 行 → 56 行）。ペイン選択ダイアログ / `NEW_PANE_CHOICE` / `openMarkdownInPane` / `openMarkdownInNewPane` / CWD 内外判定を全廃。`openMarkdownInRightSidebar(filePath)` 単一エントリポイントに統一（読込 → openMarkdown → `setOpen(true)`）。旧 `requestEditMarkdownFromSidebar` / `requestEditMarkdownFromTerminal` は互換シムとして残し内部で `openMarkdownInRightSidebar` を呼ぶ
+- **`src/renderer/stores/terminalMetaStore.ts`**: `viewMode` / `mdTabs` / `activeMdTabId` フィールド削除、関連 actions（`openMarkdown` / `setViewMode` / `setActiveMdTab` / `closeMdTab` / `setMdDirty` / `markMdSaved` / `clearMarkdown` / `canOpenMoreMd`）削除。`hydrateMetas` の `mdTabFilePaths` 引数を撤去
+- **`src/renderer/stores/markdownDialogStore.ts`**: `OpenConfirmRequest` 型を削除し、`UnsavedRequest` のみに簡素化。`showOpenConfirm` action 削除、`paneId` フィールド削除（タブ ID で十分）
+- **`src/renderer/components/UnsavedChangesModal.tsx`**: `UnsavedReason` を `"switch-to-cli" \| "open-other" \| "close-pane"` から `"open-other"` のみに縮約。文言を「このタブを閉じると、編集中の内容は失われます」に更新
+- **`src/renderer/services/sessionRestore.ts`**: serialize / restore から `mdTabFilePaths` を削除（葉ペインの `cwd` のみ保存対象に戻す）。旧 JSON に `mdTabFilePaths` が残っていても無視
+- **`src/renderer/services/sessionPersist.ts`**: `hasMdTabPathsChanged` を削除、`hasCwdChanged` のみで保存トリガを判定
+- **`src/shared/session-state-validator.ts`**: `SerializedMeta.mdTabFilePaths` フィールドと `SESSION_STATE_MAX_MD_TABS` 定数を削除。validator は旧形式に `mdTabFilePaths` が含まれていても黙って無視（後方互換）
+- **`src/renderer/components/Header.tsx`**: 右サイドバートグルボタンを設定ボタンの左隣に追加（`PanelRightIcon` / `useRightSidebarStore.toggleOpen`）。aria-pressed / hover 状態 / 開閉時のボーダー色変化は左サイドバートグルと統一
+- **`src/renderer/components/Sidebar/icons.tsx`**: `PanelRightIcon` を新規追加（`PanelLeftIcon` の鏡映: `<line x1="15" y1="3" x2="15" y2="21" />`）
+- **`src/renderer/App.tsx`**: 大幅整理（682 行 → 568 行）。
+  - `<RightSidebar />` を main area の最右に追加（Sidebar / SplitContainer の隣）
+  - `OpenMarkdownModal` import / render を撤去、`dialogRequest?.kind === "unsaved"` のみ render
+  - `handleRequestEditMarkdown` を `openMarkdownInRightSidebar(filePath)` 1 行に簡素化
+  - `close-pane` ショートカットの dirty 警告フローを撤去（MD はペイン非依存）
+  - `resolveActiveViewMode()` を撤去し、`isMarkdownEditorFocused()` で「現在 MD エディタに focus があるか」を判定。`adjustGlobalFontSize` / `resetGlobalFontSize` はこれをもとに editor / terminal を切替
+  - `isInsideMarkdownEditor` の検出セレクタを `[data-md-editor-pane]` から `[data-md-editor-tab]` に変更（paneId 依存撤去に伴う rename）
+- **削除**: `src/renderer/components/OpenMarkdownModal.tsx`（241 行）、`src/renderer/components/MdTabPickerDropdown.tsx`（314 行）、`src/renderer/components/__tests__/OpenMarkdownModal.test.tsx`（149 行）
+- **新規テスト 22 件**:
+  - `stores/__tests__/markdownTabsStore.test.ts` (9): openMarkdown 新規追加 / 既存タブアクティブ化 / 上限 8 到達 / closeTab 左隣フォールバック / 最後のタブで activeTabId=null / setDirty タブ独立 / markSaved / canOpenMore
+  - `stores/__tests__/rightSidebarStore.test.ts` (13): clamp の min/max/round/non-finite/overflow/underflow / `effectiveMaxWidth` の 50% 計算 / setOpen / toggleOpen / 値同一時の no-op / setWidth + clamp
+- **既存テスト改訂**:
+  - `terminalMetaStore.test.ts`: `mdTabs` 系テスト群（restore / openMarkdown / closeMdTab / setMdDirty / markMdSaved / canOpenMoreMd）を削除、初期化系の核テストのみ維持
+  - `markdownDialogStore.test.ts`: `showOpenConfirm` テスト 3 件削除、`UnsavedRequest` ベースの 2 件のみ維持
+  - `markdownOpenService.test.ts`: 旧 API ベースの巨大テスト群を撤去、`openMarkdownInRightSidebar` の 5 ケース（happy / 自動オープン / 非 MD スキップ / 上限到達 / readFile 失敗）に書き換え
+  - `mdFileListing.test.ts`: `makeMeta()` から `viewMode / mdTabs / activeMdTabId` を削除
+  - `TerminalPane.test.tsx`: md→cli 遷移テスト 2 件を削除、`useTerminalMeta` mock を簡素化
+- **テスト合計**: 34 ファイル / 480 件グリーン（修正前 467 から +13 件）+ `npm run build` 通過
+- **設計判断**:
+  - **viewMode の概念を全廃 → 右サイドバー独立表示**: 旧仕様「ペイン内で CLI/MD overlay 切替」は xterm の display:none / 復帰時の re-fit / scrollback cols 整合 / 復帰直後の入力安全性 / md→cli の useLayoutEffect 二段保険など複雑なロジックを生んでいた。MD を完全に別領域（右サイドバー）に分離することで、xterm は常に表示され続け、MD タブ切替も terminal の resize lifecycle を一切触らない。コード量・状態空間・バグ可能性が劇的に縮小
+  - **MD タブをグローバル化（ペイン非依存）**: 旧仕様の「ペインごとに mdTabs を持つ」は、ペイン close 時の dirty 警告 / セッション復元時のペインバインド / + ボタンの paneId 引数など、本質的でない複雑性を生んでいた。MD は「アプリ全体で 1 つのワークスペース」として捉える方が UX 自然（複数ペインが同じ MD を参照するケースで一貫）。グローバル化で `paneId` を引数から完全に削除でき、API も簡潔化
+  - **最大幅は実行時にウィンドウ幅 × 50% で clamp**: ユーザー要望「中央付近まで」を画面幅の半分として解釈。永続化は絶対値 px のままにして、ウィンドウサイズ変化時に再 clamp + 永続化更新。ウィンドウを縮めた後に拡げると、縮めた時点の幅は失われる（永続化値も clamp 済み）が、UX 上の混乱はない（ユーザーは現在見える幅で記憶している）
+  - **左サイドバーと同じ独自 ResizeHandle パターン**: react-resizable-panels の Group/Panel/Separator は SplitContainer 内で既に使っており、サイドバーの絶対配置リサイズには合わない。既存 `Sidebar/ResizeHandle.tsx` と同じく `position: absolute` + `mousedown/mousemove/mouseup` で実装。座標計算だけ反転（`rect.right - clientX` で右端からの距離）
+  - **「ファイルを選択してください」の空状態を内蔵**: タブが 0 件のときも RightSidebar 自体は開いた状態を保ち、中央に文言を表示する。ユーザーが Header トグルで先に開いてからファイルを選ぶフローを自然に許容する。Sidebar の「ターミナルが起動するとここに CWD が表示されます」と同じ思想
+  - **dirty 警告は「タブ close」のみに残す**: 旧仕様の `switch-to-cli` / `close-pane` reason は概念ごと不要に（CLI への切替は「右サイドバーを閉じる」だけで MD 状態は破壊されないため、ペイン close は MD と無関係になったため）。`open-other` だけが残る
+  - **起動時のレースコンディションを `openInitialized` フラグで解消**: `useEffect [isOpen]` が初期 isOpen=false で発火 → main 側に setOpen(false) を送信 → main の永続化値（前回 open=true）を上書き、というレースが発見された。永続化値の取得 promise が解決するまで IPC 送信を保留する state フラグで解消。useRef ではなく useState を使う理由は、フラグ変化で再レンダーをトリガしないと「getOpen 解決前にユーザーがトグルした場合」が永続化されないため
+  - **`mdTabFilePaths` をセッションスキーマから削除（後方互換維持）**: グローバル化に伴い「ペイン単位の MD タブ復元」は無意味に。CLAUDE.md §3.7 の「保存対象: レイアウト二分木と各葉ペインの CWD のみ」本来の仕様にも合致。旧 JSON にフィールドが残っていても validator で黙って無視することで、既存ユーザーのセッション破棄を防ぐ
+  - **MdTabPickerDropdown を新規 RightSidebarFilePicker に置き換えた理由**: 既存ファイルを修正する案もあったが、(a) `paneId` 引数全廃、(b) anchor の親が変わる、(c) `openMarkdownDirect(paneId, fp)` から `openMarkdownInRightSidebar(fp)` に呼び出し変更、と差分が大きく、新規ファイルにした方が読みやすい
+  - **Header トグルの位置（右側 / 設定ボタン左隣）**: 左サイドバートグルが Header 左側にあるのと対称な配置。Settings ボタンの隣に置くことで「画面構成の制御」アイコン群を視覚的にまとめる
+  - **ショートカットを追加しなかった理由（ユーザー回答 3）**: 自動開閉（Markdown クリック → 自動 open）が主動線になるので、明示開閉のショートカットは出番が少ない。Cmd+B 系は左サイドバーで埋まっており、衝突を避けたい。将来要望があれば `right-sidebar-toggle` を registry に追加可能な設計を保つ
+
 ### 2026-05-02 - ズーム / split / scrollback 連鎖バグ修正（pty.resize debounce + Chromium 抑制）
 
 #### 概要
@@ -210,21 +272,7 @@ T3-5 Claude Code Chat UI を MVP として完成させ、同時に Markdown エ�
   - **「CLI で続きを表示」の自動 vs 明示**: PTY が現在シェルプロンプトに居ない場合（コマンド実行中など）に `claude --resume` を流すと混入する。Chat → CLI 切替を全自動 resume にすると体験が壊れるリスクがあるため、ユーザーが意図的にクリックする「CLI で続きを表示」ボタンに限定。通常の「CLI に戻る」ボタンは PTY を触らない
   - **OSC 0 検出の fallback 設計**: `\x1b]0;✳ Claude Code\x07` (絵文字付きの完全マッチ) を primary、`]0;` + `Claude Code\x07` (BEL 直後) の同居を fallback。BEL 直後を要求することで「他の出力に偶然 Claude Code が含まれる」誤検出を回避
 
-### 2026-04-29 - T3-5（候補） Claude Code Chat UI 計画策定
-
-#### 概要
-
-ユーザーが `claude` CLI を起動した際に claude.ai 風の専用チャット UI に切替できる機能（T3-5 候補）の計画書を策定。Anthropic API 直接呼び出しは使わず、サブスクリプション認証付きの既存 `claude` CLI を子プロセス起動して `--output-format stream-json --input-format stream-json` で双方向 JSONL を流す方針。既存 T2-8（Markdown Editor）と同じ per-pane viewMode 拡張パターンを踏襲（`viewMode = "cli" | "md" | "chat"`）。Open Questions Q1〜Q5 をユーザーと確定: (Q1) 自動検出、(Q2) CLI ↔ Chat 切替で会話継続（`--resume <session-id>` 連携）、(Q3) stream-json 仕様は Phase 0 で実機検証、(Q4) MVP ではツール使用イベント表示なし（Phase 4 で再判断）、(Q5) 入力欄は 1〜3 行自動拡張・4 行以上で内部スクロール、上限 64KB 目安。Phase 0（事前検証） / Phase 1（IPC + Main） / Phase 2（Renderer State） / Phase 3（UI + UX 評価セッション）/ Phase 4（統合・ガード・suppress オプション・必要なら ToolUseCard）/ Phase 5（ドキュメント反映）の 6 フェーズで構成。
-
-#### 変更点
-
-- **新規プラン**: `.claude/2026-04-29-claude-code-chat-ui.md`（Status: APPROVED — Phase 0 着手待ち）
-  - Architecture: `chat-session-manager.ts`（spawn / `--resume` / write / stop / dispose / getSessionId）、`claude-process-detector.ts`（PTY 出力監視 + foreground プロセス確認 500ms ポーリング）、stream-json パーサ、IPC（`chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:event` / `chat:claudeDetected`）、Renderer Store（`chatSessionStore` + `viewMode` 拡張）、UI（`ChatPaneView` / `MessageList` / `MessageBubble` / `ChatInput` / `ChatStatusBar`、ToolUseCard は MVP 範囲外）
-  - Phase 0 検証項目: stream-json 双方向ストリーミング / `--resume` 挙動 / session-id 取得経路 / 自動検出方式（claude 固有 ANSI/OSC の有無 + `tcgetpgrp` + `ps` の妥当性）/ ツール承認イベント / 認証エラー
-  - 設計判断: claude CLI ラップで認証は CLI 側 OAuth に委譲（API キーを持たない）、PTY と Chat は viewMode 切替で並存（PTY 破棄しない）、CLI ↔ Chat は同一 session-id で `--resume` 継続、自動検出は MVP では即時切替（モーダルなし、suppress は Phase 4）、入力欄は 4 行スクロールとパフォーマンス計測ベースの 64KB 上限
-  - Files テーブル: 新規 14 + modify 9（ToolUseCard は Phase 4 に明示）
-  - Verification: 機能受入 12 項目（自動切替 / 会話継続 / ストリーミング / IME 誤送信防止 / プロセスリーク無し / 64KB + 100 件メッセージのパフォーマンス受入）
-- **MEMORY.md（予定）**: T3-5（候補） Claude Code Chat UI in Pane を追加（計画書リンク + Phase 0 着手待ちの注記）
+> 2026-05-04 ローリングアーカイブ: 「T3-5（候補） Claude Code Chat UI 計画策定」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 
 > 2026-05-02 ローリングアーカイブ: 「T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）」「ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
 

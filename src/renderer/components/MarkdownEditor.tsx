@@ -12,41 +12,32 @@ import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import {
-  useTerminalMetaStore,
-  useTerminalMeta,
+  useMarkdownTabsStore,
+  useMdTab,
   type MdTab,
-} from "../stores/terminalMetaStore";
-import { useTerminalActions } from "../stores/terminalStore";
+} from "../stores/markdownTabsStore";
 import { useEditorSettings } from "../stores/settingsStore";
 import { showErrorToast } from "./Sidebar/ErrorToast";
 import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
 import { withAlpha, isLightBackground } from "../utils/colorUtils";
 
 interface MarkdownEditorProps {
-  paneId: string;
   tabId: string;
 }
 
-// 親 (TerminalPane) は tab.loadedAt 変化時に key で remount すること。
+// 親 (RightSidebar) は tab.loadedAt 変化時に key で remount すること。
 // これにより value/initialContent の同期問題を避け、CodeMirror の internal state は
 // タブ単位でフレッシュに保たれる。
-export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
-  paneId,
-  tabId,
-}) => {
-  const meta = useTerminalMeta(paneId);
-  const tab: MdTab | null = useMemo(
-    () => meta?.mdTabs.find((t) => t.id === tabId) ?? null,
-    [meta, tabId],
-  );
+export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({ tabId }) => {
+  const tab: MdTab | null = useMdTab(tabId);
   const filePath = tab?.filePath ?? null;
   const savedContent = tab?.savedContent ?? "";
 
   // 初期 value は mount 時に固定（後続の savedContent 変化で value を入れ替えない）
   const [initialValue] = useState(() => savedContent);
 
-  // セッション復元直後など savedContent="" のままで mount された場合は、ファイルを
-  // IPC で読み込んで markMdSaved → 編集開始時の比較基準にする。
+  // 復元直後など savedContent="" のままで mount された場合は、ファイルを
+  // IPC で読み込んで markSaved → 編集開始時の比較基準にする。
   useEffect(() => {
     if (!filePath) return;
     if (tab?.savedContent !== "") return;
@@ -58,21 +49,17 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         showErrorToast(`ファイルを読み込めませんでした: ${result.error}`);
         return;
       }
-      // 読み込み内容で savedContent を更新する。dirty=false なので markMdSaved を流用。
-      useTerminalMetaStore
-        .getState()
-        .markMdSaved(paneId, tabId, result.content);
+      useMarkdownTabsStore.getState().markSaved(tabId, result.content);
     })();
     return () => {
       canceled = true;
     };
-    // mount 時の 1 度だけでよい（後続の savedContent 変化でも再読込しない）
+    // mount 時の 1 度だけでよい
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const theme = useCurrentTheme();
   const themeConfig = useThemeConfig();
-  const { setActiveTerminal } = useTerminalActions();
   const editorSettings = useEditorSettings();
 
   const cmRef = useRef<ReactCodeMirrorRef | null>(null);
@@ -86,11 +73,11 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       showErrorToast(`保存に失敗しました: ${result.error}`);
       return false;
     }
-    useTerminalMetaStore.getState().markMdSaved(paneId, tabId, content);
+    useMarkdownTabsStore.getState().markSaved(tabId, content);
     return true;
-  }, [paneId, tabId, filePath]);
+  }, [tabId, filePath]);
 
-  // ペイン外部から save / focus を呼ぶための imperative API を registry に登録（tabId キー）
+  // 外部から save / focus を呼ぶための imperative API を registry に登録
   useEffect(() => {
     markdownEditorRegistry.register(tabId, {
       getContent: () => cmRef.current?.view?.state.doc.toString() ?? "",
@@ -100,21 +87,22 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     return () => markdownEditorRegistry.unregister(tabId);
   }, [tabId, handleSave]);
 
-  // 入力のたびに dirty 判定を更新（tab.savedContent と一致なら dirty=false に戻す）
+  // 入力のたびに dirty 判定を更新
   const handleChange = useCallback(
     (value: string): void => {
-      const m = useTerminalMetaStore.getState().metas.get(paneId);
-      const t = m?.mdTabs.find((x) => x.id === tabId);
+      const t = useMarkdownTabsStore
+        .getState()
+        .tabs.find((x) => x.id === tabId);
       if (!t) return;
       const dirty = value !== (t.savedContent ?? "");
       if (t.dirty !== dirty) {
-        useTerminalMetaStore.getState().setMdDirty(paneId, tabId, dirty);
+        useMarkdownTabsStore.getState().setDirty(tabId, dirty);
       }
     },
-    [paneId, tabId],
+    [tabId],
   );
 
-  // Cmd+S を CodeMirror keymap で捕捉。default は Mod-s (Mac=Cmd / others=Ctrl)。
+  // Cmd+S を CodeMirror keymap で捕捉
   const saveKeymap = useMemo(
     () =>
       keymap.of([
@@ -130,23 +118,16 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     [handleSave],
   );
 
-  // light/dark に応じた派生色（テーマ連携の中核）
   const editorChrome = useMemo(() => {
     const isLight = isLightBackground(theme.colors.terminalBackground);
-    // light テーマは pure white を避け、目に優しいオフホワイトに
     const editorBg = isLight ? "#fbfbf9" : theme.colors.terminalBackground;
-    // gutter は app pane header と同色にして視覚的整合を取る
     const gutterBg = theme.colors.headerBackground;
-    // inline code 背景: light は微暗いグレー、dark は微明オーバーレイ
     const codeBg = isLight ? "rgba(0,0,0,0.06)" : "rgba(255,255,255,0.07)";
-    // inline code 前景: 背景輝度に応じて読みやすい色
     const codeFg = isLight ? "#a3274a" : "#e6a26a";
-    // 区切り線（hr など）の色
     const ruleColor = theme.colors.border;
     return { isLight, editorBg, gutterBg, codeBg, codeFg, ruleColor };
   }, [theme.colors]);
 
-  // テーマ連携: CodeMirror の chrome（gutter / cursor / selection / line）をアプリテーマに合わせる
   const editorTheme = useMemo(
     () =>
       EditorView.theme(
@@ -212,7 +193,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     ],
   );
 
-  // markdown 構文ハイライト（見出し / 強調 / リンク / コード / リスト等）
   const mdHighlight = useMemo(() => {
     const accent = theme.colors.accent;
     const text = theme.colors.text;
@@ -235,9 +215,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
         backgroundColor: editorChrome.codeBg,
       },
       { tag: t.quote, color: muted, fontStyle: "italic" },
-      // ListMark / HeaderMark / BlockquoteMark など構文記号
       { tag: t.processingInstruction, color: accent },
-      // 水平線
       {
         tag: t.contentSeparator,
         color: editorChrome.ruleColor,
@@ -258,7 +236,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
     [saveKeymap, editorTheme, mdHighlight, editorSettings.softWrap],
   );
 
-  // ファイルパスを「ディレクトリ部分」と「ファイル名」に分けて表示する
   const { dirPart, fileName } = useMemo(() => {
     if (!filePath) return { dirPart: "", fileName: "" };
     const idx = filePath.lastIndexOf("/");
@@ -271,9 +248,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
 
   return (
     <div
-      data-md-editor-pane={paneId}
       data-md-editor-tab={tabId}
-      onMouseDownCapture={() => setActiveTerminal(paneId)}
       style={{
         height: "100%",
         width: "100%",
@@ -341,7 +316,6 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
           theme="none"
           extensions={extensions}
           onChange={handleChange}
-          onFocus={() => setActiveTerminal(paneId)}
           basicSetup={{
             lineNumbers: true,
             highlightActiveLine: true,

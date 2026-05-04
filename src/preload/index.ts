@@ -204,6 +204,15 @@ const api = {
     setWidth: (width: number): void =>
       ipcRenderer.send("sidebar:setWidth", width),
   },
+  rightSidebar: {
+    getWidth: (): Promise<number> =>
+      ipcRenderer.invoke("rightSidebar:getWidth"),
+    setWidth: (width: number): void =>
+      ipcRenderer.send("rightSidebar:setWidth", width),
+    getOpen: (): Promise<boolean> => ipcRenderer.invoke("rightSidebar:getOpen"),
+    setOpen: (open: boolean): void =>
+      ipcRenderer.send("rightSidebar:setOpen", open),
+  },
   session: {
     save: (payload: SerializedLayout): void =>
       ipcRenderer.send("session:save", payload),

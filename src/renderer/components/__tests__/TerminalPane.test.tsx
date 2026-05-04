@@ -78,11 +78,9 @@ vi.mock("../../utils/rafDebounce", () => ({
   }),
 }));
 
-// terminalMetaStoreモック。useTerminalMeta は viewMode 切替テストで上書き可能に
-const mockUseTerminalMeta = vi.fn(() => undefined as unknown);
+// terminalMetaStoreモック
 vi.mock("../../stores/terminalMetaStore", () => {
   const useTerminalMetaStore = Object.assign(
-    // 呼び出し時（zustand selector フック）は selector に空 metas を渡して評価
     (selector: (s: { metas: Map<string, unknown> }) => unknown) =>
       selector({ metas: new Map() }),
     {
@@ -95,7 +93,7 @@ vi.mock("../../stores/terminalMetaStore", () => {
   );
   return {
     useTerminalMetaStore,
-    useTerminalMeta: (...args: unknown[]) => mockUseTerminalMeta(...args),
+    useTerminalMeta: () => undefined,
   };
 });
 
@@ -262,52 +260,5 @@ describe("TerminalPane", () => {
 
     // createは呼ばれない（fit は handleFit 経由で同期実行される）
     expect(window.api.pty.create).not.toHaveBeenCalled();
-  });
-
-  it("invalidates and re-fits on md → cli viewMode transition", () => {
-    // 初回マウント時は md 状態（複数 MD タブ仕様: mdTabs[] + activeMdTabId）
-    mockUseTerminalMeta.mockReturnValue({
-      viewMode: "md",
-      mdTabs: [{ id: "tab-1", filePath: "/foo.md", dirty: false }],
-      activeMdTabId: "tab-1",
-    });
-    mockGetOrCreate.mockReturnValue({
-      ...mockTerminalInstance,
-      ptyCreated: true,
-    });
-
-    const { rerender } = render(
-      <TerminalPane id="terminal-1" paneNumber={1} />,
-    );
-
-    // 初期マウント分の呼び出しをクリアし、md→cli 遷移だけを観察
-    mockInvalidateLastSize.mockClear();
-    mockFit.mockClear();
-
-    // cli に戻す。React.memo を bypass するため paneNumber も変える
-    mockUseTerminalMeta.mockReturnValue(undefined);
-    rerender(<TerminalPane id="terminal-1" paneNumber={2} />);
-
-    // pty.resize は terminalManager.fit() 内部で debounce 経由に集約される。
-    // ここでは invalidate + fit が呼ばれることだけ確認する。
-    expect(mockInvalidateLastSize).toHaveBeenCalledWith("terminal-1");
-    expect(mockFit).toHaveBeenCalledWith("terminal-1");
-  });
-
-  it("does not invalidate when staying in cli mode", () => {
-    mockUseTerminalMeta.mockReturnValue(undefined);
-    mockGetOrCreate.mockReturnValue({
-      ...mockTerminalInstance,
-      ptyCreated: true,
-    });
-
-    const { rerender } = render(
-      <TerminalPane id="terminal-1" paneNumber={1} />,
-    );
-    mockInvalidateLastSize.mockClear();
-
-    rerender(<TerminalPane id="terminal-1" paneNumber={2} />);
-
-    expect(mockInvalidateLastSize).not.toHaveBeenCalled();
   });
 });

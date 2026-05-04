@@ -2,6 +2,22 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-04-29 - T3-5（候補） Claude Code Chat UI 計画策定
+
+#### 概要
+
+ユーザーが `claude` CLI を起動した際に claude.ai 風の専用チャット UI に切替できる機能（T3-5 候補）の計画書を策定。Anthropic API 直接呼び出しは使わず、サブスクリプション認証付きの既存 `claude` CLI を子プロセス起動して `--output-format stream-json --input-format stream-json` で双方向 JSONL を流す方針。既存 T2-8（Markdown Editor）と同じ per-pane viewMode 拡張パターンを踏襲（`viewMode = "cli" | "md" | "chat"`）。Open Questions Q1〜Q5 をユーザーと確定: (Q1) 自動検出、(Q2) CLI ↔ Chat 切替で会話継続（`--resume <session-id>` 連携）、(Q3) stream-json 仕様は Phase 0 で実機検証、(Q4) MVP ではツール使用イベント表示なし（Phase 4 で再判断）、(Q5) 入力欄は 1〜3 行自動拡張・4 行以上で内部スクロール、上限 64KB 目安。Phase 0（事前検証） / Phase 1（IPC + Main） / Phase 2（Renderer State） / Phase 3（UI + UX 評価セッション）/ Phase 4（統合・ガード・suppress オプション・必要なら ToolUseCard）/ Phase 5（ドキュメント反映）の 6 フェーズで構成。
+
+#### 変更点
+
+- **新規プラン**: `.claude/2026-04-29-claude-code-chat-ui.md`（Status: APPROVED — Phase 0 着手待ち）
+  - Architecture: `chat-session-manager.ts`（spawn / `--resume` / write / stop / dispose / getSessionId）、`claude-process-detector.ts`（PTY 出力監視 + foreground プロセス確認 500ms ポーリング）、stream-json パーサ、IPC（`chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:event` / `chat:claudeDetected`）、Renderer Store（`chatSessionStore` + `viewMode` 拡張）、UI（`ChatPaneView` / `MessageList` / `MessageBubble` / `ChatInput` / `ChatStatusBar`、ToolUseCard は MVP 範囲外）
+  - Phase 0 検証項目: stream-json 双方向ストリーミング / `--resume` 挙動 / session-id 取得経路 / 自動検出方式（claude 固有 ANSI/OSC の有無 + `tcgetpgrp` + `ps` の妥当性）/ ツール承認イベント / 認証エラー
+  - 設計判断: claude CLI ラップで認証は CLI 側 OAuth に委譲（API キーを持たない）、PTY と Chat は viewMode 切替で並存（PTY 破棄しない）、CLI ↔ Chat は同一 session-id で `--resume` 継続、自動検出は MVP では即時切替（モーダルなし、suppress は Phase 4）、入力欄は 4 行スクロールとパフォーマンス計測ベースの 64KB 上限
+  - Files テーブル: 新規 14 + modify 9（ToolUseCard は Phase 4 に明示）
+  - Verification: 機能受入 12 項目（自動切替 / 会話継続 / ストリーミング / IME 誤送信防止 / プロセスリーク無し / 64KB + 100 件メッセージのパフォーマンス受入）
+- **MEMORY.md（予定）**: T3-5（候補） Claude Code Chat UI in Pane を追加（計画書リンク + Phase 0 着手待ちの注記）
+
 ### 2026-04-29 - ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整
 
 #### 概要

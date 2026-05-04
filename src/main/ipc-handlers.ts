@@ -5,6 +5,7 @@ import { createWindow, canCreateWindow } from "./window-manager";
 import { recentDirectoryManager } from "./recent-directories";
 import { fileSystemManager } from "./file-system-handler";
 import { sidebarStateManager } from "./sidebar-state";
+import { rightSidebarStateManager } from "./right-sidebar-state";
 import { sessionStateManager } from "./session-state";
 import { settingsManager } from "./settings";
 import { parseItermColors } from "./itermcolors-parser";
@@ -371,6 +372,21 @@ export function setupIpcHandlers(): void {
   ipcMain.handle("sidebar:getWidth", () => sidebarStateManager.getWidth());
   ipcMain.on("sidebar:setWidth", (_, width: number) => {
     sidebarStateManager.setWidth(width);
+  });
+
+  // ========== Right sidebar (Markdown editor pane) persisted state ==========
+
+  ipcMain.handle("rightSidebar:getWidth", () =>
+    rightSidebarStateManager.getWidth(),
+  );
+  ipcMain.on("rightSidebar:setWidth", (_, width: number) => {
+    rightSidebarStateManager.setWidth(width);
+  });
+  ipcMain.handle("rightSidebar:getOpen", () =>
+    rightSidebarStateManager.getOpen(),
+  );
+  ipcMain.on("rightSidebar:setOpen", (_, open: boolean) => {
+    rightSidebarStateManager.setOpen(open);
   });
 
   // ========== Session persistence ==========

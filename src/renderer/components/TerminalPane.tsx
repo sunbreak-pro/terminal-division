@@ -14,10 +14,7 @@ import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import * as terminalManager from "../services/terminalManager";
 import { rafDebounceWithDelay } from "../utils/rafDebounce";
 import { TerminalSubHeader } from "./TerminalSubHeader";
-import {
-  useTerminalMeta,
-  useTerminalMetaStore,
-} from "../stores/terminalMetaStore";
+import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { useSettingsStore, useTerminalSettings } from "../stores/settingsStore";
 import {
   FONT_SIZE_MIN,
@@ -25,7 +22,6 @@ import {
   clampNumber,
 } from "../../shared/settings";
 import { useSidebarStore } from "../stores/sidebarStore";
-import { MarkdownEditor } from "./MarkdownEditor";
 import { formatPaths } from "../utils/insertFiles";
 import {
   useSearchOpenForPane,
@@ -88,9 +84,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       // ここで二重に呼ぶと debounce を素通りして SIGWINCH スパムを再導入してしまうので NG。
       terminalManager.fit(id);
     }, [id]);
-
-    // 直前のオーバーレイ表示状態（md）を保持して、cli への復帰エッジだけを検出する。
-    const prevOverlayedRef = useRef<boolean>(false);
 
     // useLayoutEffect: DOM 反映後・paint 前に同期実行されるため、
     // attach → fit → pty.create の順序を setTimeout(0) なしで保証できる。
@@ -159,7 +152,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
               showErrorToast("パスを解決できませんでした");
               return;
             }
-            requestEditMarkdownFromTerminal(abs, id);
+            requestEditMarkdownFromTerminal(abs);
           },
         },
       );
@@ -223,9 +216,8 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
 
       // 4. Set up ResizeObserver with rAF-based debounce
       // delay=0 + requestAnimationFrame: 同フレーム内の連続通知を 1 回にまとめる
-      // だけにする。Panel.onResize と viewMode 同期 fit が主経路で、observer は
-      // フォールバック（サイドバー開閉や OS のリサイズ等）。遅延を縮めることで
-      // scrollback が古い cols のまま残る時間を最小化。
+      // だけにする。Panel.onResize が主経路で、observer はフォールバック
+      // （サイドバー開閉や OS のリサイズ等）。
       const { handler: debouncedFit, cancel: cancelFit } = rafDebounceWithDelay(
         handleFit,
         0,
@@ -383,39 +375,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
       ],
     );
 
-    // viewMode === "md" のとき MarkdownEditor を前面に表示し、
-    // xterm のコンテナは display:none で残す。これにより PTY と xterm.js の
-    // バッファ・カーソル位置が完全に保たれ、CLI に戻るとそのまま再開できる。
-    const meta = useTerminalMeta(id);
-    const mdTabs = meta?.mdTabs ?? [];
-    const activeMdTabId = meta?.activeMdTabId ?? null;
-    const showMd =
-      meta?.viewMode === "md" && mdTabs.length > 0 && activeMdTabId !== null;
-    const isOverlayed = showMd;
-
-    // md → cli への復帰時に同期 fit + pty.resize を実行する。
-    // display:none 中は fit() の lastSizes キャッシュが古いまま PTY 側に残るので、
-    // 復帰直前に invalidate して必ず最新サイズで pty.resize を発火させる。
-    // useLayoutEffect で paint 前に実行することで、復帰直後にユーザーが入力したり
-    // Claude Code が描画する文字が古い cols で wrap されるのを防ぐ。
-    // 加えて rAF で 1 度 invalidate + fit を再実行する。useLayoutEffect 時点では
-    // ブラウザがまだ display:none → block のレイアウトを確定していないことがあり、
-    // その場合 1 回目の fit が 0-cols でリトライ経路へ落ちて scrollback が
-    // 古い cols のまま残る現象（scrollback の "細長い" 表示）への保険。
-    useLayoutEffect(() => {
-      const prev = prevOverlayedRef.current;
-      prevOverlayedRef.current = isOverlayed;
-      if (!isOverlayed && prev) {
-        terminalManager.invalidateLastSize(id);
-        handleFit();
-        if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(() => {
-            terminalManager.invalidateLastSize(id);
-            handleFit();
-          });
-        }
-      }
-    }, [isOverlayed, id, handleFit]);
     return (
       <div
         className="terminal-container"
@@ -437,28 +396,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
             style={{
               height: "100%",
               width: "100%",
-              display: isOverlayed ? "none" : "block",
             }}
           />
-          {/* 全 MD タブを mount し続け、active のみ表示する。
-              CodeMirror の編集状態（カーソル位置・履歴）をタブ切替で保持するため。
-              key に loadedAt を含めることで、同一ファイルの再オープン時に remount される。 */}
-          {mdTabs.map((tab) => {
-            const tabActive = showMd && activeMdTabId === tab.id;
-            return (
-              <div
-                key={`${tab.id}-${tab.loadedAt}`}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  display: tabActive ? "block" : "none",
-                }}
-              >
-                <MarkdownEditor paneId={id} tabId={tab.id} />
-              </div>
-            );
-          })}
-          {isSearchOpen && !isOverlayed && (
+          {isSearchOpen && (
             <TerminalSearchOverlay paneId={id} onClose={closeSearch} />
           )}
         </div>

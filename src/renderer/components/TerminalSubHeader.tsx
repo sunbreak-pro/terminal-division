@@ -1,27 +1,21 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   useTerminalMeta,
   useTerminalMetaStore,
-  type MdTab,
 } from "../stores/terminalMetaStore";
 import { useTerminalActions, useTerminalCount } from "../stores/terminalStore";
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { useTerminalSettings } from "../stores/settingsStore";
 import { promptAndInsertFiles } from "../utils/insertFiles";
 import * as terminalManager from "../services/terminalManager";
-import * as markdownEditorRegistry from "../services/markdownEditorRegistry";
-import { useMarkdownDialogStore } from "../stores/markdownDialogStore";
-import { getFileName } from "../utils/markdownFile";
-import { showErrorToast } from "./Sidebar/ErrorToast";
 import { ContextMenu, ContextMenuItem } from "./Sidebar/ContextMenu";
-import { MdTabPickerDropdown } from "./MdTabPickerDropdown";
 
 interface TerminalSubHeaderProps {
   id: string;
   paneNumber: number;
 }
 
-// ホームディレクトリのキャッシュ（preloadのsystem.getHomeDirから取得）
+// ホームディレクトリのキャッシュ
 let cachedHomeDir: string | null = null;
 function getHomeDir(): string {
   if (cachedHomeDir === null) {
@@ -37,7 +31,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
     const themeConfig = useThemeConfig();
     const theme = { colors: currentTheme.colors, ...themeConfig };
     const terminalSettings = useTerminalSettings();
-    // ペイン番号は terminal 本体と同じ実効フォントサイズに揃える。
     const paneNumberFontSize =
       meta?.fontSizeOverride ?? terminalSettings.fontSize;
 
@@ -52,14 +45,13 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       return meta.cwd;
     }, [meta?.cwd]);
 
-    // フォルダ名のみ取得
     const folderName = useMemo(() => {
       if (displayCwd === "~") return "~";
       const parts = displayCwd.split("/");
       return parts[parts.length - 1] || displayCwd;
     }, [displayCwd]);
 
-    // ペインタイトル inline rename。customTitle が設定されていれば優先表示。
+    // ペインタイトル inline rename
     const customTitle = meta?.customTitle ?? null;
     const [isRenaming, setIsRenaming] = useState(false);
     const [renameDraft, setRenameDraft] = useState("");
@@ -78,7 +70,7 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       setIsRenaming(false);
     }, []);
 
-    // プロセス名表示: シェル名と同じ場合はシェル名のみ
+    // プロセス名表示
     const processDisplay = useMemo(() => {
       const shell = meta?.shellName || "shell";
       const process = meta?.processName;
@@ -94,82 +86,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [id],
     );
 
-    // ===== Markdown タブ操作 =====
-    const mdTabs = meta?.mdTabs ?? [];
-    const activeMdTabId = meta?.activeMdTabId ?? null;
-    const isMd = meta?.viewMode === "md";
-    const canOpenMore = mdTabs.length < 8;
-
-    const showTabs = mdTabs.length > 0;
-
-    const switchToMode = useCallback(
-      (mode: "cli" | "md"): void => {
-        if (meta?.viewMode === mode) return;
-        useTerminalMetaStore.getState().setViewMode(id, mode);
-      },
-      [id, meta?.viewMode],
-    );
-
-    const handleClickCliTab = useCallback(
-      (e: React.MouseEvent<HTMLButtonElement>) => {
-        e.stopPropagation();
-        if (meta?.viewMode === "cli") return;
-        switchToMode("cli");
-      },
-      [meta?.viewMode, switchToMode],
-    );
-
-    // 個別 MD タブをクリック: そのタブをアクティブ化 + viewMode=md
-    const handleClickMdTab = useCallback(
-      (e: React.MouseEvent<HTMLButtonElement>, tabId: string) => {
-        e.stopPropagation();
-        const store = useTerminalMetaStore.getState();
-        store.setActiveMdTab(id, tabId);
-        store.setViewMode(id, "md");
-      },
-      [id],
-    );
-
-    // 個別 MD タブの × をクリック: dirty なら警告、なければ即座に閉じる
-    const handleCloseMdTab = useCallback(
-      (e: React.MouseEvent<HTMLElement>, tab: MdTab) => {
-        e.stopPropagation();
-        const close = (): void => {
-          useTerminalMetaStore.getState().closeMdTab(id, tab.id);
-        };
-        if (tab.dirty) {
-          useMarkdownDialogStore.getState().showUnsaved({
-            filePath: tab.filePath,
-            paneId: id,
-            tabId: tab.id,
-            reason: "open-other",
-            onSave: async () => {
-              const api = markdownEditorRegistry.getApi(tab.id);
-              const ok = api ? await api.save() : false;
-              if (!ok) {
-                showErrorToast("保存に失敗しました");
-                return;
-              }
-              useMarkdownDialogStore.getState().dismiss();
-              close();
-            },
-            onDiscard: () => {
-              useMarkdownDialogStore.getState().dismiss();
-              close();
-            },
-          });
-          return;
-        }
-        close();
-      },
-      [id],
-    );
-
-    // ペインを閉じる × ボタン。Header のグローバル閉じるボタンを廃止して
-    // ペインごとに配置する（操作対象が明確になり、誤操作も減る）。
-    // dirty な MD タブがある場合は警告フローに乗せず、本体ペイン閉鎖は
-    // App.tsx の close-pane ショートカット側で扱っている dirty チェックを
-    // ここでは省略して即時閉鎖する（タブ単位の警告は既存 × ボタンで担保）。
     const { closeTerminal } = useTerminalActions();
     const terminalCount = useTerminalCount();
     const canClosePane = terminalCount > 1;
@@ -177,33 +93,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       (e: React.MouseEvent<HTMLButtonElement>): void => {
         e.stopPropagation();
         if (!canClosePane) return;
-        // dirty な MD タブが当該ペインにあれば閉じる前に警告
-        const meta = useTerminalMetaStore.getState().metas.get(id);
-        const dirtyTab = meta?.mdTabs.find((t) => t.dirty);
-        if (dirtyTab) {
-          useMarkdownDialogStore.getState().showUnsaved({
-            filePath: dirtyTab.filePath,
-            paneId: id,
-            tabId: dirtyTab.id,
-            reason: "close-pane",
-            onSave: async () => {
-              const dialogStore = useMarkdownDialogStore.getState();
-              const editorApi = markdownEditorRegistry.getApi(dirtyTab.id);
-              const ok = editorApi ? await editorApi.save() : false;
-              if (!ok) {
-                showErrorToast("保存に失敗しました");
-                return;
-              }
-              dialogStore.dismiss();
-              closeTerminal(id);
-            },
-            onDiscard: () => {
-              useMarkdownDialogStore.getState().dismiss();
-              closeTerminal(id);
-            },
-          });
-          return;
-        }
         closeTerminal(id);
       },
       [canClosePane, id, closeTerminal],
@@ -227,20 +116,7 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [theme.colors.textSecondary],
     );
 
-    // ===== MD タブピッカードロップダウン =====
-    const plusButtonRef = useRef<HTMLButtonElement | null>(null);
-    const [pickerOpen, setPickerOpen] = useState(false);
-    const handleClickPlus = useCallback(
-      (e: React.MouseEvent<HTMLButtonElement>) => {
-        e.stopPropagation();
-        if (!canOpenMore) return; // 上限到達時は no-op
-        setPickerOpen((v) => !v);
-      },
-      [canOpenMore],
-    );
-    const closePicker = useCallback(() => setPickerOpen(false), []);
-
-    // スクロールバック削除メニュー: クリックでアイコン下にポップオーバーを開く
+    // スクロールバック削除メニュー
     const [clearMenuPos, setClearMenuPos] = useState<{
       x: number;
       y: number;
@@ -305,7 +181,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       [theme.colors.textSecondary],
     );
 
-    // 共通アイコンボタンスタイル（挿入 / クリア）
     const iconButtonStyle = useMemo<React.CSSProperties>(
       () => ({
         flexShrink: 0,
@@ -326,29 +201,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
       }),
       [theme.colors.textSecondary, theme.colors.border],
     );
-
-    // タブボタンの共通スタイル生成
-    const tabButtonStyle = (active: boolean): React.CSSProperties => ({
-      background: "transparent",
-      border: "none",
-      color: active ? theme.colors.text : theme.colors.textSecondary,
-      fontSize: 12,
-      fontFamily: "inherit",
-      letterSpacing: "0.02em",
-      padding: "0 6px",
-      cursor: "pointer",
-      borderBottom: active
-        ? `2px solid ${theme.colors.accent}`
-        : "2px solid transparent",
-      marginBottom: -1,
-      fontWeight: active ? 700 : 500,
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 4,
-      maxWidth: 180,
-      overflow: "hidden",
-      flexShrink: 0,
-    });
 
     return (
       <div
@@ -382,7 +234,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
         >
           {paneNumber}
         </span>
-        {/* タイトル / CWD は常に表示する。タブを開いていても消さない */}
         {isRenaming ? (
           <input
             type="text"
@@ -423,7 +274,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
               textOverflow: "ellipsis",
               flexShrink: 1,
               minWidth: 0,
-              maxWidth: showTabs ? 160 : undefined,
               color: theme.colors.text,
               fontWeight: 600,
               cursor: "text",
@@ -437,141 +287,18 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
             {customTitle ?? folderName}
           </span>
         )}
-        {!showTabs && (
-          <>
-            <span style={{ color: theme.colors.border, flexShrink: 0 }}>|</span>
-            <span
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                flexShrink: 1,
-                minWidth: 0,
-                fontWeight: 500,
-              }}
-            >
-              {processDisplay}
-            </span>
-          </>
-        )}
-        {showTabs && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "stretch",
-              gap: 0,
-              flexShrink: 1,
-              minWidth: 0,
-              height: "100%",
-              marginLeft: 4,
-              borderLeft: `1px solid ${theme.colors.border}`,
-              paddingLeft: 4,
-              overflowX: "auto",
-              overflowY: "hidden",
-            }}
-          >
-            <button
-              type="button"
-              onClick={handleClickCliTab}
-              title="ターミナル表示に切替"
-              style={tabButtonStyle(meta?.viewMode === "cli")}
-            >
-              CLI
-            </button>
-            {mdTabs.map((tab) => {
-              const fileName = getFileName(tab.filePath);
-              const active = isMd && activeMdTabId === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={(e) => handleClickMdTab(e, tab.id)}
-                  title={tab.filePath}
-                  style={tabButtonStyle(active)}
-                >
-                  <span
-                    style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {fileName}
-                  </span>
-                  {tab.dirty && (
-                    <span
-                      aria-label="未保存"
-                      style={{
-                        color: theme.colors.accent,
-                        fontSize: 14,
-                        lineHeight: 1,
-                      }}
-                    >
-                      ●
-                    </span>
-                  )}
-                  <span
-                    role="button"
-                    aria-label="タブを閉じる"
-                    onClick={(e) => handleCloseMdTab(e, tab)}
-                    style={{
-                      marginLeft: 2,
-                      width: 14,
-                      height: 14,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      borderRadius: 3,
-                      color: theme.colors.textSecondary,
-                      fontSize: 12,
-                      lineHeight: 1,
-                      cursor: "pointer",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor =
-                        theme.colors.buttonHover;
-                      e.currentTarget.style.color = theme.colors.text;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = "transparent";
-                      e.currentTarget.style.color = theme.colors.textSecondary;
-                    }}
-                  >
-                    ×
-                  </span>
-                </button>
-              );
-            })}
-            {/* + ボタン: MD タブを開く（mdTabs > 0 のときのみ表示。ペイン初回はサイドバーから開く） */}
-            {mdTabs.length > 0 && (
-              <button
-                ref={plusButtonRef}
-                type="button"
-                onClick={handleClickPlus}
-                title={
-                  canOpenMore
-                    ? "Markdown タブを追加"
-                    : "Markdown タブの上限（8）に達しました"
-                }
-                aria-label="Markdown タブを追加"
-                aria-disabled={!canOpenMore}
-                style={{
-                  ...tabButtonStyle(false),
-                  cursor: canOpenMore ? "pointer" : "not-allowed",
-                  color: canOpenMore
-                    ? theme.colors.textSecondary
-                    : theme.colors.border,
-                  opacity: canOpenMore ? 1 : 0.5,
-                  fontSize: 14,
-                  fontWeight: 600,
-                  paddingLeft: 8,
-                  paddingRight: 8,
-                }}
-              >
-                +
-              </button>
-            )}
-          </div>
-        )}
+        <span style={{ color: theme.colors.border, flexShrink: 0 }}>|</span>
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            flexShrink: 1,
+            minWidth: 0,
+            fontWeight: 500,
+          }}
+        >
+          {processDisplay}
+        </span>
         <div
           style={{
             marginLeft: "auto",
@@ -671,13 +398,6 @@ const TerminalSubHeader: React.FC<TerminalSubHeaderProps> = React.memo(
             y={clearMenuPos.y}
             items={clearMenuItems}
             onClose={closeClearMenu}
-          />
-        )}
-        {pickerOpen && (
-          <MdTabPickerDropdown
-            paneId={id}
-            anchorEl={plusButtonRef.current}
-            onClose={closePicker}
           />
         )}
       </div>

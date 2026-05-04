@@ -51,22 +51,14 @@ export function serializeCurrentSession(): SerializedLayout {
     }
   }
 
-  // 葉ペインの cwd のみ保存対象
-  // 葉ペインの cwd と mdTabs[].filePath を保存対象にする。dirty 状態は永続化しない。
-  const metaEntries: Array<
-    [string, { cwd: string | null; mdTabFilePaths?: string[] }]
-  > = [];
+  // 葉ペインの cwd のみ保存対象。MD タブはアプリグローバルな markdownTabsStore に
+  // 管理を移したためペインスコープのセッション保存対象から外す。
+  const metaEntries: Array<[string, { cwd: string | null }]> = [];
   for (const [id, meta] of metas.entries()) {
     const node = nodes.get(id);
     if (!node) continue;
     if ("type" in node && node.type === "split") continue;
-    const filePaths = meta.mdTabs.map((t) => t.filePath);
-    metaEntries.push([
-      id,
-      filePaths.length > 0
-        ? { cwd: meta.cwd, mdTabFilePaths: filePaths }
-        : { cwd: meta.cwd },
-    ]);
+    metaEntries.push([id, { cwd: meta.cwd }]);
   }
 
   return {
@@ -117,21 +109,14 @@ export function restoreSession(payload: SerializedLayout): boolean {
     .hydrateLayout({ nodes: layout.nodes, rootId: layout.rootId });
   if (!ok) return false;
 
-  // メタは葉ペインのみ採用（payload.metas に分岐 ID が混入していても無視される）
-  // mdTabFilePaths も合わせて hydrateMetas に渡す（terminalMetaStore 側で MdTab[] に変換）
-  const leafEntries: Array<
-    [string, { cwd: string | null; mdTabFilePaths?: string[] }]
-  > = payload.metas
+  // メタは葉ペインのみ採用（payload.metas に分岐 ID が混入していても無視される）。
+  // 旧フォーマットに残っている mdTabFilePaths は完全に無視する。
+  const leafEntries: Array<[string, { cwd: string | null }]> = payload.metas
     .filter(([id]) => {
       const node = layout.nodes.get(id);
       return node && !("type" in node && node.type === "split");
     })
-    .map(([id, m]) => [
-      id,
-      m.mdTabFilePaths
-        ? { cwd: m.cwd, mdTabFilePaths: m.mdTabFilePaths }
-        : { cwd: m.cwd },
-    ]);
+    .map(([id, m]) => [id, { cwd: m.cwd }]);
   useTerminalMetaStore.getState().hydrateMetas(leafEntries);
 
   return true;

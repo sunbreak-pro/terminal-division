@@ -7,8 +7,12 @@ import {
 import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import * as terminalManager from "../services/terminalManager";
 import { useSidebarStore, useSidebarOpen } from "../stores/sidebarStore";
+import {
+  useRightSidebarStore,
+  useRightSidebarOpen,
+} from "../stores/rightSidebarStore";
 import { useSettingsModalStore } from "../stores/settingsModalStore";
-import { PanelLeftIcon } from "./Sidebar/icons";
+import { PanelLeftIcon, PanelRightIcon } from "./Sidebar/icons";
 
 const Header: React.FC = React.memo(() => {
   const activeTerminalId = useActiveTerminalId();
@@ -16,6 +20,8 @@ const Header: React.FC = React.memo(() => {
   const { splitTerminal } = useTerminalActions();
   const sidebarOpen = useSidebarOpen();
   const toggleSidebar = useSidebarStore((s) => s.toggleOpen);
+  const rightSidebarOpen = useRightSidebarOpen();
+  const toggleRightSidebar = useRightSidebarStore((s) => s.toggleOpen);
 
   const currentTheme = useCurrentTheme();
   const themeConfig = useThemeConfig();
@@ -249,6 +255,36 @@ const Header: React.FC = React.memo(() => {
             <polyline points="9 14 12 11 15 14" />
           </svg>
           ディレクトリ移動
+        </button>
+
+        <button
+          type="button"
+          className="titlebar-no-drag"
+          onClick={toggleRightSidebar}
+          title={
+            rightSidebarOpen
+              ? "Markdown サイドバーを閉じる"
+              : "Markdown サイドバーを開く"
+          }
+          aria-pressed={rightSidebarOpen}
+          style={{
+            ...buttonStyle,
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+            color: rightSidebarOpen
+              ? theme.colors.text
+              : theme.colors.textSecondary,
+            border: rightSidebarOpen
+              ? `1px solid ${theme.colors.borderActive}`
+              : `1px solid ${theme.colors.border}`,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "transparent";
+          }}
+        >
+          <PanelRightIcon size={14} />
         </button>
 
         <button

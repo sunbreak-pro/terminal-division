@@ -21,9 +21,6 @@ function makeMeta(cwd: string | null): TerminalMeta {
     shellName: null,
     lastActiveAt: 1,
     createdAt: 1,
-    viewMode: "cli",
-    mdTabs: [],
-    activeMdTabId: null,
     fontSizeOverride: null,
     customTitle: null,
   };
