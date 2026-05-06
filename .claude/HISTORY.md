@@ -1,5 +1,44 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-06 - Header / Sidebar UI 調整（検索フィールド中央移設・分割ボタンアイコン化・設定ボタンを Sidebar 移設）
+
+#### 概要
+
+ユーザー要望「ファイル名検索フィールドを Header 中央に移設、分割ボタンはアイコンのみ表示、設定ボタンは LeftSidebar のツリーの一番下に新セクションとして position:sticky で常時表示」に対応。事前に AskUserQuestion で 4 点確認: (1) ブランチ運用は新ブランチ推奨を選択、(2) 検索フィールドはサイドバーを閉じても Header 中央に常時表示、(3) Header の設定ボタンは削除して Sidebar のみに置く、(4) ディレクトリ移動ボタンも分割ボタンと同じくアイコンのみで統一。Header を 3 セクション（左 = Title + Sidebar toggle / 中央 = 検索 input / 右 = 分割ボタン群 + RightSidebar toggle）に組み換え。検索 state は既に `sidebarStore.searchQuery` に存在していたため、Header から同じストアを購読して DirectoryTree と自動同期する形に（追加の state lifting 不要、双方向同期は Zustand 任せ）。DirectoryTree から旧検索 input ブロックと未使用になった `setSearchQuery` import を撤去（filter ロジックは維持）。Sidebar に新コンポーネント `SidebarSettingsSection` を追加し、DirectoryTree / GitPanel の下、ResizeHandle の上に配置。`flexShrink:0 + position:sticky bottom:0 + zIndex:1` で常時下端固定。設定アイコン + 「設定」ラベル付きボタンで `useSettingsModalStore.open()` を呼ぶ。Header.test.tsx を更新（「設定ボタン存在」→「検索フィールド存在 + 設定ボタン不在」、「設定ボタンクリックで modal 開く」→「検索入力で sidebarStore に書かれる」）。session-verifier 通過: 540/540 件グリーン + `npm run build` 通過。HISTORY ローリングアーカイブで 2026-04-30 エントリを `HISTORY-archive.md` に移動。
+
+#### 変更点
+
+- **`src/renderer/components/Header.tsx`**:
+  - `useSettingsModalStore` import と handleOpenSettings / handleSettingsButtonEnter ハンドラを削除
+  - `useSidebarStore` から `searchQuery` / `setSearchQuery` を購読
+  - `searchInputStyle` を `useMemo` で新規定義（max-width 420px、theme.colors.background / border / borderRadius、focus 時のみ borderActive 色に変化）
+  - JSX を `header (justify-content: space-between)` の中で 3 セクションに分割: 左（Title + Sidebar toggle、変更なし）/ 中央（`flex: 1` + `justifyContent: center` + `titlebar-no-drag` で囲った `<input type="search">`）/ 右（分割 V/H + ディレクトリ移動 + RightSidebar toggle）
+  - 縦分割 / 横分割 / ディレクトリ移動の 3 ボタンから `縦分割` / `横分割` / `ディレクトリ移動` の文字列ノードを削除しアイコンのみに。`aria-label` を追加してスクリーンリーダー対応、`padding` を `xs sm` に詰めて視覚バランス調整
+  - 設定ボタン全体（onClick / svg gear / 「設定」ラベル）を完全削除
+- **`src/renderer/components/Sidebar/DirectoryTree.tsx`**:
+  - 検索 input を含む 36 行のヘッダー div ブロック（line 310-348 相当）を削除し、`{/* 検索 input は Header 中央に移設済み（sidebarStore.searchQuery を共有）。*/}` のコメントに置換
+  - 未使用になった `const setSearchQuery = useSidebarStore((s) => s.setSearchQuery);` を削除（`searchQuery` 読み取りは filter ロジックで継続使用）
+- **`src/renderer/components/Sidebar/Sidebar.tsx`**:
+  - `useSettingsModalStore` import を追加
+  - `Sidebar` の return 内、GitPanel の下、ResizeHandle の上に `<SidebarSettingsSection />` を挿入
+  - 同ファイル末尾に `SidebarSettingsSection` コンポーネントを新規定義: `position: sticky; bottom: 0; flexShrink: 0; backgroundColor: theme.colors.headerBackground; borderTop; padding 6px 8px; zIndex: 1`。中身は `aria-label="設定を開く"` + 設定 svg gear アイコン (14px) + 「設定」ラベルの button、hover で `theme.colors.buttonHover` に背景色変化、クリックで `useSettingsModalStore.getState().open()` を呼ぶ
+  - DirectoryTree が `overflow:auto` を内部に持つため通常はツリーが押し出さないが、念のため sticky を併用（aside 自体がスクロールするレイアウト変更にも耐える防御）
+- **`src/renderer/components/__tests__/Header.test.tsx`**:
+  - `renders the kept buttons (split / directory / settings)` を `renders the kept buttons (split / directory) and the center search field` にリネーム + 設定ボタン assertion を削除し、`screen.getByPlaceholderText("ファイル名で検索")` の存在検証を追加
+  - `does NOT render the settings button (moved to Sidebar)` を新規追加（`queryByTitle("設定 (Cmd+,)")` で不在検証）
+  - `opens settings modal store on settings button click` を `center search field writes to sidebarStore.searchQuery` に置換: `useSidebarStore.setState({ searchQuery: "" })` で初期化 → input change → `useSidebarStore.getState().searchQuery` が `"foo.md"` になることを検証
+- **テスト合計**: 39 ファイル / 540 件グリーン（変更前 540 から維持）+ `npm run build` 通過
+- **設計判断**:
+  - **検索 state を sidebarStore で共有 vs prop drilling**: 検索 state は既に `sidebarStore.searchQuery` に存在し、DirectoryTree が購読していた。Header から同じストアを購読する形にすれば追加の state lifting / context が一切不要で、双方向同期は Zustand の購読機構が担保する。新しい store / context を切らないのが最もシンプル
+  - **検索フィールドをサイドバー閉じ時も常時表示**: ユーザーの明示要望に従う。値は保持されるがサイドバー閉じ時は filter 効果が見えない（DirectoryTree が描画されないため）。サイドバーを開けば即反映。「閉じてる時に typed→自動で開く」挙動は今回追加せず（要望に含まれない / スコープ最小化）
+  - **設定ボタンを Header から完全削除**: ユーザー回答により Header 重複を避ける選択。サイドバー閉じ時は Cmd+, ショートカットで設定を開く運用になる（既存 ShortcutSettings で登録済み）
+  - **ディレクトリ移動ボタンもアイコンのみに統一**: ユーザー回答により Header 視覚を統一。tooltip と aria-label で意味は伝わる
+  - **`SidebarSettingsSection` を inline コンポーネントとして同ファイル内に置いた理由**: 1 ファイル内で完結する小さい UI で、外部から再利用しない。`Sidebar.tsx` 内に同居させた方が「Sidebar の最下段セクション」という意味的まとまりが明確で、ファイル分割のオーバーヘッドに見合わない。テスト書きたくなったら抽出
+  - **`position: sticky; bottom: 0` を flexShrink:0 と併用した理由**: 通常は flexShrink:0 だけで十分（DirectoryTree の overflow:auto が内側に閉じているため）。ただし将来 aside 自体に `overflow-y:auto` を入れるレイアウト変更（例: タブ列が肥大化したケース）が起きても動くように sticky を保険として併用。`zIndex:1` で背後のツリーアイテムに重なる
+  - **テストインフラ拡張は最小に**: `Sidebar.tsx` 自体には pre-existing でユニットテストがなく、`window.api.sidebar.getWidth()` 等のモックも未整備。今回の `SidebarSettingsSection` は薄いラッパー（`useSettingsModalStore.open()` を呼ぶだけ）なので、テストインフラ拡張のコスト > テストの価値と判断。Header 側で「設定ボタンが Header から消えた」を担保するに留める
+  - **アイコンは Sidebar/icons.tsx に追加せず inline SVG を維持**: 設定ギアアイコンは Header から移すだけで新規ではない。検索アイコンも今回 input 内に置かないので不要。`icons.tsx` を肥大化させず、変更を該当 component 内に閉じる
+  - **HISTORY ローリングアーカイブ**: エントリ 5 件上限のため、本タスク追加時に最古の 2026-04-30 エントリを `HISTORY-archive.md` に移動
+
 ### 2026-05-06 - VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）+ xterm 全角リンクずれ修正
 
 #### 概要
@@ -177,41 +216,3 @@ T3-5 として実装した Claude Code Chat UI を機能ごと撤回。Claude �
 - **Branch / Tag**: `feat/remove-chat-ui` ブランチで作業中（main からは未マージ）。削除直前のスナップショットを `pre-chat-removal` タグで保全（main の HEAD = 41322e2 の `chore(chat): WIP polish snapshot before removal` を指す）。復活時は `git checkout pre-chat-removal -- <path>` で個別取得可能
 - **残存リスク（記録）**: 既存ユーザーの `userData/trusted-dirs.json` は削除されないが、Reader が消えたため不活性ファイル化するだけで実害なし。次バージョンで起動時 cleanup を入れるかは別タスクで判断
 - **Coding 判断**: trusted-dirs / slash-items / claude-process-detector は他用途への流用可能性があったが、構造的に chat 専用 API 形状（CWD 信頼確認 / `/` コマンド補完 / OSC 0 ✳ Claude Code バナー検出）であり、汎用的な再利用には設計しなおしが必要なので機能ごと削除した
-
-### 2026-04-30 - アプリ全体ズーム機能追加 + per-pane フォントズームを MD/Chat に拡張
-
-#### 概要
-
-ユーザー要望「Cmd+= / Cmd+- が現状ターミナルに絞られているが、本来はアプリ画面全体の拡大縮小を意図したかった。今のターミナル個別ズームは残したまま、別途アプリ全体ズーム機能を追加してほしい。さらにターミナルの拡大縮小は markdown / chat にも対応させてほしい」を実装。アプリ全体ズームは `general.appZoomFactor`（既定 1.0、範囲 0.5〜2.0、step 0.1）を新設し、preload で `webFrame.setZoomFactor` を直接ブリッジ（contextIsolation 下でも preload は webFrame を呼べるため IPC 不要）。Renderer の App.tsx で `useSettingsStore` を購読し設定変更ごとに即時適用（idempotent setter なのでクリーンアップ不要）。Settings の「一般」タブに − / 倍率表示 / + / リセット + 範囲スライダーを追加。per-pane ズーム（Cmd+= / Cmd+- / Cmd+0）はアクティブペインの `viewMode` に応じてターゲットを切替: `cli` → `terminal.fontSize`（既存挙動維持）/ `md` → `editor.fontSize`（MarkdownEditor は元から `editorSettings.fontSize` を参照していたため自動連動）/ `chat` → 新規 `chat.fontSize`（既定 13.5、範囲 10〜28、ChatInput と MessageBubble の本文に反映）。`adjustGlobalFontSize` / `resetGlobalFontSize` を viewMode 分岐に書き直し、各々のクランプ範囲・既定値で動かす。`shared/settings.ts` に `ChatSettings` 型 / `validateChatSettings` / `mergeSettings` の chat 対応 / `APP_ZOOM_MIN/MAX/STEP` / `CHAT_FONT_SIZE_MIN/MAX` 定数を追加し、`general.appZoomFactor` も `clampNumber` で範囲検証。ChatInput の textarea 自動高さ計算に `chatSettings.fontSize` を依存追加してフォントサイズ変更時に即追従。設定 UI のリセット / 増減ボタンは APP_ZOOM_MIN/MAX 端点で disabled。テスト合計 37 ファイル / 514 件グリーン（chat / appZoomFactor の clamp / fallback / 破損ブロック復元の 4 ケース追加）。CLAUDE.md §8 T2-10 を新仕様（viewMode 分岐 + アプリ全体ズーム）に更新。
-
-#### 変更点
-
-- **shared/settings.ts**: `ChatSettings { fontSize: number }` を新規追加、`AppSettings` と `PartialAppSettings` に `chat` を組み込み。`general.appZoomFactor: number` を `GeneralSettings` に追加し、`validateGeneralSettings` で `clampNumber(value, APP_ZOOM_MIN, APP_ZOOM_MAX, default)` の検証を実装。`validateChatSettings` を新設し `clampNumber(value, CHAT_FONT_SIZE_MIN, CHAT_FONT_SIZE_MAX, default)` で fontSize 検証。定数 `APP_ZOOM_MIN=0.5` / `APP_ZOOM_MAX=2.0` / `APP_ZOOM_STEP=0.1` / `CHAT_FONT_SIZE_MIN=10` / `CHAT_FONT_SIZE_MAX=28` を export。`DEFAULT_SETTINGS.chat.fontSize=13.5` / `DEFAULT_SETTINGS.general.appZoomFactor=1.0`。`mergeSettings` / `cloneDefaults` / `validateAppSettings` の各所に `chat` の field-level マージを追加
-- **renderer/stores/settingsStore.ts**: `applyOptimistic` に `patch.chat` の浅マージを追加。新規セレクタ `useChatSettings` を export
-- **preload/index.ts**: `electron` から `webFrame` を import し、`window.api.window.setZoomFactor(value: number)` を新規公開。finite check + try/catch でガード（範囲外でも黙って無視）。webFrame は preload context で直接呼べるため Main 側の IPC ハンドラ不要
-- **renderer/App.tsx**:
-  - `resolveActiveViewMode()` ヘルパを新設（`useTerminalStore.getState().activeTerminalId` → `useTerminalMetaStore.getState().metas.get(id)?.viewMode` を返す、null フォールバック）
-  - `adjustGlobalFontSize(delta)` を viewMode 分岐に書き直し: `md` → `editor.fontSize` をクランプ更新 / `chat` → `chat.fontSize` をクランプ更新 / `cli` or null → `terminal.fontSize`（既存挙動）。各々 no-op early return + クランプ範囲は対応定数を使用
-  - `resetGlobalFontSize()` も同様の分岐: `md` → `DEFAULT_SETTINGS.editor.fontSize` / `chat` → `DEFAULT_SETTINGS.chat.fontSize` / `cli` or null → `terminal.fontSize=14` + `clearAllFontSizeOverrides()`
-  - `useTerminalStore` を import に追加（既存の selector hook と並行して getState 用）
-  - 新規 `useEffect`: `useSettingsStore((s) => s.settings.general.appZoomFactor)` を購読し変化時に `window.api.window.setZoomFactor(appZoomFactor)` を呼ぶ。起動直後 1.0 で 1 度走り、`load()` 完了後の永続化値で再走する
-- **renderer/components/settings/GeneralSettings.tsx**: 「アプリ全体の表示倍率」セクションを追加。`setAppZoom(next)` で小数 2 桁丸め + クランプ + `update({ general: { appZoomFactor } })` を発火。− / 倍率%表示 / + / リセットボタン + range スライダー (`APP_ZOOM_MIN`〜`APP_ZOOM_MAX`、step `APP_ZOOM_STEP`)。端点で disabled、リセットボタンは既定値との差が < 1e-6 のとき disabled。説明文に「ターミナル個別フォントズーム (⌘+ / ⌘− / ⌘0) と独立で併用可能」を明記
-- **renderer/components/ChatPane/ChatInput.tsx**: `useChatSettings` を import、textarea の `fontSize: 13.5` ハードコードを `chatSettings.fontSize` に置換。textarea 高さ自動計算 `useLayoutEffect` の依存配列に `chatSettings.fontSize` を追加（フォントサイズ変更時に line-height 換算が変わるため即時 re-fit が必要）
-- **renderer/components/ChatPane/MessageBubble.tsx**: `useChatSettings` を import、`bubbleStyle` 内の `fontSize: 13.5` を `chatSettings.fontSize` に置換し useMemo deps に追加
-- **`.claude/CLAUDE.md` §8 T2-10**: 「カスタマイズ拡張」の説明を新仕様に更新。`AppSettings` の構成を `terminal / editor / chat / general` に拡張、`appZoomFactor` を一般設定に追加、フォントズームを「viewMode に応じて cli → terminal.fontSize / md → editor.fontSize / chat → chat.fontSize に分岐するグローバル設定直接更新」と再記述、アプリ全体ズームを「preload 経由 webFrame.setZoomFactor で適用、50%〜200%、ターミナル個別ズームと独立併用可」と追記
-- **新規テスト 4 件 (`shared/__tests__/settings.test.ts`)**:
-  - `merges chat patch and clamps fontSize`: 下限 1 → 10 / 上限 999 → 28 / 範囲内 16 → 16 を確認
-  - `merges general.appZoomFactor and clamps to APP_ZOOM bounds`: 下限 0.1 → 0.5 / 上限 5 → 2.0 / 範囲内 1.25 → 1.25 を確認
-  - `falls back appZoomFactor to default for non-numeric values`: `"big"` → DEFAULT
-  - `validateAppSettings restores chat defaults for malformed chat block`: `"garbage"` → `DEFAULT_SETTINGS.chat`
-- **既存テスト更新**: `mergeSettings` の `base` AppSettings に `chat: { ...DEFAULT_SETTINGS.chat }` を追加（必須フィールド追加に伴う TS エラー解消）
-- **テスト合計**: 37 ファイル / 514 件グリーン（修正前 510 から +4 件）+ `npm run build` 通過
-- **設計判断**:
-  - **アプリ全体ズームを `webFrame.setZoomFactor` 経由にした理由**: CSS `zoom` / `transform: scale` ではターミナルの ResizeObserver / xterm.fit と整合せず cols/rows が乖離しやすい。`webFrame.setZoomFactor` は Chromium がレンダリング全体に均一スケールを適用するため CSS 計算値（getComputedStyle 等）を含めて綺麗に拡縮される。Electron の標準 zoom 機構なのでメインプロセスを介さずに preload から直接呼べるのも利点
-  - **preload で webFrame を直接呼ぶ vs Main 経由 IPC**: contextIsolation 下でも preload は Electron API にフルアクセスできるため、ズーム適用のような副作用なし・即時 setter は preload で完結させた方がレイテンシゼロで簡潔。ウィンドウ間の同期も不要（各ウィンドウが独立して同じ settings を購読する設計のため、自然に揃う）
-  - **viewMode 分岐 vs ペイン別 fontSize**: 「Chat ペインだけ大きく / MD ペインだけ小さく」というユースケースは現状想定されないため、各タイプ共通のグローバル設定を更新する形にした。既存ターミナルの挙動と一貫し、Settings UI のスライダーと常に同期する利点も継承
-  - **chat fontSize は本文（バブル + 入力欄）のみに適用、ステータスバー等は据え置き**: チャット UI 内には fontSize ハードコードが多数（ステータスバー / Welcome / Trust Panel / SlashMenu 等）あるが、これらは補助 UI で本文ではない。Cmd+= で本文のみ拡縮するのがユーザー期待（メッセージを読みやすくしたい）に合致し、補助 UI まで拡縮するとレイアウト崩れリスクが上がる
-  - **ChatInput の textarea 高さ依存に fontSize を追加**: useLayoutEffect が `[value]` のみ依存だと、フォントサイズだけ変わって `value` が同じケース（拡大直後など）に高さ再計算が走らず、line-height ベース計算と実際の表示にズレが出る。依存追加で初回拡縮直後から正しい高さに収束
-  - **アプリ全体ズームの範囲を 0.5〜2.0 に絞った理由**: Electron の webFrame は 0.25〜5.0 を許容するが、0.25 ではトラフィックライト等の OS UI と崩れ、3.0 以上ではターミナルの cols が 10 を切って実用にならない。実用域として 50%〜200% に限定
-  - **既存ターミナル挙動の互換性維持**: `viewMode === "cli"` または `null`（ペイン未確定）時は元の `terminal.fontSize` 更新ロジックを完全保持。`Cmd+0` の reset 値も既存の 14 を踏襲（`DEFAULT_SETTINGS.terminal.fontSize=13` との差は旧仕様からの引き継ぎで、エディタ/チャットだけ DEFAULT_SETTINGS から値を取る）
-  - **General settings タブで完結 vs ショートカット追加**: ユーザー要望「Settings の場所は一般タブで OK」に従い、ショートカットは追加せずスライダー + ボタンのみ。後日要望があればショートカット ID `app-zoom-in/out/reset` を追加できるよう registry を拡張可能な状態に保つ
