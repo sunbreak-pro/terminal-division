@@ -11,7 +11,15 @@ import { showErrorToast } from "../components/Sidebar/ErrorToast";
 async function loadAndOpen(filePath: string): Promise<void> {
   const result = await window.api.fs.readFile(filePath);
   if (!result.ok) {
-    showErrorToast(`ファイル読込に失敗しました: ${result.error}`);
+    // ENOENT (ファイル不在) は「ターミナル上に表示されただけで実体は無い」
+    // ケース (Claude が言及した生成予定パス等) で頻発するため、basename だけの
+    // 簡潔な文言にする。それ以外の I/O エラーは原文をそのまま出す。
+    if (typeof result.error === "string" && result.error.startsWith("ENOENT")) {
+      const basename = filePath.split("/").pop() || filePath;
+      showErrorToast(`ファイルが見つかりません: ${basename}`);
+    } else {
+      showErrorToast(`ファイル読込に失敗しました: ${result.error}`);
+    }
     return;
   }
   const opened = useMarkdownTabsStore

@@ -3,6 +3,8 @@ import fs from "fs";
 import { ptyManager } from "./pty-manager";
 import { createWindow, canCreateWindow } from "./window-manager";
 import { recentDirectoryManager } from "./recent-directories";
+import { pinnedDirectoryManager } from "./pinned-directories";
+import { gitManager } from "./git-manager";
 import { fileSystemManager } from "./file-system-handler";
 import { sidebarStateManager } from "./sidebar-state";
 import { rightSidebarStateManager } from "./right-sidebar-state";
@@ -77,6 +79,123 @@ export function setupIpcHandlers(): void {
     recentDirectoryManager.addDirectory(safe);
   });
 
+  // ピン留めディレクトリ (Sidebar の追加ツリー) — get / add / remove
+  ipcMain.handle("pinnedDirs:get", () => {
+    return pinnedDirectoryManager.getDirectories();
+  });
+  ipcMain.handle("pinnedDirs:add", (_, dirPath: string) => {
+    // OS のディレクトリ選択ダイアログでユーザが明示的に選んだパスを想定するため
+    // ここでは validatePath を使わず、絶対パス + 実在ディレクトリだけを保証する。
+    // (validatePath はホーム配下等のホワイトリスト方式で、外側のパスを弾いてしまう)
+    if (typeof dirPath !== "string") return false;
+    return pinnedDirectoryManager.add(dirPath);
+  });
+  ipcMain.handle("pinnedDirs:remove", (_, dirPath: string) => {
+    if (typeof dirPath !== "string") return false;
+    return pinnedDirectoryManager.remove(dirPath);
+  });
+
+  // ========== Git ==========
+  // 全 git: ハンドラは「cwd 引数 → validatePath で安全化 → gitManager に委譲」の
+  // 統一形。GitManager 側で git 管理下でない場合は { ok: false, error } を返す。
+
+  ipcMain.handle("git:resolveRoot", async (_, cwd: string) => {
+    const safe = validatePath(cwd);
+    if (!safe) return null;
+    return gitManager.resolveRoot(safe);
+  });
+
+  ipcMain.handle("git:status", async (_, cwd: string) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    return gitManager.status(safe);
+  });
+
+  ipcMain.handle("git:branchList", async (_, cwd: string) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    return gitManager.branchList(safe);
+  });
+
+  ipcMain.handle(
+    "git:branchCreate",
+    async (_, cwd: string, name: string, from?: string) => {
+      const safe = validatePath(cwd);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      return gitManager.branchCreate(safe, name, from);
+    },
+  );
+
+  ipcMain.handle(
+    "git:branchDelete",
+    async (_, cwd: string, name: string, force?: boolean) => {
+      const safe = validatePath(cwd);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      return gitManager.branchDelete(safe, name, !!force);
+    },
+  );
+
+  ipcMain.handle("git:branchSwitch", async (_, cwd: string, name: string) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    return gitManager.branchSwitch(safe, name);
+  });
+
+  ipcMain.handle("git:stage", async (_, cwd: string, paths: string[]) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    if (!Array.isArray(paths))
+      return { ok: false as const, error: "invalid paths" };
+    return gitManager.stage(safe, paths);
+  });
+
+  ipcMain.handle("git:unstage", async (_, cwd: string, paths: string[]) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    if (!Array.isArray(paths))
+      return { ok: false as const, error: "invalid paths" };
+    return gitManager.unstage(safe, paths);
+  });
+
+  ipcMain.handle("git:commit", async (_, cwd: string, message: string) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    return gitManager.commit(safe, message);
+  });
+
+  ipcMain.handle(
+    "git:push",
+    async (_, cwd: string, remote?: string, branch?: string) => {
+      const safe = validatePath(cwd);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      return gitManager.push(safe, remote, branch);
+    },
+  );
+
+  ipcMain.handle(
+    "git:pull",
+    async (_, cwd: string, remote?: string, branch?: string) => {
+      const safe = validatePath(cwd);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      return gitManager.pull(safe, remote, branch);
+    },
+  );
+
+  ipcMain.handle("git:fetch", async (_, cwd: string, remote?: string) => {
+    const safe = validatePath(cwd);
+    if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+    return gitManager.fetch(safe, remote);
+  });
+
+  ipcMain.handle(
+    "git:diff",
+    async (_, cwd: string, path?: string, staged?: boolean) => {
+      const safe = validatePath(cwd);
+      if (!safe) return { ok: false as const, error: PATH_REJECTED_ERROR };
+      return gitManager.diff(safe, path, !!staged);
+    },
+  );
+
   // ディレクトリ選択ダイアログ
   ipcMain.handle("dialog:selectDirectory", async (event) => {
     const parentWin = BrowserWindow.fromWebContents(event.sender);
@@ -133,6 +252,25 @@ export function setupIpcHandlers(): void {
     }
     await shell.openExternal(parsed.toString());
     return true;
+  });
+
+  // ローカルパス（ファイル / ディレクトリ）をデフォルトアプリで開く。
+  // - ターミナル上のパスを Cmd+クリックして OS のデフォルトハンドラに渡す用途
+  // - validatePath で path-validator を通過しないパスは弾く（HOME 配下チェック）
+  // - shell.openPath は失敗時に空文字以外のエラー文字列を返す
+  ipcMain.handle("shell:openPath", async (_, targetPath: string) => {
+    if (typeof targetPath !== "string" || targetPath.length === 0) {
+      return { ok: false as const, error: "invalid path" };
+    }
+    const safe = validatePath(targetPath);
+    if (!safe) {
+      return { ok: false as const, error: PATH_REJECTED_ERROR };
+    }
+    const errMsg = await shell.openPath(safe);
+    if (errMsg) {
+      return { ok: false as const, error: errMsg };
+    }
+    return { ok: true as const };
   });
 
   // ========== File system (sidebar) ==========

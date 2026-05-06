@@ -9,8 +9,8 @@ import { useSidebarStore } from "../../stores/sidebarStore";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
-  FolderIcon,
-  FileIcon,
+  FolderTypeIcon,
+  FileTypeIcon,
 } from "./icons";
 import { showErrorToast } from "./ErrorToast";
 import {
@@ -273,7 +273,11 @@ export const TreeNode: React.FC<TreeNodeProps> = ({
             color: theme.colors.textSecondary,
           }}
         >
-          {node.isDirectory ? <FolderIcon /> : <FileIcon />}
+          {node.isDirectory ? (
+            <FolderTypeIcon name={node.name} expanded={isExpanded} />
+          ) : (
+            <FileTypeIcon name={node.name} />
+          )}
         </span>
         {isEditing ? (
           <RenameInput

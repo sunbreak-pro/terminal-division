@@ -1,9 +1,59 @@
 import React from "react";
+import {
+  getFileIconUrl,
+  getFolderIconUrl,
+} from "../../utils/materialIconResolver";
 
 interface IconProps {
   size?: number;
   color?: string;
 }
+
+interface TypedIconProps {
+  /** ファイル / フォルダ名。拡張子・特定名 (package.json 等) からアイコンを決める */
+  name: string;
+  size?: number;
+}
+
+/**
+ * material-icon-theme 由来のファイル拡張子別アイコン。
+ * URL 解決に失敗した場合は汎用の `FileIcon` (アウトライン) にフォールバック。
+ */
+export const FileTypeIcon: React.FC<TypedIconProps> = ({ name, size = 14 }) => {
+  const url = getFileIconUrl(name);
+  if (!url) return <FileIcon size={size} />;
+  return (
+    <img
+      src={url}
+      width={size}
+      height={size}
+      alt=""
+      draggable={false}
+      style={{ display: "inline-block", verticalAlign: "middle" }}
+    />
+  );
+};
+
+/**
+ * material-icon-theme 由来のフォルダ名別アイコン。
+ * 既知のフォルダ名 (`src`, `node_modules` 等) は色付きで描かれ、それ以外は汎用フォルダ。
+ */
+export const FolderTypeIcon: React.FC<
+  TypedIconProps & { expanded?: boolean }
+> = ({ name, size = 14, expanded = false }) => {
+  const url = getFolderIconUrl(name, expanded);
+  if (!url) return <FolderIcon size={size} />;
+  return (
+    <img
+      src={url}
+      width={size}
+      height={size}
+      alt=""
+      draggable={false}
+      style={{ display: "inline-block", verticalAlign: "middle" }}
+    />
+  );
+};
 
 export const PanelLeftIcon: React.FC<IconProps> = ({
   size = 16,

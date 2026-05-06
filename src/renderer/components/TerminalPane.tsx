@@ -31,6 +31,7 @@ import { TerminalSearchOverlay } from "./TerminalSearchOverlay";
 import { showErrorToast } from "./Sidebar/ErrorToast";
 import { resolveMarkdownPath } from "../utils/markdownPath";
 import { requestEditMarkdownFromTerminal } from "../services/markdownOpenService";
+import { usePathHoverStore } from "../stores/pathHoverStore";
 
 const TD_PATH_MIME = "application/x-td-path";
 
@@ -153,6 +154,38 @@ const TerminalPane: React.FC<TerminalPaneProps> = React.memo(
               return;
             }
             requestEditMarkdownFromTerminal(abs);
+          },
+          onPathOpen: (raw: string) => {
+            // .md 以外のパス。OS デフォルトハンドラで開く (ファイル: 既定アプリ、
+            // ディレクトリ: Finder)。
+            const meta = useTerminalMetaStore.getState().metas.get(id);
+            const cwd = meta?.cwd ?? null;
+            const home = window.api.system.getHomeDir() || "";
+            const abs = resolveMarkdownPath(raw, cwd, home);
+            if (!abs) {
+              showErrorToast("パスを解決できませんでした");
+              return;
+            }
+            void window.api.shell.openPath(abs).then((result) => {
+              if (!result.ok) {
+                if (result.error.startsWith("ENOENT")) {
+                  showErrorToast(
+                    `ファイルが見つかりません: ${abs.split("/").pop() || abs}`,
+                  );
+                } else {
+                  showErrorToast(`開けませんでした: ${result.error}`);
+                }
+              }
+            });
+          },
+          onPathHover: (raw: string, event: MouseEvent) => {
+            // tooltip は「⌘+クリックで開く」の固定文言。位置はカーソル座標。
+            usePathHoverStore
+              .getState()
+              .show(raw, event.clientX, event.clientY);
+          },
+          onPathLeave: () => {
+            usePathHoverStore.getState().hide();
           },
         },
       );

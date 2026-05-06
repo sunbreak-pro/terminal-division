@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   findMarkdownPaths,
+  findPaths,
   resolveMarkdownPath,
   isInsideCwd,
 } from "../markdownPath";
@@ -130,5 +131,78 @@ describe("isInsideCwd", () => {
 
   it("is false when cwd is null", () => {
     expect(isInsideCwd("/any/foo.md", null)).toBe(false);
+  });
+});
+
+describe("findPaths", () => {
+  it("既存の md パスは kind='md' で返される", () => {
+    const r = findPaths("see /Users/foo/bar/README.md please");
+    expect(r).toHaveLength(1);
+    expect(r[0].raw).toBe("/Users/foo/bar/README.md");
+    expect(r[0].kind).toBe("md");
+  });
+
+  it(".md 以外の絶対パスは kind='path'", () => {
+    const r = findPaths("opening /Users/foo/script.sh now");
+    expect(r).toHaveLength(1);
+    expect(r[0].raw).toBe("/Users/foo/script.sh");
+    expect(r[0].kind).toBe("path");
+  });
+
+  it("チルダ表記も検出する", () => {
+    const r = findPaths("cat ~/.zshrc");
+    expect(r).toHaveLength(1);
+    expect(r[0].raw).toBe("~/.zshrc");
+    expect(r[0].kind).toBe("path");
+  });
+
+  it("相対パス (./ ../) も検出する", () => {
+    const r = findPaths("vim ./src/index.ts");
+    expect(r).toHaveLength(1);
+    expect(r[0].raw).toBe("./src/index.ts");
+    expect(r[0].kind).toBe("path");
+  });
+
+  it("dir/file 形式も検出する", () => {
+    const r = findPaths("see src/components/App.tsx");
+    expect(r.length).toBeGreaterThanOrEqual(1);
+    expect(r[0].raw).toBe("src/components/App.tsx");
+    expect(r[0].kind).toBe("path");
+  });
+
+  it("URL 範囲は除外する", () => {
+    // https://example.com/foo.md は WebLinksAddon が拾う領分
+    const r = findPaths("docs at https://example.com/foo.md available");
+    expect(r).toHaveLength(0);
+  });
+
+  it("md と他のパスを混在検出できる", () => {
+    const r = findPaths("docs: ~/notes/foo.md and config /etc/zshrc");
+    expect(r).toHaveLength(2);
+    const md = r.find((m) => m.kind === "md");
+    const path = r.find((m) => m.kind === "path");
+    expect(md?.raw).toBe("~/notes/foo.md");
+    expect(path?.raw).toBe("/etc/zshrc");
+  });
+
+  it("単独の単語 (path セパレータ無し) は検出しない", () => {
+    expect(findPaths("hello world foo bar")).toEqual([]);
+  });
+
+  it("末尾の句読点を切り落とす", () => {
+    const r = findPaths("see /etc/foo.conf, then /etc/bar.conf.");
+    expect(r).toHaveLength(2);
+    expect(r[0].raw).toBe("/etc/foo.conf");
+    expect(r[1].raw).toBe("/etc/bar.conf");
+  });
+
+  it("md が同範囲を被覆していれば md を優先 (path 化されない)", () => {
+    const r = findPaths("file ~/notes/foo.md ok");
+    expect(r).toHaveLength(1);
+    expect(r[0].kind).toBe("md");
+  });
+
+  it("空行は空配列", () => {
+    expect(findPaths("")).toEqual([]);
   });
 });

@@ -34,6 +34,7 @@ vi.mock("../../components/Sidebar/ErrorToast", () => ({
 }));
 
 import { openMarkdownInRightSidebar } from "../markdownOpenService";
+import { showErrorToast } from "../../components/Sidebar/ErrorToast";
 
 describe("openMarkdownInRightSidebar", () => {
   beforeEach(() => {
@@ -83,5 +84,28 @@ describe("openMarkdownInRightSidebar", () => {
     await openMarkdownInRightSidebar("/missing.md");
     expect(openMarkdownMock).not.toHaveBeenCalled();
     expect(setOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a friendly toast (basename only) when ENOENT is returned", async () => {
+    readFileMock.mockResolvedValue({
+      ok: false,
+      error:
+        "ENOENT: no such file or directory, stat '/Users/x/learning/foo.md'",
+    });
+    await openMarkdownInRightSidebar("/Users/x/learning/foo.md");
+    expect(showErrorToast).toHaveBeenCalledWith(
+      "ファイルが見つかりません: foo.md",
+    );
+  });
+
+  it("falls back to the raw error for non-ENOENT failures", async () => {
+    readFileMock.mockResolvedValue({
+      ok: false,
+      error: "EACCES: permission denied",
+    });
+    await openMarkdownInRightSidebar("/restricted.md");
+    expect(showErrorToast).toHaveBeenCalledWith(
+      "ファイル読込に失敗しました: EACCES: permission denied",
+    );
   });
 });

@@ -6,7 +6,7 @@ import {
   type FileNode,
 } from "../../stores/fileTreeStore";
 import { TreeNode, filterEntriesByQuery } from "./TreeNode";
-import { FolderIcon, FileIcon } from "./icons";
+import { FolderTypeIcon, FileTypeIcon } from "./icons";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { showErrorToast } from "./ErrorToast";
 import { useSidebarStore } from "../../stores/sidebarStore";
@@ -604,7 +604,11 @@ const SearchResultRow: React.FC<SearchResultRowProps> = ({
           color: theme.colors.textSecondary,
         }}
       >
-        {node.isDirectory ? <FolderIcon /> : <FileIcon />}
+        {node.isDirectory ? (
+          <FolderTypeIcon name={node.name} />
+        ) : (
+          <FileTypeIcon name={node.name} />
+        )}
       </span>
       <div
         style={{

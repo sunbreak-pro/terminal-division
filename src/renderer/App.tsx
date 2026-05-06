@@ -4,6 +4,7 @@ import SplitContainer from "./components/SplitContainer";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { RightSidebar } from "./components/RightSidebar/RightSidebar";
 import { ErrorToastHost } from "./components/Sidebar/ErrorToast";
+import { PathHoverTooltip } from "./components/PathHoverTooltip";
 import { UnsavedChangesModal } from "./components/UnsavedChangesModal";
 import {
   useActiveTerminalId,
@@ -541,6 +542,7 @@ const App: React.FC = () => {
         <RightSidebar />
       </div>
       <ErrorToastHost />
+      <PathHoverTooltip />
       {dialogRequest?.kind === "unsaved" && (
         <UnsavedChangesModal
           isOpen

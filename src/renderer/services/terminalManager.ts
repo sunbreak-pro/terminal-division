@@ -10,7 +10,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon, ISearchOptions } from "@xterm/addon-search";
 import { useTerminalMetaStore } from "../stores/terminalMetaStore";
 import { usePathHistoryStore } from "../stores/pathHistoryStore";
-import { findMarkdownPaths } from "../utils/markdownPath";
+import { findPaths } from "../utils/markdownPath";
+import { buildOffsetToColumnMap } from "../utils/xtermLine";
 import type { XtermTheme } from "../../shared/theme-types";
 
 // 行単位 Undo/Redo 履歴の最大保持数
@@ -123,6 +124,13 @@ export interface TerminalCallbacks {
   // raw は xterm 行から検出した文字列そのまま（チルダ・相対表記を保持）。
   // 解決は呼び出し側（TerminalPane）で行う。未指定時は何もしない。
   onMarkdownLinkClick?: (raw: string) => void;
+  // Cmd/Ctrl + クリックで .md 以外のパス (ファイル / ディレクトリ) が開かれる時。
+  // shell.openPath で OS のデフォルトハンドラに渡す想定。
+  onPathOpen?: (raw: string) => void;
+  // パス文字列の上にマウスが入った時。tooltip 表示用に MouseEvent と raw を渡す。
+  onPathHover?: (raw: string, event: MouseEvent) => void;
+  // パス文字列から離れた時。tooltip を消す。
+  onPathLeave?: () => void;
 }
 
 /**
@@ -159,11 +167,11 @@ export function getOrCreate(
   });
   terminal.loadAddon(webLinksAddon);
 
-  // Markdown ファイルパスの link provider。
-  // `~/foo.md` / `/abs/foo.md` / `./foo.md` / `dir/foo.md` 等を検出して
-  // Cmd/Ctrl + クリックで onMarkdownLinkClick へ raw を渡す。
-  // WebLinksAddon の URL とは検出範囲を分けるため、findMarkdownPaths 内で http(s)
-  // 範囲を除外している。
+  // パス全般の link provider。
+  // - `.md` / `.markdown`: Cmd/Ctrl + クリックで onMarkdownLinkClick (右サイドバー)
+  // - その他のパス: Cmd/Ctrl + クリックで onPathOpen (shell.openPath)
+  // - 共通: hover で onPathHover、離脱で onPathLeave (tooltip 制御)
+  // WebLinksAddon の URL とは検出範囲を分けるため、findPaths 内で http(s) 範囲を除外。
   terminal.registerLinkProvider({
     provideLinks(bufferLineNumber, callback): void {
       const buffer = terminal.buffer.active;
@@ -173,26 +181,43 @@ export function getOrCreate(
         return;
       }
       const text = line.translateToString(true);
-      const matches = findMarkdownPaths(text);
+      const matches = findPaths(text);
       if (matches.length === 0) {
         callback(undefined);
         return;
       }
-      const links: ILink[] = matches.map((m) => ({
-        // xterm の x は 1-based、y は IBuffer での 1-based 行番号
-        range: {
-          start: { x: m.start + 1, y: bufferLineNumber },
-          end: { x: m.end, y: bufferLineNumber },
-        },
-        text: m.raw,
-        activate: (event: MouseEvent, raw: string): void => {
-          const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-          const modifierPressed = isMac ? event.metaKey : event.ctrlKey;
-          if (!modifierPressed) return;
-          event.preventDefault();
-          callbacks.onMarkdownLinkClick?.(raw);
-        },
-      }));
+      // 全角文字 (CJK / 絵文字) を含む行で、文字列 offset をそのまま column として
+      // 渡すと link decoration が左にずれる。セル列ベースのマップを 1 度作って
+      // 各 match 範囲を変換する。
+      const offsetToCol = buildOffsetToColumnMap(line);
+      const links: ILink[] = matches.map((m) => {
+        const startCol = offsetToCol[m.start] ?? m.start + 1;
+        const endCol = offsetToCol[m.end - 1] ?? m.end;
+        return {
+          range: {
+            start: { x: startCol, y: bufferLineNumber },
+            end: { x: endCol, y: bufferLineNumber },
+          },
+          text: m.raw,
+          activate: (event: MouseEvent, raw: string): void => {
+            const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+            const modifierPressed = isMac ? event.metaKey : event.ctrlKey;
+            if (!modifierPressed) return;
+            event.preventDefault();
+            if (m.kind === "md") {
+              callbacks.onMarkdownLinkClick?.(raw);
+            } else {
+              callbacks.onPathOpen?.(raw);
+            }
+          },
+          hover: (event: MouseEvent, raw: string): void => {
+            callbacks.onPathHover?.(raw, event);
+          },
+          leave: (): void => {
+            callbacks.onPathLeave?.();
+          },
+        };
+      });
       callback(links);
     },
   });

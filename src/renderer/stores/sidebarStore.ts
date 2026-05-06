@@ -2,6 +2,12 @@ import { create } from "zustand";
 
 export type InteractionArea = "sidebar" | "terminal";
 
+/** サイドバーの下半分の表示モード。
+ *  - "files": ディレクトリツリー (デフォルト)
+ *  - "git":   Git パネル (選択 CWD のリポジトリ)
+ */
+export type SidebarView = "files" | "git";
+
 interface SidebarStore {
   isOpen: boolean;
   width: number;
@@ -14,6 +20,8 @@ interface SidebarStore {
   // Cmd+Z / Cmd+Shift+Z をサイドバーとターミナルどちらに振り分けるかの判定材料。
   // mousedown / focus 時に更新する。
   lastInteractedArea: InteractionArea;
+  // 下半分の表示モード切替
+  view: SidebarView;
 
   toggleOpen: () => void;
   setOpen: (open: boolean) => void;
@@ -26,6 +34,7 @@ interface SidebarStore {
   setSearchQuery: (query: string) => void;
   resetExpansionForCwd: (cwd: string) => void;
   setLastInteractedArea: (area: InteractionArea) => void;
+  setView: (view: SidebarView) => void;
 }
 
 const DEFAULT_WIDTH = 260;
@@ -52,6 +61,7 @@ export const useSidebarStore = create<SidebarStore>((set, get) => ({
   editingPath: null,
   searchQuery: "",
   lastInteractedArea: "terminal",
+  view: "files",
 
   toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
   setOpen: (open) => set({ isOpen: open }),
@@ -93,6 +103,11 @@ export const useSidebarStore = create<SidebarStore>((set, get) => ({
   setLastInteractedArea: (area) => {
     if (get().lastInteractedArea === area) return;
     set({ lastInteractedArea: area });
+  },
+
+  setView: (view) => {
+    if (get().view === view) return;
+    set({ view });
   },
 }));
 

@@ -90,6 +90,111 @@ const api = {
   recentDirs: {
     add: (dirPath: string): void => ipcRenderer.send("recentDirs:add", dirPath),
   },
+  pinnedDirs: {
+    get: (): Promise<string[]> => ipcRenderer.invoke("pinnedDirs:get"),
+    add: (dirPath: string): Promise<boolean> =>
+      ipcRenderer.invoke("pinnedDirs:add", dirPath),
+    remove: (dirPath: string): Promise<boolean> =>
+      ipcRenderer.invoke("pinnedDirs:remove", dirPath),
+  },
+  git: {
+    resolveRoot: (cwd: string): Promise<string | null> =>
+      ipcRenderer.invoke("git:resolveRoot", cwd),
+    status: (
+      cwd: string,
+    ): Promise<
+      | {
+          ok: true;
+          status: {
+            root: string;
+            current: string | null;
+            tracking: string | null;
+            ahead: number;
+            behind: number;
+            files: {
+              path: string;
+              index: string;
+              workingDir: string;
+              staged: boolean;
+              modified: boolean;
+              untracked: boolean;
+              conflict: boolean;
+            }[];
+            isClean: boolean;
+          };
+        }
+      | { ok: false; error: string }
+    > => ipcRenderer.invoke("git:status", cwd),
+    branchList: (
+      cwd: string,
+    ): Promise<
+      | {
+          ok: true;
+          branches: {
+            name: string;
+            current: boolean;
+            remote: boolean;
+            commit: string;
+          }[];
+        }
+      | { ok: false; error: string }
+    > => ipcRenderer.invoke("git:branchList", cwd),
+    branchCreate: (
+      cwd: string,
+      name: string,
+      from?: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:branchCreate", cwd, name, from),
+    branchDelete: (
+      cwd: string,
+      name: string,
+      force?: boolean,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:branchDelete", cwd, name, force),
+    branchSwitch: (
+      cwd: string,
+      name: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:branchSwitch", cwd, name),
+    stage: (
+      cwd: string,
+      paths: string[],
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:stage", cwd, paths),
+    unstage: (
+      cwd: string,
+      paths: string[],
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:unstage", cwd, paths),
+    commit: (
+      cwd: string,
+      message: string,
+    ): Promise<{ ok: true; commit: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:commit", cwd, message),
+    push: (
+      cwd: string,
+      remote?: string,
+      branch?: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:push", cwd, remote, branch),
+    pull: (
+      cwd: string,
+      remote?: string,
+      branch?: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:pull", cwd, remote, branch),
+    fetch: (
+      cwd: string,
+      remote?: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:fetch", cwd, remote),
+    diff: (
+      cwd: string,
+      path?: string,
+      staged?: boolean,
+    ): Promise<{ ok: true; diff: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("git:diff", cwd, path, staged),
+  },
   dialog: {
     selectDirectory: (): Promise<string | null> =>
       ipcRenderer.invoke("dialog:selectDirectory"),
@@ -99,6 +204,10 @@ const api = {
   shell: {
     openExternal: (url: string): Promise<boolean> =>
       ipcRenderer.invoke("shell:openExternal", url),
+    openPath: (
+      targetPath: string,
+    ): Promise<{ ok: true } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("shell:openPath", targetPath),
   },
   system: {
     getHomeDir: (): string => process.env.HOME || "",

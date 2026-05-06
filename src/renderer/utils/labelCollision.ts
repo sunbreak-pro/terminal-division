@@ -9,11 +9,14 @@ export interface CwdTab {
   cwd: string;
   label: string; // basename もしくは "name (parent)"
   fullPath: string; // tooltip 用
-  paneIds: string[]; // 集約された全ペイン
-  // タブの順序ソート用：このタブの初出ペインの createdAt
+  paneIds: string[]; // 集約された全ペイン (pinned-only タブでは空)
+  // タブの順序ソート用：このタブの初出ペインの createdAt。
+  // pinned-only タブ (ペインが無い) は Number.MAX_SAFE_INTEGER とし、ペイン由来タブの後ろに並ぶ
   firstCreatedAt: number;
-  // 直近アクティブだった所属ペイン
-  lastActivePaneId: string;
+  // 直近アクティブだった所属ペイン。pinned-only タブでは null
+  lastActivePaneId: string | null;
+  // ユーザがこの CWD を「ピン留め」しているか。ペイン消滅後も残るタブとして扱う
+  pinned: boolean;
 }
 
 /**
@@ -47,17 +50,18 @@ export function parentBasenameOf(p: string): string {
 }
 
 /**
- * ペイン群を CWD ごとに集約してタブ配列を構築する。
+ * ペイン群と「ピン留めされた追加 CWD」を集約してタブ配列を構築する。
  * - 同じ CWD のペインは 1 タブに集約
+ * - `pinnedCwds` に含まれる CWD は `pinned: true` でマークし、ペインが無くてもタブとして残す
+ * - ペイン CWD と pinned CWD が同一なら 1 タブに合流（pinned: true）
  * - basename が他タブと衝突する全タブを `name (parent)` 形式に書き換え
- * - parent も空（ルート直下等）なら basename のみ表示
- * - 並び順は最初に発生したペインの createdAt 昇順
- * - 集約タブの「lastActivePaneId」は所属ペインのうち lastActiveAt 最大のもの
+ * - 並び順: ペイン由来タブ (createdAt 昇順) → pinned-only タブ (pinnedCwds の順)
  */
-export function buildCwdTabs(panes: PaneCwdInput[]): CwdTab[] {
-  if (panes.length === 0) return [];
-
-  // CWD でグループ化
+export function buildCwdTabs(
+  panes: PaneCwdInput[],
+  pinnedCwds: readonly string[] = [],
+): CwdTab[] {
+  // CWD でグループ化（ペイン側）
   const groups = new Map<string, PaneCwdInput[]>();
   for (const pane of panes) {
     const key = normalizeCwd(pane.cwd);
@@ -69,11 +73,15 @@ export function buildCwdTabs(panes: PaneCwdInput[]): CwdTab[] {
     }
   }
 
-  // 各グループを CwdTab に
+  const pinnedSet = new Set<string>();
+  for (const p of pinnedCwds) pinnedSet.add(normalizeCwd(p));
+
   const tabs: CwdTab[] = [];
+
+  // 1. ペイン由来タブ
   for (const [cwd, members] of groups.entries()) {
     let firstCreatedAt = Infinity;
-    let lastActivePaneId = members[0].paneId;
+    let lastActivePaneId: string | null = members[0].paneId;
     let lastActiveAt = -Infinity;
     const paneIds: string[] = [];
     for (const m of members) {
@@ -91,16 +99,37 @@ export function buildCwdTabs(panes: PaneCwdInput[]): CwdTab[] {
       paneIds,
       firstCreatedAt,
       lastActivePaneId,
+      pinned: pinnedSet.has(cwd),
     });
   }
 
-  // basename 衝突検出
+  // 2. pinned-only タブ（ペインで覆われていない pinned CWD）
+  // 並び順は pinnedCwds の順序を保つ。pinned-only は createdAt を MAX とし末尾に
+  let pinnedOrder = 0;
+  for (const raw of pinnedCwds) {
+    const cwd = normalizeCwd(raw);
+    if (groups.has(cwd)) continue; // ペインで覆われている
+    if (tabs.some((t) => t.cwd === cwd)) continue; // 既に追加済み (重複入力)
+    tabs.push({
+      cwd,
+      label: basenameOf(cwd),
+      fullPath: cwd,
+      paneIds: [],
+      // ペイン由来タブ (createdAt が有限値) より大きく、かつ pinnedCwds 順を保つ値
+      firstCreatedAt: Number.MAX_SAFE_INTEGER - pinnedCwds.length + pinnedOrder,
+      lastActivePaneId: null,
+      pinned: true,
+    });
+    pinnedOrder++;
+  }
+
+  if (tabs.length === 0) return [];
+
+  // basename 衝突検出 → "name (parent)"
   const labelCount = new Map<string, number>();
   for (const tab of tabs) {
     labelCount.set(tab.label, (labelCount.get(tab.label) ?? 0) + 1);
   }
-
-  // 衝突があれば全衝突タブを "name (parent)" に
   for (const tab of tabs) {
     if ((labelCount.get(tab.label) ?? 0) > 1) {
       const parent = parentBasenameOf(tab.cwd);

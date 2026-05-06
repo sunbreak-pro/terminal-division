@@ -43,9 +43,38 @@ const mockRecentDirsApi = {
   add: vi.fn(),
 };
 
+// window.api.pinnedDirsモック
+const mockPinnedDirsApi = {
+  get: vi.fn().mockResolvedValue([]),
+  add: vi.fn().mockResolvedValue(true),
+  remove: vi.fn().mockResolvedValue(true),
+};
+
+// window.api.gitモック
+const mockGitApi = {
+  resolveRoot: vi.fn().mockResolvedValue(null),
+  status: vi
+    .fn()
+    .mockResolvedValue({ ok: false, error: "not a git repository" }),
+  branchList: vi
+    .fn()
+    .mockResolvedValue({ ok: false, error: "not a git repository" }),
+  branchCreate: vi.fn().mockResolvedValue({ ok: true }),
+  branchDelete: vi.fn().mockResolvedValue({ ok: true }),
+  branchSwitch: vi.fn().mockResolvedValue({ ok: true }),
+  stage: vi.fn().mockResolvedValue({ ok: true }),
+  unstage: vi.fn().mockResolvedValue({ ok: true }),
+  commit: vi.fn().mockResolvedValue({ ok: true, commit: "abc123" }),
+  push: vi.fn().mockResolvedValue({ ok: true }),
+  pull: vi.fn().mockResolvedValue({ ok: true }),
+  fetch: vi.fn().mockResolvedValue({ ok: true }),
+  diff: vi.fn().mockResolvedValue({ ok: true, diff: "" }),
+};
+
 // window.api.shellモック
 const mockShellApi = {
   openExternal: vi.fn(),
+  openPath: vi.fn().mockResolvedValue({ ok: true }),
 };
 
 // window.api.session モック（onSaveFailed 等の listener は no-op で返す）
@@ -69,6 +98,8 @@ Object.defineProperty(window, "api", {
     window: mockWindowApi,
     system: mockSystemApi,
     recentDirs: mockRecentDirsApi,
+    pinnedDirs: mockPinnedDirsApi,
+    git: mockGitApi,
     shell: mockShellApi,
     session: mockSessionApi,
     fs: mockFsApi,

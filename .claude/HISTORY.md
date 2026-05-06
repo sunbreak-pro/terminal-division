@@ -1,5 +1,57 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-06 - VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）+ xterm 全角リンクずれ修正
+
+#### 概要
+
+ユーザー要望「VSCode の基本機能をトレース」した 4 機能（Git 連携 / 拡張子別ファイルアイコン / パス hover panel / ペインに紐付かない追加ツリー）を 1 セッションで実装。先行して報告された xterm 上の Markdown リンク左ずれ + ENOENT エラーポップアップも修正。Material Icon Theme は npm 公式 (MIT) を導入し Vite の `import.meta.glob` で 1238 個の SVG をアセット化（dev では絶対 glob が renderer root 解決で失敗するバグを発見、相対パスに修正）。Hover panel は xterm の `registerLinkProvider` の hover/leave コールバックを活用、文字列 offset → セル列マップで全角文字混在時の表示位置ずれを解消。ピン留めツリーは独自永続化 (`pinned-directories.json`) + `path-validator` の動的 allow リスト方式で HOME 外パスにも対応。Git 連携は `simple-git` を main プロセスで動かし、左サイドバーのタブ列末尾に「⎇ Git」モード切替を追加して同じ列内に統合（CWD タブと相互排他）。Status / branch list/switch/create/delete / stage / unstage / commit / push / pull / fetch / diff の全主要操作 + 縦リサイズ可能な Staged/変更セクションを実装。中盤で報告された 2 件のバグ（ピン留め失敗 = validatePath ホワイトリスト範囲外、Git「読み込み中…」永続化 = refresh の Promise.all 例外で loading 凍結）も同セッション内で根本修正。session-verifier 通過で 535/535 → 539/539 PASS、`npm run build` グリーン。
+
+#### 変更点
+
+- **新規 `src/renderer/utils/xtermLine.ts`**: `buildOffsetToColumnMap(line)` で文字列 offset → 1-based セル列マップを構築。継続セル (width=0) スキップ、全角文字を正しく 2 セル分カウント。`terminalManager.ts` の link provider が直接 `m.start + 1` を column に渡していた既知の制限（コメントに「ずれる可能性があるが許容」と明記済み）を解消
+- **`src/renderer/services/markdownOpenService.ts`**: `result.error.startsWith("ENOENT")` を判定して `ファイルが見つかりません: <basename>` の簡潔 toast に切替。長い stat 文字列をユーザに見せない
+- **`src/renderer/utils/markdownPath.ts`**: `findPaths(line)` を新規追加し `kind: "md" \| "path"` で md / 一般パスを統合検出。`findMarkdownPaths` は `findPaths` を kind フィルタする薄いラッパに（後方互換維持）。一般パス用 regex 追加（拡張子非限定、URL 範囲除外、末尾装飾文字 trim）
+- **`src/renderer/services/terminalManager.ts`**: link provider を unified に書き換え、`hover` / `leave` / `activate` を全 dispatch。`TerminalCallbacks` に `onPathOpen` / `onPathHover` / `onPathLeave` を追加。`buildOffsetToColumnMap` を import して range.x を正確化
+- **新規 `src/renderer/stores/pathHoverStore.ts`** + **`src/renderer/components/PathHoverTooltip.tsx`**: tooltip 状態を Zustand global シングルトンに集約（StrictMode race 回避）。`position: fixed` + `pointer-events: none` でターミナル操作を妨げない
+- **`src/main/ipc-handlers.ts`**: `shell:openPath` IPC 追加（`shell.openPath` でファイル/ディレクトリを OS デフォルトハンドラに渡す）
+- **新規 `material-icon-theme` (npm, MIT, v5.34.0)**: + **`src/renderer/utils/materialIconResolver.ts`**: `generateManifest()` を 1 度だけ実行、`import.meta.glob('../../../node_modules/material-icon-theme/icons/*.svg', { eager: true, query: '?url' })` で全 SVG をアセット化。`fileNames` 完全一致 → `fileExtensions` 最長一致 → `EXT_TO_LANGUAGE_ID` 経由 `languageIds` → デフォルトの順で解決
+- **`src/renderer/components/Sidebar/icons.tsx`**: `FileTypeIcon` / `FolderTypeIcon` を新規追加（解決失敗時は既存 outline `FileIcon` / `FolderIcon` にフォールバック）。`DirectoryTree.tsx` / `TreeNode.tsx` / `SidebarTabs.tsx` の呼び出しを `name` 引数付きに置換
+- **新規 `src/main/pinned-directories.ts`**: `pinned-directories.json` で永続化、最大 50 件、実在チェック付き。起動時 / add / remove で動的 allow リスト同期
+- **`src/main/path-validator.ts`**: 動的 allow リスト `dynamicAllowed: Set<string>` を追加。`registerDynamicAllowedPath` / `unregisterDynamicAllowedPath` を export。`validatePath` は静的 prefix と動的リストの両方をチェック
+- **`src/main/ipc-handlers.ts`**: `pinnedDirs:get/add/remove` IPC 追加。`pinnedDirs:add` は `validatePath` を**通さず** `pinnedDirectoryManager.add` 直渡し（OS ダイアログで明示的に選んだパスは信頼）
+- **新規 `src/renderer/stores/pinnedDirsStore.ts`**: 楽観更新 + IPC 失敗時 rollback の Zustand。`init()` / `add(path)` / `remove(path)` / `paths`
+- **`src/renderer/utils/labelCollision.ts`**: `CwdTab` に `pinned: boolean` / `lastActivePaneId: string \| null` 追加。`buildCwdTabs(panes, pinnedCwds[])` でペイン由来 + pinned-only タブを統合構築（順序: ペイン由来 createdAt 昇順 → pinned-only 追加順）
+- **`src/renderer/components/Sidebar/Sidebar.tsx`** / **`SidebarTabs.tsx`**: 「+ ツリーを追加」ボタン + コンテキストメニューに「ピン留めする/外す」+ pinned タブの 📌 アイコン。pane-less タブ選択時は `setActiveTerminal` をスキップ
+- **新規 `simple-git` (npm, v3.36.0)** + **`src/main/git-manager.ts`**: repo root キャッシュ + status / branch / stage / commit / push / pull / fetch / diff / branchSwitch・Create・Delete。エラーは全て `{ ok: false, error }` で統一返却（throw しない）
+- **`src/main/ipc-handlers.ts`**: `git:*` の 13 ハンドラ追加（全て `validatePath` 通過後 `gitManager` へ委譲）
+- **`src/preload/index.ts`**: `window.api.git.*` / `window.api.pinnedDirs.*` / `window.api.shell.openPath` を公開
+- **新規 `src/renderer/stores/gitStore.ts`**: `repos: Map<cwd, RepoState>` で CWD ごとに status / branches / loading / error を管理。`refresh(cwd)` は `Promise.all([status, branchList])` を **try/catch で wrap** し、例外時に `error` 文言で確定して loading: true 凍結を防ぐ。`runOp(cwd, op, name)` は成功で auto refresh、失敗で toast
+- **新規 `src/renderer/components/Sidebar/GitPanel.tsx`**: ブランチ表示 + Fetch/Pull/Push/+Branch + ブランチ list (切替/削除) + Staged / 変更 (各々 `resize: vertical` で縦リサイズ可、デフォルト 160px / 240px、min 80 / max 60vh) + コミットボックス + diff modal。loading 表示にも「再読込」ボタン (state 腐敗時の recovery)
+- **`src/renderer/stores/sidebarStore.ts`**: `view: 'files' \| 'git'` と `setView` 追加
+- **`src/renderer/components/Sidebar/SidebarTabs.tsx`**: 末尾に「⎇ Git」モード切替タブ追加（CWD タブ選択時は `view='files'` へ自動復帰）
+- **`src/renderer/components/Sidebar/Sidebar.tsx`**: `view==='git'` のとき `<GitPanel cwd={selectedTabCwd} />`、それ以外は従来 `<DirectoryTree />`
+- **新規テスト 47 件**: `xtermLine.test.ts` (6) / `materialIconResolver.test.ts` (15) / `markdownPath.test.ts` (+11 = `findPaths` 経路検証) / `labelCollision.test.ts` (+7 = pinned 統合) / `pinnedDirsStore.test.ts` (8) / `gitStore.test.ts` (6) / `pathHoverStore.test.ts` (4) + `markdownOpenService.test.ts` (+2 = ENOENT / EACCES 文言)
+- **`src/renderer/test/setup.ts`**: `mockShellApi.openPath` / `mockPinnedDirsApi` / `mockGitApi` を追加
+- **テスト合計**: 39 ファイル / 539 件グリーン（修正前 488 から +51 件）+ `npm run build` 通過（renderer 3.59 MB、+1.4 MB は SVG data URL inline 分）
+- **同セッション内バグ修正 2 件**:
+  - **「ピン留めに失敗しました」**: 原因は `validatePath` がホワイトリスト方式で HOME 外を弾いていたこと。`pinnedDirs:add` IPC を `validatePath` 通過なしに変更 + 動的 allow リスト機構を追加し、ピン留め後の `fs:readDir` 等 downstream 操作も透過
+  - **Git「情報を読み込み中…」永続化**: 原因は `gitStore.refresh` の `Promise.all` を try/catch せず IPC rejection で loading: true 凍結。try/catch + `console.error` 診断ログ + GitPanel に「再読込」ボタンを追加して recovery 可能に
+- **session-verifier 経由の追加修正**:
+  - `src/renderer/utils/materialIconResolver.ts` 先頭に `/// <reference types="vite/client" />` を追加（`import.meta.glob` 型解決）
+  - `src/renderer/stores/__tests__/gitStore.test.ts` で Promise constructor 内代入の TS 制御フロー narrowing 回避（明示 cast）
+  - `src/renderer/components/Sidebar/GitPanel.tsx` の diff useEffect に `.catch` 追加（unhandled rejection 防止）
+- **設計判断**:
+  - **Material Icon Theme を選んだ理由**: VSCode 標準 (Seti) は VSCode 内蔵フォントで外部公開なし。VSCode の人気 Material Icon Theme は同作者が `material-icon-theme` npm (MIT) として正式公開しており、`generateManifest()` で完全な拡張子→アイコンのマッピングが取れる。週次更新でメンテも活発
+  - **Vite glob の絶対パスと相対パスの罠**: `import.meta.glob('/node_modules/...')` は vitest ではプロジェクトルート基準で動くが、electron-vite renderer は root が `src/renderer/` のため `src/renderer/node_modules/` を探して 0 個マッチで build 通過。テストは通るが production で SVG が一切バンドルされない隠れバグになる。**ソースファイルからの相対 glob を使うのが両環境で確実**
+  - **path-validator 動的 allow リストで「ホーム外ピン留め」を許す**: 静的 ALLOWED_PREFIXES だけだと `/opt/projects` 等を扱えず開発用途で詰む。OS ダイアログで明示選択したパスは信頼してよいので、選択時に `registerDynamicAllowedPath` で許可リスト追加 + 起動時に永続パスを再登録。defense-in-depth の趣旨は維持しつつ、ユーザー操作で広げられる構造にした
+  - **Git タブを CWD タブ列に統合（モード切替式）**: 別サイドバー / モーダルではなく、既存 CWD タブの末尾に「⎇ Git」を置き、選択するとサイドバー下半分が GitPanel に切替わる。CWD と Git は同じリポジトリを別視点で見るものなので、選択 = 文脈共有が UX として自然。CWD タブ選択時は `view='files'` に自動復帰させて相互排他に
+  - **simple-git は CLI 委譲、認証はユーザー環境に任せる**: `~/.gitconfig` / `ssh-agent` / `osxkeychain` 等の既存セットアップがそのまま効く。HTTPS 認証や 2FA を内蔵処理しない方針。代わりに `git push` 等の rejection はそのまま `error` 文字列としてユーザに返す
+  - **gitStore.refresh の try/catch は防御 1 段目**: 観測された「読み込み中…永続化」は IPC のどこかで例外伝播していた可能性が高いが、根本原因の特定よりも「loading: true で固まらない不変条件」を強制する方が再発防止に強い。GitPanel 側にも「再読込」ボタンを置き、state 腐敗時のユーザ recovery 経路を確保
+  - **Staged / 変更セクションは CSS resize: vertical**: 独自リサイズハンドル実装は不要。Chromium ネイティブの resize ハンドル（右下のドットドラッグ）が動作良好で、min-height/max-height で範囲を縛るだけ。各セクション独立スクロールにすることで多ファイル時にも見やすい
+  - **path hover panel は markdown link provider を unified 化**: 別 provider を 2 つ重ねると xterm 上で範囲衝突の挙動が複雑化するため、`findPaths` で kind を返す統一 provider にし、activate でルーティング（md → 右サイドバー / その他 → shell.openPath）。hover/leave コールバックは kind を問わず一律発火
+  - **画面構成変更時の「再起動忘れ」リスクの認知**: dev mode で main process 変更時は Electron 再起動が必要。本セッションで Git タブ「読み込み中」の誤認原因の一つの可能性。今後 main 側変更時は `npm run dev` 再起動を user に明示する運用に
+  - **VSCode の Seti は外部公開されていない事実**: 当初「VSCode 標準アイコンを使えば」と考えたが、Seti は VSCode 内蔵フォントで配布対象外。Material Icon Theme で代替するのが現実解と判明（web-researcher による調査結果）
+
 ### 2026-05-04 - Markdown 表示を右サイドバーに一本化（ペイン内 viewMode 廃止）
 
 #### 概要
@@ -163,164 +215,3 @@ T3-5 として実装した Claude Code Chat UI を機能ごと撤回。Claude �
   - **アプリ全体ズームの範囲を 0.5〜2.0 に絞った理由**: Electron の webFrame は 0.25〜5.0 を許容するが、0.25 ではトラフィックライト等の OS UI と崩れ、3.0 以上ではターミナルの cols が 10 を切って実用にならない。実用域として 50%〜200% に限定
   - **既存ターミナル挙動の互換性維持**: `viewMode === "cli"` または `null`（ペイン未確定）時は元の `terminal.fontSize` 更新ロジックを完全保持。`Cmd+0` の reset 値も既存の 14 を踏襲（`DEFAULT_SETTINGS.terminal.fontSize=13` との差は旧仕様からの引き継ぎで、エディタ/チャットだけ DEFAULT_SETTINGS から値を取る）
   - **General settings タブで完結 vs ショートカット追加**: ユーザー要望「Settings の場所は一般タブで OK」に従い、ショートカットは追加せずスライダー + ボタンのみ。後日要望があればショートカット ID `app-zoom-in/out/reset` を追加できるよう registry を拡張可能な状態に保つ
-
-### 2026-04-29 - フォントズームのキーバインド修正（globalShortcut + Settings 連動）+ Header 整理 + per-pane close button
-
-#### 概要
-
-ユーザー報告の 3 連続ショートカット問題を順に切り分け、最終的に Chromium のキーディスパッチ仕様に行き当たった。`Cmd+=` は renderer の keydown まで到達するが `Cmd+-` は到達しない（Chromium の `prePerformKeyEquivalent:` がアプリ層でステップ 2 のズーム処理として消費する）ため、Electron メニューアクセラレータも `before-input-event` も間に合わない。`globalShortcut.register("CommandOrControl+-")` で OS 直接のキー監視に乗せ、フォーカス時のみ register / blur で unregister するフォーカス条件付きのグローバルショートカットを `src/main/zoom-shortcuts.ts` に新設。同時に `Cmd+=` / `Cmd+0` / 代替の `Cmd+Shift+-` も同じ仕組みで登録し、メニューアイテムは accelerator なしのクリックハンドラ（IPC 送出）に簡素化した。これとは別系統で「Settings のフォントスライダーが拡大時に同期しない」問題を、per-pane の `fontSizeOverride` を直接動かす方式から **グローバル `Settings.terminal.fontSize` を直接更新する方式** に切替、`adjustGlobalFontSize` / `resetGlobalFontSize` を Renderer 側に新設。`Cmd+0` はファクトリー既定値 14 に戻す挙動に統一。あわせて UI 整理として、`Header` 右端の閉じるボタンとテーマ選択ドロップダウンを撤去（テーマは Settings に集約済み）し、各ペインの `TerminalSubHeader` 右端に × ボタンを追加（dirty MD タブがある場合は `UnsavedChangesModal` で警告フローに乗る）。Header / TerminalPane の既存テストを新仕様に書き換え、合計 35 ファイル / 500 件グリーン。
-
-#### 変更点
-
-- **新規 `src/main/zoom-shortcuts.ts`**: フォーカス条件付き globalShortcut 登録モジュール。`browser-window-focus` で `CommandOrControl+=` / `CommandOrControl+Shift+=` / `CommandOrControl+-` / `CommandOrControl+Shift+-` / `CommandOrControl+0` を登録、`browser-window-blur` で全 unregister。これによりフォーカス時のみキーを奪い、他アプリ使用中は素通しさせる。コールバックは `BrowserWindow.getFocusedWindow().webContents.send("font-zoom:in/out/reset")` で IPC 送出
-- **`src/main/index.ts`**: `setupZoomShortcuts()` を `app.whenReady` 内で呼出 + `app.on("will-quit", teardownZoomShortcuts)` でクリーンアップ
-- **`src/main/menu.ts`**: 「表示」メニューに「フォント拡大 / 縮小 / リセット」を追加。**accelerator は付けず click のみ**（globalShortcut と二重登録すると挙動が不安定）。click は `webContents.send("font-zoom:*")` を発火するだけ
-- **`src/preload/index.ts`**: `window.api.menu.{onFontZoomIn,onFontZoomOut,onFontZoomReset}` を公開。`createIpcListener<void>` で wrap
-- **`src/renderer/App.tsx`**:
-  - `adjustActivePaneFontSize`（per-pane override 操作）を撤去し、`adjustGlobalFontSize(delta)` / `resetGlobalFontSize()` を新設。前者は `useSettingsStore.getState().update({ terminal: { fontSize: clamp(current + delta, MIN, MAX) } })` で **グローバル設定を直接更新**、後者はファクトリー既定値 14 にリセット + `clearAllFontSizeOverrides()` も呼ぶ
-  - メニュー IPC リスナーを `useEffect` で購読し、`onFontZoomIn` → `adjustGlobalFontSize(+1)` 等にディスパッチ
-  - registry-based handler の `font-zoom-in/out/reset` も同関数を呼ぶよう統一（カスタムバインドからの経路でも同じ挙動）
-  - keydown 早期 fallback の `isZoomOut` マッチ条件に `e.keyCode === 189` を追加（IME / 配列違いで `e.key`/`e.code` が想定外でも拾えるように）。`isZoomReset` も同様に `e.keyCode === 48` 追加
-- **`src/renderer/stores/settingsStore.ts`**:
-  - `update(patch)` 内で `patch.terminal.fontSize !== current.terminal.fontSize` のときに `useTerminalMetaStore.getState().clearAllFontSizeOverrides()` を呼ぶ side-effect を追加。Settings からのスライダー操作で全ペインの override が解除され、新しい `fontSize` が即時反映される
-- **`src/renderer/stores/terminalMetaStore.ts`**:
-  - `clearAllFontSizeOverrides: () => void` action を新設。null 以外の override が 1 つでもあるときだけ `set({ metas: next })` で再描画トリガを最小化（fontSizeOverride を保持しているのは UI レイヤだけなのでバルク操作で十分）
-- **`src/renderer/shortcuts/registry.ts`**:
-  - `font-zoom-in` のデフォルトキーを `Cmd+=` から `Cmd+Plus` に変更（表示は `⌘ +`）。`normalizeKeyName` に `+ → Plus` エイリアスを追加し、`parseKey` は `keyName === "Plus"` のとき Shift を省く（US の `Cmd+Shift+=` も JIS の `Cmd+Shift+;` も同じ `Cmd+Plus` に正規化される）
-  - `canonicalize` を拡張して末尾 `++` を `+Plus` にプリプロセス（`Cmd++` 表記も受理）
-  - `DISPLAY_MAP` に `Plus → "+"` 追加
-- **`src/renderer/components/SplitContainer.tsx`**: `Panel.onResize` の `handlePanelResize` で `fit()` 前に `terminalManager.invalidateLastSize(panelId)` を呼ぶ。兄弟ペイン削除直後の expand で `lastSizes` キャッシュが古い値のまま `pty.resize` を抑止する不具合（scrollback の細長表示）を修正
-- **`src/renderer/components/TerminalPane.tsx`**: md/chat → cli 復帰時の `useLayoutEffect` に `requestAnimationFrame` ベースの 2 度目 `invalidateLastSize + handleFit` を追加。`useLayoutEffect` 1 回目は `display:none → block` のレイアウト未確定で 0-cols 失敗することがあるため、paint 後に再フィットする保険
-- **`src/renderer/components/Header.tsx`**: 大幅整理。
-  - **削除**: 右端の「閉じる (Cmd+W)」ボタン、テーマ選択 `<select>` ドロップダウン
-  - これに伴い `useTerminalCount` / `useAvailableThemes` / `useSetTheme` / `closeTerminal` / `handleClose` / `handleCloseButton*` / `handleThemeChange` / `closeButtonStyle` / `canClose` を撤去
-  - 残す UI: Sidebar トグル / 縦分割 / 横分割 / ディレクトリ移動 / 設定
-- **`src/renderer/components/TerminalSubHeader.tsx`**:
-  - 各ペインのヘッダー右端に × 閉じるボタンを追加（`useTerminalActions` / `useTerminalCount` を購読）。`terminalCount > 1` のときのみ有効、最後の 1 ペインは disabled
-  - `handleClosePane` は dirty な MD タブが存在すれば `useMarkdownDialogStore.showUnsaved({ reason: "close-pane", onSave / onDiscard })` で警告フローに乗せる。dirty なしなら即時 `closeTerminal(id)`
-  - hover で danger カラーに反転、disabled 時は不透明度 0.4 + `cursor: not-allowed`
-  - ペイン番号 span のフォントサイズを `meta?.fontSizeOverride ?? terminalSettings.fontSize` に変更（Cmd+= / Settings の双方で番号もターミナル本体も同寸で動く）
-- **既存テスト改訂**:
-  - `Header.test.tsx`: 削除済み UI（閉じるボタン / テーマ選択）の表示テストを除去し、代わりに「これらが描画されないこと」を assert する負のテストを追加。残す機能（split / directory / settings）のテストはそのまま
-  - `TerminalPane.test.tsx`: TerminalSubHeader が `useTerminalCount` を購読するようになったため、mock に `useTerminalCount: vi.fn(() => 2)` を追加
-  - `SplitContainer.test.tsx`: `terminalManager` mock に `invalidateLastSize: vi.fn()` を追加（handlePanelResize がそれを呼ぶようになったため）
-- **テスト合計**: 35 ファイル / 500 件グリーン
-- **設計判断**:
-  - **`Cmd+-` を globalShortcut に逃がす根拠**: Chromium の macOS キーディスパッチは `OS → アプリ固有 (`prePerformKeyEquivalent:`) → メニュー → before-input-event → renderer keydown` の順で動き、ズームショートカットはステップ 2 で消費される。Electron メニューに `accelerator: "CommandOrControl+-"` を登録しても、ステップ 2 の消費の方が先に走るため安定して上書きできない（ユーザー実機で再現確認済み: `[zoom-diag keydown]` ログが Cmd+= では出るが Cmd+- では出ない）。globalShortcut は OS が直接ハンドルする経路に乗るため、Chromium のステップ 2 に到達する前にコールバックが走る
-  - **focus-conditional な globalShortcut**: 真にグローバルに register したまま放置すると他アプリ操作中の `Cmd+-` も奪ってしまう。`browser-window-focus`/`blur` で register/unregister することで、フォーカスがあるときだけインターセプトする UX に揃える
-  - **Settings 直接更新方式 vs per-pane override**: 旧仕様は `Cmd+=` で `fontSizeOverride` を弄り、Settings.fontSize は触らない方針だったが、ユーザーから「Settings のスライダーが連動しない」「override が積まれて Settings 操作が効かなくなる」の 2 件報告を受けて方針転換。グローバル `Settings.terminal.fontSize` を直接動かすことで、(a) スライダーが常に現在値を反映、(b) 全ペインが同期、(c) override 不在で挙動が単純化、を同時に達成。per-pane override の余地は内部に残しているが、現在の Cmd+= 系経路では使わない
-  - **Header 整理の方針**: 閉じるボタンは「対象ペインが分かりにくい」（アクティブペインが暗黙的）という UX 課題があり、各ペインのヘッダーに × を置くことで操作対象が視覚的に明示される。テーマ選択は Settings の「外観」タブに既に存在するため Header 上で重複していた。両者を撤去することで Header の右側ブロックがすっきり、Settings ボタン押下のみへ集約
-  - **TerminalSubHeader の × ボタンも dirty 警告フローを踏襲**: 既存の Cmd+W ショートカットと同じ `UnsavedChangesModal` を再利用することで、ペイン閉鎖の警告 UX が 2 経路で同一化（保存 / 破棄 / キャンセル の 3 ボタン）
-  - **メニューアイテムから accelerator を外した理由**: globalShortcut と menu accelerator を同じキーに二重登録すると、片方が登録失敗したり順序が不定になる事例があるため。globalShortcut が一次的に責任を持ち、メニューアイテムは「クリックでも実行できる UI ガイド」として残すだけにする
-
-#### 概要
-
-T3-5 Claude Code Chat UI を MVP として完成させ、同時に Markdown エディタを 1 ペインあたり最大 8 タブまで開ける構成へ拡張。Chat バックエンドは `claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --session-id <uuid>` を子プロセス起動し、stdout を行バッファリングで JSON.parse、`stream_event.content_block_delta.text_delta` を逐次描画。PTY 出力監視で OSC 0 `✳ Claude Code` を検出すると自動で Chat ビューに切替える。アシスタント発言には ✳ アバターを表示し、ストリーミング中は ChatStatusBar が現在の作業（思考中 / Bash 実行中 等）を表示、ツール使用は MessageBubble 内の折りたたみカードに inline 表示。CLI ↔ Chat の手動切替で会話継続させるための「CLI で続きを表示」ボタン（`pty.write("claude --resume <id>\\n")`）を追加。複数 MD タブはタブ列右の「+」ボタンドロップダウン（検索フィールド + 全 watch 中 CWD 配下の .md 最大 50 件 + ファイル選択ダイアログ）から開け、上限 8 件到達時は + ボタンが disabled。session-state.json の `SerializedMeta.mdTabFilePaths` で MD タブの filePath を永続化し、復元時は MarkdownEditor が mount 時に `fs.readFile` → `markMdSaved` で内容を再ロード。Phase 0 で実機検証した stream-json プロトコル仕様は `.claude/docs/known-issues/003-claude-cli-stream-json.md` に記録（Status=Monitoring）。テスト合計 35 ファイル / 502 件グリーン。
-
-#### 変更点
-
-- **Chat backend (Main)**:
-  - `chat-session-manager.ts` 新規: `child_process.spawn("claude", [...])` でセッション管理、stdin に JSONL 書込、stdout を 1MB 上限の行バッファリングで JSON.parse、`session_id` 抽出、`assistant.error="authentication_failed"` 早期検出、SIGTERM による stop / dispose
-  - `claude-process-detector.ts` 新規: PTY 出力 chunk から OSC 0 `\x1b]0;✳ Claude Code\x07` を 256B リングバッファで chunk 跨ぎ込みで検出。フォールバックは `]0;` + `Claude Code\x07` の同居要求（誤検出回避のため BEL 直後を要求）
-  - `cli-resolver.ts` 新規: `getMergedPath()` で PATH 走査 + `~/.local/bin/claude` フォールバック + プロセス内キャッシュ
-  - `pty-manager.ts` 修正: onData hook で detector に chunk を流す + kill 時に detector reset
-  - `ipc-handlers.ts` / `window-manager.ts` 修正: `chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:event` / `chat:claudeDetected` を追加 + ウィンドウ生成 / 破棄で chat / detector の register/unregister
-- **Chat frontend (Renderer)**:
-  - `shared/chat-events.ts` 新規: `ChatEventEnvelope` 型を Main / preload / Renderer 共通定義
-  - `chatSessionStore.ts` 新規: paneId ごとに `messages` / `currentAssistantBuffer` / `currentMessageId` / `currentActivity` / `pendingToolUses` / `sessionId` / `status` / `lastError` を保持。空コンテンツでの `finalizeAssistantMessage` は message を作らない（空 bubble 抑制）
-  - `chatBridge.ts` 新規: `chat:event` を消費して `stream_event` の `content_block_start/delta/stop` を SSE 互換に変換、`message_start` で `beginAssistantMessage`、`text_delta` を `appendAssistantDelta` に流す。`session_already_started` エラー時は `getSessionId` で取得して silent 復帰、`startChatSession` 成功時に `setStatus("idle")` に遷移
-  - `ChatPane/ChatPaneView.tsx`: コンテナ。useEffect 一本で `chat:start`、停止後の入力で自動 `--resume` 再起動 + 送信、`onContinueInCli` で PTY に `claude --resume <id>` を投入
-  - `ChatPane/MessageBubble.tsx`: ✳ アバター + 思考過程 details + tool_use 折りたたみカード（ToolUseChip: Bash/Read/Edit/Write/Glob/Grep の input サマリー + result/error 展開）+ fenced code / inline code の軽量 Markdown レンダラ
-  - `ChatPane/ChatInput.tsx`: 1〜3 行自動高さ拡張 + 4 行以上は固定 max-height + 内部スクロール、IME ガード（compositionStart/End）、Enter 送信 / Shift+Enter 改行 / Cmd+Enter 送信、64KB 警告
-  - `ChatPane/ChatStatusBar.tsx`: starting / streaming（thinking | text | tool_use を `formatActivity` で表示）/ error / ended の 4 状態 + 再起動 / CLI に戻る / 「CLI で続きを表示」ボタン
-  - `ChatPane/MessageList.tsx`: 自動スクロール（最下部追従）+ streaming 仮想 bubble は `streamingText.length > 0` のみ表示
-- **複数 MD タブ (terminalMetaStore + UI)**:
-  - `terminalMetaStore.ts` 大幅変更: 旧 `mdFilePath / mdSavedContent / mdDirty / mdLoadedAt` を撤廃し、`mdTabs: MdTab[]` + `activeMdTabId: string | null` に置換。新 actions: `openMarkdown`（同 path はアクティブ化、上限 8 で `{ok:false, reason:"limit"}`）/ `setActiveMdTab` / `closeMdTab`（左隣フォールバック、最後の 1 つで viewMode=cli 復帰）/ `setMdDirty(paneId, tabId, dirty)` / `markMdSaved(paneId, tabId, content)` / `canOpenMoreMd`
-  - `MarkdownEditor.tsx`: `paneId` + `tabId` props で識別。mount 時 `savedContent === ""` なら `fs.readFile` → `markMdSaved` で復元時に自動ロード
-  - `markdownEditorRegistry.ts`: キーを paneId → tabId に変更（ファイル自体は変えず使い分け規約のみ更新）
-  - `markdownDialogStore.ts`: `UnsavedRequest.tabId` を必須化
-  - `markdownOpenService.ts`: dirty 警告ロジックを撤去（タブ追加で済むため）+ 上限到達時 toast。`openMarkdownDirect` を export し MdTabPickerDropdown から呼ぶ
-  - `MdTabPickerDropdown.tsx` 新規: タブ列右「+」クリックで開く Portal ドロップダウン。検索フィールド + watch 中の全 CWD を `searchTree` で再帰検索（最大 50 件、横スクロール対応）+ 末尾に「ファイルを選択...」(`dialog.selectFiles`)
-  - `mdFileListing.ts` 新規: `listMarkdownFilesAcrossPanes(metas, query)` で .md / .markdown を CWD 重複排除 + path 重複排除しながら集約
-  - `TerminalSubHeader.tsx` 大幅改修: タイトル/CWD を **常時表示** に変更（旧仕様ではタブ表示で消えていた問題を修正）。タブ列は `[CLI | mdTabs.map → + ボタン | Chat]`、+ ボタンは 8 タブ達成で disabled + non-active カーソル
-  - `TerminalPane.tsx`: 全 mdTabs を mount し続けて active のみ display:block（CodeMirror 編集状態保持）+ Chat session が存在する間 ChatPaneView を mount し続ける（CLI 切替で ChatInput の useState を保持）
-- **永続化**:
-  - `shared/session-state-validator.ts`: `SerializedMeta.mdTabFilePaths?: string[]` を追加（最大 8 / 各非空）+ `SESSION_STATE_MAX_MD_TABS` 定数
-  - `services/sessionPersist.ts`: `hasMdTabPathsChanged` を追加して filePath 変化で保存トリガ（dirty / loadedAt 変動は保存しない）
-  - `services/sessionRestore.ts`: serialize 時に `mdTabs.map(t => t.filePath)` を出力 / restore 時に `hydrateMetas` に `mdTabFilePaths` を渡す
-- **追加バグ修正**:
-  - **CWD/タイトルが「CLI」に置換される**: TerminalSubHeader で常時表示の rename 可能 span を維持
-  - **Chat 入力が CLI 切替で消える**: ChatPaneView を unmount せず display:none で隠す方式に変更
-  - **Shift+Enter が CLI 側に流れる**: `App.tsx` の `EDITABLE_PASSTHROUGH_IDS` に `insert-newline` を追加（xterm helper textarea は除外されるので CLI 側挙動は不変）
-  - **Chat の内容が CLI で見えない**: ChatStatusBar に「CLI で続きを表示」ボタン（クリックで PTY に `claude --resume <id>\\n` 投入）
-  - **「セッションを開始しています」永続化**: `startChatSession` 成功時に `setStatus("idle")` 追加 + `session_already_started` エラー時に `getSessionId` で復帰
-  - **二重起動 → 即 error**: `handleStartChat` / `handleClaudeDetected` は `setViewMode` のみに専念、バックエンド起動は ChatPaneView マウント時の useEffect 一本に集約
-  - **claude-process-detector の定数バイト混入**: prettier が `\x1b` / `\x07` を実体バイトに変換して保存していたため、明示的なエスケープシーケンス文字列に書き直し（実値は同一だが Read で読み解ける形に）
-- **新規テスト 31 件**:
-  - `utils/__tests__/mdFileListing.test.ts` (8): 空 metas / cwd 重複排除 / .md 拡張子フィルタ / path 重複排除 / query 部分一致（case-insensitive）/ 50 件上限 + truncated / searchTree truncated 伝搬 / searchTree エラー無視
-  - `stores/__tests__/chatSessionStore.test.ts` (13): getOrCreate / remove / appendUserMessage / beginAssistantMessage / appendAssistantDelta / finalize（text あり / 空コンテンツ skip / tool_uses で bubble 作成）/ recordToolResult（注入 / isError / 不一致 noop）/ setActivity / setStatus / setSessionId / setError
-  - `main/__tests__/claude-process-detector.test.ts` (10): 単 chunk 検出 / chunk 跨ぎ検出 / 同 paneId は 1 度のみ / paneId 別独立 / reset で再検出 / 別タイトルは検出せず / fallback BEL 直後パターン / window 未登録 noop / destroyed window スキップ / unregisterWindow で states クリア
-- **既存テスト改訂**: `terminalMetaStore.test.ts` に mdTabs ベースの 9 ケース追加（hydrateMetas with mdTabFilePaths / openMarkdown 既存タブアクティブ化 / 上限到達 / closeMdTab フォールバック / setMdDirty / markMdSaved / canOpenMoreMd）、`markdownOpenService.test.ts` を新仕様に書き直し（dirty 警告削除）、`markdownDialogStore.test.ts` に `tabId` 必須化、`terminalStore.test.ts` のモックに `chat.dispose` 追加、`TerminalPane.test.tsx` の md 状態モックを `mdTabs` に置換
-- **テスト合計**: 35 ファイル / 502 件グリーン（修正前 454 から +48 件）
-- **計画書アーカイブ**: `.claude/archive/2026-04-29-claude-code-chat-ui.md` に Status=COMPLETED で移動済み
-- **設計判断**:
-  - **Chat バックエンドは別プロセス、PTY と並走**: PTY 上で claude が起動していても Chat 用の子プロセスは独立した session_id で動かす。プロセスリーク防止のため closeTerminal で `chat.dispose` を呼んで両方破棄。CLI ↔ Chat の会話継続は session_id を `--resume` で再投入する形にし、自動継続は PTY 状態破壊リスクを避けて明示クリック（「CLI で続きを表示」）に限定
-  - **空 bubble 抑制**: claude が assistant ブロックを tool_use のみで返す場合、text と thinking が空のまま finalize される。空 bubble がストリーミング中に複数並ぶと焦ったいので、`finalizeAssistantMessage` で内容が完全に空なら message 化せず activity だけクリア。ただし toolUses が 1 件でもあれば bubble を作る（折りたたみカード表示のため）
-  - **作業状態の表示は currentActivity ベース**: stream_event の `content_block_start` で `tool_use` / `thinking` / `text` を判別して activity に保存し、`content_block_stop` でクリア。ChatStatusBar が「Bash を実行中: <description>」「Claude が思考中...」「Claude が応答を生成中...」を切替表示する。ツール使用の inline カード（MessageBubble 内の ToolUseChip）と二重情報になるが、タイムラインを spam しない簡潔な進捗表示として併存
-  - **MD タブの mount 戦略**: 全 mdTabs を mount し続けて active 以外を display:none で隠す。CodeMirror の internal state（カーソル位置・履歴・編集中の差分）をタブ切替で保持するため。`tab.id + tab.loadedAt` を React key に使うことで、同一タブの再ロード時にだけ remount
-  - **「+ ボタン」のドロップダウンを Portal で配置**: タブ列内に絶対配置すると overflow:auto に切られるので、`createPortal(document.body)` で z-index 10000 で描画。anchor の bounding rect で位置決めし、viewport 端で右にはみ出る場合は左寄せ
-  - **「CLI で続きを表示」の自動 vs 明示**: PTY が現在シェルプロンプトに居ない場合（コマンド実行中など）に `claude --resume` を流すと混入する。Chat → CLI 切替を全自動 resume にすると体験が壊れるリスクがあるため、ユーザーが意図的にクリックする「CLI で続きを表示」ボタンに限定。通常の「CLI に戻る」ボタンは PTY を触らない
-  - **OSC 0 検出の fallback 設計**: `\x1b]0;✳ Claude Code\x07` (絵文字付きの完全マッチ) を primary、`]0;` + `Claude Code\x07` (BEL 直後) の同居を fallback。BEL 直後を要求することで「他の出力に偶然 Claude Code が含まれる」誤検出を回避
-
-> 2026-05-04 ローリングアーカイブ: 「T3-5（候補） Claude Code Chat UI 計画策定」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
-
-> 2026-05-02 ローリングアーカイブ: 「T2-10 カスタマイズ拡張（フォント / カーソル / シェル / エディタ / 通知）」「ターミナル MD パスのクリック起動 + 新規ペイン作成オプション + ペイン番号フォント調整」を [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
-
-#### 変更点
-
-- **shared/settings.ts**: `TerminalSettings` / `EditorSettings` / `GeneralSettings` を新規追加。フィールド単位の `validateTerminalSettings` / `validateEditorSettings` / `validateGeneralSettings` と、`mergeSettings` の field-level merge（`base.terminal` を spread して patch をマージ）。クランプ定数 `FONT_SIZE_MIN/MAX` (8/32) / `LINE_HEIGHT_MIN/MAX` (1.0/2.0) / `SCROLLBACK_MIN/MAX` (1000/100000) / `EDITOR_FONT_SIZE_MIN/MAX` (10/32) を export。`clampNumber` ヘルパも export して renderer 側で再利用
-- **renderer/stores/settingsStore.ts**: `applyOptimistic` を `terminal` / `editor` / `general` の浅マージ対応に拡張。`useTerminalSettings` / `useEditorSettings` / `useGeneralSettings` セレクタを追加
-- **renderer/stores/terminalMetaStore.ts**: `fontSizeOverride: number | null` と `customTitle: string | null` を `TerminalMeta` に追加（揮発、session-persist 対象外）。`setFontSizeOverride(id, value)` / `setCustomTitle(id, value)` action を追加。`initMeta` / `initLeafMeta` / `hydrateMetas` の初期値はすべて null
-- **renderer/services/terminalManager.ts**: `applyOptions(id, partial: Partial<ITerminalOptions>)` を新規追加。セルサイズ影響キー（`fontSize` / `fontFamily` / `fontWeight` / `fontWeightBold` / `letterSpacing` / `lineHeight`）の変更時は `invalidateLastSize` + `fit()` で PTY 側にもリサイズを伝える。`subscribeBell(id, listener)` を追加（戻り値で unsubscribe）
-- **renderer/components/TerminalPane.tsx**: ハードコードされていた fontSize=13 / fontFamily / lineHeight=1.2 / cursorBlink / cursorStyle / scrollback=10000 をすべて `useTerminalSettings()` 由来に置換。`fontSizeOverride` を購読して `effectiveFontSize = override ?? settings.fontSize` を計算（クランプ付き）。設定変更を購読して `applyOptions` で即時反映する `useEffect` を追加（フォントサイズ変動時は `pty.resize` も発火）。Bell 購読 `useEffect` で visual flash（120ms）/ sound（WebAudio 880Hz 80ms）を実装。`pty.create` 呼び出しに `options: { shell, defaultCwd }` を追加。`onExit` ハンドラを `(exitCode) => void` に拡張し、`general.ptyExitNotification && exitCode !== 0` のとき `Notification` API で macOS 通知
-- **renderer/shortcuts/registry.ts**: `font-zoom-in` (Cmd+=) / `font-zoom-out` (Cmd+-) / `font-zoom-reset` (Cmd+0) の 3 ID を追加。`ShortcutCategory` に `Font` を追加（リバインド可能、settings UI のショートカットタブから上書き可能）
-- **renderer/App.tsx**: `adjustActivePaneFontSize(paneId, delta)` ヘルパを追加（`getState()` でフレッシュ参照、クランプ付き、no-op early return）。3 ショートカットの handlers を追加。`useSettingsStore.getState().settings.terminal` から起点を読み、`useTerminalMetaStore.getState().setFontSizeOverride()` で per-pane delta を更新
-- **renderer/services/terminalManager.ts (TerminalCallbacks)**: `onExit: () => void` → `onExit: (exitCode: number) => void` にシグネチャ拡張（main からの exitCode をパススルー）
-- **main/pty-manager.ts (createPty 拡張)**: `customShell?: string` 引数を追加。`fs.existsSync(customShell)` で実在チェックし、不在なら `process.env.SHELL || "/bin/zsh"` にフォールバック
-- **main/ipc-handlers.ts (pty:create シグネチャ拡張)**: `options?: { shell?, defaultCwd? }` を受領。`defaultCwd` は `initialCwd` 未指定時のフォールバックとして `validatePath` を通してから `createPty` に渡す
-- **preload/index.ts**: `pty.create(id, initialCwd?, options?)` の型拡張
-- **renderer/main.tsx (bootstrap)**: 起動時に `settings.get()` と `session.getRestoreData()` を `Promise.all` で並列取得し、`general.restoreSessionOnLaunch` が false なら復元をスキップ（並列化で起動時間影響を最小化）
-- **新規 UI: settings/TerminalSettings.tsx**: フォントサイズ slider（範囲 8–32）+ ファミリー preset セレクト（6 種）+ カスタム指定 input + 行間 slider（1.0–2.0）。カーソルスタイル select（block/underline/bar）+ 点滅 toggle。スクロールバック slider（1000–100000、step 1000）+ Bell select + 単語区切り input。デフォルトシェル input + デフォルト CWD input + 「参照」ボタン（`dialog.selectDirectory` を呼ぶ）
-- **新規 UI: settings/EditorSettings.tsx**: フォントサイズ slider（10–32、step 0.5）+ ファミリー preset（5 種、比例フォント中心）+ カスタム指定 + softWrap toggle
-- **新規 UI: settings/GeneralSettings.tsx**: セッション復元 toggle + PTY 異常終了通知 toggle（初回 ON 時に `Notification.requestPermission` を自動要求）
-- **renderer/components/SettingsModal.tsx**: タブを 3 個から 6 個に拡張（外観 / ターミナル / エディタ / ショートカット / ウィンドウ / 一般）
-- **renderer/components/TerminalSubHeader.tsx**: ペイン名表示にダブルクリック inline rename を追加。`customTitle` が null なら CWD 由来の `folderName` を表示、文字列なら優先表示。空文字列確定で null に戻して自動表示へ復帰。Enter / blur で確定、Escape でキャンセル
-- **renderer/components/MarkdownEditor.tsx**: `useEditorSettings()` 購読を追加。`fontSize: "13.5px"` ハードコードを `editorSettings.fontSize` 由来に、`fontFamily` ハードコードを `editorSettings.fontFamily` に置換。extensions 配列に `editorSettings.softWrap ? [EditorView.lineWrapping] : []` を spread で追加
-- **新規テスト 20 件**:
-  - `shared/__tests__/settings.test.ts` (+6): terminal/editor/general の merge と clamp、cursorStyle/bellStyle の不正値 fallback、validateAppSettings の terminal block 不正値復元
-  - `renderer/stores/__tests__/terminalMetaStore.test.ts` (新規 10 件): initMeta の null 初期化 / 既存 meta の上書き禁止 / setFontSizeOverride（更新・null リセット・no-op・他ペイン無干渉）/ setCustomTitle（文字列 / null クリア / 不在 id）/ hydrateMetas の null 初期化
-  - `renderer/services/__tests__/terminalManager.test.ts` (+4): applyOptions の非サイズキーで no fit / サイズキーで refit / undefined 無視 / 未知 id no-op
-- **既存テスト更新**: `TerminalPane.test.tsx` の `pty.create` 呼び出しアサーションに第 3 引数 `{ shell: undefined, defaultCwd: undefined }` を追加。`vi.mock` で `useTerminalMetaStore` を関数として callable に拡張（`fontSizeOverride` selector 用）、`useTerminalSettings` / `useEditorSettings` / `useGeneralSettings` の mock を追加（DEFAULT_SETTINGS から返す）。`settings.test.ts` の base AppSettings に terminal/editor/general を spread で含めるように修正
-- **テスト合計**: 29 ファイル / 416 件グリーン（修正前 396 から +20 件）
-- **CLAUDE.md (§8 Feature Tier Map)**: T2-10 を新規追加し、ターミナル / エディタ / 一般タブの構成、フォントズームの per-pane 揮発オーバーライド、ペインタイトル rename の自動復帰仕様を記載
-- **設計判断**:
-  - **フォントズームのスコープ C（グローバル + 揮発オーバーライド）**: iTerm2 のメンタルモデルを踏襲。グローバル設定を「新規ペインの初期値」とし、`Cmd+=` / `Cmd+-` でアクティブペインだけ独立調整、`Cmd+0` でグローバルへ戻る。VSCode のような全体共通だけだと「このペインだけ拡大したい」用途に応えられない。per-pane delta は session-persist 対象外（揮発）にすることで、再起動後はフレッシュなグローバル既定で始まる
-  - **Cmd+= / Cmd+- / Cmd+0 のキーバインド**: VSCode / iTerm2 / Chrome 等と互換の事実上の業界標準。`registry.ts` に登録することで、ユーザーが `ShortcutSettings` から自由にリバインド可能（例: `Cmd+Shift+=` を好む人のため）
-  - **per-pane delta は terminalMetaStore に揮発で持つ**: グローバル設定と同列に永続化すると、ペインを閉じても override 値がストレージに残ってしまい「テストで一度大きくしたまま忘れる」が起きやすい。揮発にすれば session を一旦終わらせれば自然にリセットされる
-  - **applyOptions のサイズ影響キー判定 + 自動 refit**: xterm の `options.fontSize` を直接書き換えるとセル幅が変わり PTY の cols/rows が乖離する。`applyOptions` 内で `SIZE_AFFECTING` セットを参照し、該当キーが含まれていれば `invalidateLastSize` → `fit()` を実行して PTY 側にも `pty.resize` を送る（呼び出し側は戻り値の cols/rows で resize する）。これによりフォント変更時の表示崩れを 1 関数で完結
-  - **Bell の WebAudio 実装**: ライブラリ依存ゼロ、880Hz 80ms の短ビープを `OscillatorNode` + `GainNode` で生成。`onended` で `AudioContext.close()` してリソース解放。OS の `NSBeep` を使う案もあったが、IPC 経由になるしユーザーが音量調整できないため WebAudio を選択
-  - **Bell の visual flash は 120ms で十分**: もっと長くすると入力中に視認性が落ちる。フラッシュは「気づき」の発火点だけ提供し、ユーザーが実際に確認するのは ALT screen やプロンプトで行う前提
-  - **PTY 終了通知は Renderer 側の `Notification` API**: main → IPC で `Notification` を出す案もあったが、Renderer 内で完結したほうが (a) ペイン情報（customTitle / processName / cwd）に直接アクセスでき、(b) 許可ダイアログの UX を制御しやすい。`general.ptyExitNotification` トグルで初回 ON 時に `requestPermission()` を発火するため、ユーザーは設定で許可をコントロールできる
-  - **PTY 異常終了の判定は exitCode !== 0**: 0 を「正常終了（exit / Ctrl+D）」、非 0 を「異常終了（クラッシュ / 強制 kill）」として macOS 通知の対象にする。Bell とは別軸のため両方有効化しても重複しない
-  - **デフォルトシェルの存在チェック + フォールバック**: ユーザーが間違ったパス（例: `/usr/local/bin/fish` だが未インストール）を入れても黒画面で起動失敗にならないよう、`fs.existsSync` で実在チェックし不在なら `$SHELL || /bin/zsh` にフォールバック。pty-manager 側の安全網
-  - **デフォルト CWD の優先順位**: 旧来の「メタストア（分割時 CWD）> windowInitialCwd（Dock）> $HOME」の最後に `settings.terminal.defaultCwd` を入れる、ではなく **`initialCwd` が空のときの fallback として ipc-handlers で適用**。これにより Dock や分割からの明示的な CWD は常に優先され、設定の defaultCwd は「何も指定されないとき」だけ効く
-  - **セッション復元 ON/OFF を bootstrap で並列読み**: `settings.get()` と `session.getRestoreData()` を逐次にすると起動時間が IPC 2 回分のレイテンシ。`Promise.all` で並列化することで影響を最小化、settings false なら復元データを単に捨てるだけ（拒否する場合の destroy は `session.clear()` を呼ばない — ユーザーが設定を戻せば次回また復元できる）
-  - **ペインタイトル rename は customTitle null で自動復帰**: 「rename を解除したい」UX を別ボタンで実装するとサブヘッダーが煩雑になる。空文字列を確定すれば null に戻す扱いにすることで、操作系列が「ダブルクリック → 全消去 → Enter」の 1 フローで完結
-  - **MarkdownEditor の softWrap は EditorView.lineWrapping で extension 切替**: CodeMirror 6 の標準パターン。`useMemo` の dep に `editorSettings.softWrap` を含めることで、設定切替時に extensions 配列が再生成され CodeMirror 側が新しい extension を有効化する
-  - **EditorSettings のフォントプリセットは比例フォント中心**: ターミナルと違い Markdown は文章中心の用途が多いため、Helvetica / Hiragino / システム既定の sans-serif を上に置き、等幅は下位に。ユーザーが「コード片中心の note を書く」用途では Menlo / JetBrains Mono を選べるようカスタム指定 input も併設
-  - **設定タブの並び**: 外観 / ターミナル / エディタ / ショートカット / ウィンドウ / 一般。「外観」を最上位に保つことでテーマ切替の発見可能性を維持し、「ターミナル」を 2 番目に置くことで本アプリの主用途に直結する。「一般」は最下位に置いて「設定全体に影響する大物」を物理的に区別
-- **計画書アーカイブ**: `.claude/archive/2026-04-29-customization-features.md` に Status=COMPLETED で移動済み
-
-> 2026-04-29 ローリングアーカイブ: 「サイドバー再帰検索 + 検索フィールド内ショートカット passthrough」「Settings カラー編集の簡略化（セマンティック 6 色化）」、「Markdown エディタ dark モード背景修正」「サイドバーファイル名アイコンずれ修正」、および 2026-04-26 の 2 エントリを [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。
-
-> 2026-04-27 ローリングアーカイブ: これ以前の 30 エントリは [`HISTORY-archive.md`](./HISTORY-archive.md) に移動済み。

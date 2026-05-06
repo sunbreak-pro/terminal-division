@@ -121,6 +121,81 @@ describe("buildCwdTabs", () => {
   });
 });
 
+describe("buildCwdTabs (pinned)", () => {
+  const pane = (over: Partial<PaneCwdInput>): PaneCwdInput => ({
+    paneId: "p",
+    cwd: "/x/y",
+    createdAt: 1,
+    lastActiveAt: 1,
+    ...over,
+  });
+
+  it("pinned 単独 (ペイン無し) のタブが生成される", () => {
+    const tabs = buildCwdTabs([], ["/work/project"]);
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].cwd).toBe("/work/project");
+    expect(tabs[0].pinned).toBe(true);
+    expect(tabs[0].paneIds).toEqual([]);
+    expect(tabs[0].lastActivePaneId).toBeNull();
+  });
+
+  it("ペインと pinned が同 CWD なら 1 タブに合流し pinned: true", () => {
+    const tabs = buildCwdTabs(
+      [pane({ paneId: "a", cwd: "/work/foo", createdAt: 1, lastActiveAt: 1 })],
+      ["/work/foo"],
+    );
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].cwd).toBe("/work/foo");
+    expect(tabs[0].pinned).toBe(true);
+    expect(tabs[0].paneIds).toEqual(["a"]);
+    expect(tabs[0].lastActivePaneId).toBe("a");
+  });
+
+  it("ペイン由来タブは pinned に含まれていなければ pinned: false", () => {
+    const tabs = buildCwdTabs(
+      [pane({ paneId: "a", cwd: "/work/foo", createdAt: 1, lastActiveAt: 1 })],
+      [],
+    );
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].pinned).toBe(false);
+  });
+
+  it("ペイン由来タブが先、pinned-only タブが後ろに並ぶ", () => {
+    const tabs = buildCwdTabs(
+      [
+        pane({ paneId: "a", cwd: "/pane-a", createdAt: 100, lastActiveAt: 1 }),
+        pane({ paneId: "b", cwd: "/pane-b", createdAt: 50, lastActiveAt: 1 }),
+      ],
+      ["/pin-1", "/pin-2"],
+    );
+    expect(tabs.map((t) => t.cwd)).toEqual([
+      "/pane-b",
+      "/pane-a",
+      "/pin-1",
+      "/pin-2",
+    ]);
+    expect(tabs[2].pinned).toBe(true);
+    expect(tabs[3].pinned).toBe(true);
+  });
+
+  it("pinned が空配列 (デフォルト) でも従来通り動く", () => {
+    const tabs = buildCwdTabs([
+      pane({ paneId: "a", cwd: "/work/foo", createdAt: 1, lastActiveAt: 1 }),
+    ]);
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].pinned).toBe(false);
+  });
+
+  it("pinned 重複入力は 1 タブだけ作る", () => {
+    const tabs = buildCwdTabs([], ["/work/foo", "/work/foo"]);
+    expect(tabs).toHaveLength(1);
+  });
+
+  it("ペインも pinned も無ければ空配列", () => {
+    expect(buildCwdTabs([], [])).toEqual([]);
+  });
+});
+
 describe("homeRelativePath", () => {
   it("returns ~ for the home directory itself", () => {
     expect(homeRelativePath("/Users/foo", "/Users/foo")).toBe("~");

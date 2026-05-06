@@ -19,8 +19,10 @@ import { SidebarTabs } from "./SidebarTabs";
 import { DirectoryTree } from "./DirectoryTree";
 import { ResizeHandle } from "./ResizeHandle";
 import { UndoRedoToolbar } from "./UndoRedoToolbar";
+import { GitPanel } from "./GitPanel";
 import { useFileTreeStore } from "../../stores/fileTreeStore";
 import { showErrorToast } from "./ErrorToast";
+import { usePinnedDirsStore } from "../../stores/pinnedDirsStore";
 
 interface SidebarProps {
   onRequestEditMarkdown?: (filePath: string) => void;
@@ -34,10 +36,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
   const selectedTabCwd = useSidebarStore((s) => s.selectedTabCwd);
   const setSelectedTabCwd = useSidebarStore((s) => s.setSelectedTabCwd);
   const setLastInteractedArea = useSidebarStore((s) => s.setLastInteractedArea);
+  const view = useSidebarStore((s) => s.view);
+  const setView = useSidebarStore((s) => s.setView);
 
   const metas = useTerminalMetaStore((s) => s.metas);
   const activeTerminalId = useActiveTerminalId();
   const { setActiveTerminal } = useTerminalActions();
+
+  // ピン留めディレクトリ (ペインに紐付かない追加ツリー)
+  const pinnedPaths = usePinnedDirsStore((s) => s.paths);
+  const initPinned = usePinnedDirsStore((s) => s.init);
+  const removePinned = usePinnedDirsStore((s) => s.remove);
+  const addPinned = usePinnedDirsStore((s) => s.add);
+
+  // 起動時に永続化されたピン留めをロード
+  useEffect(() => {
+    void initPinned();
+  }, [initPinned]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -62,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
     return unsub;
   }, []);
 
-  // ペインメタから CWD タブを構築
+  // ペインメタ + ピン留め CWD からタブを構築
   const tabs: CwdTab[] = useMemo(() => {
     const inputs: PaneCwdInput[] = [];
     for (const [paneId, meta] of metas.entries()) {
@@ -75,8 +90,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
         });
       }
     }
-    return buildCwdTabs(inputs);
-  }, [metas]);
+    return buildCwdTabs(inputs, pinnedPaths);
+  }, [metas, pinnedPaths]);
 
   // アクティブペインの CWD に対応するタブを自動選択（双方向同期その 1）
   useEffect(() => {
@@ -111,9 +126,45 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
 
   const handleSelectTab = (tab: CwdTab): void => {
     setSelectedTabCwd(tab.cwd);
-    // 集約ペイン群のうち直近アクティブだったペインをアクティブ化（双方向同期その 2）
-    if (tab.lastActivePaneId !== activeTerminalId) {
+    // pinned-only タブはペインを持たない → setActiveTerminal は呼ばない
+    if (
+      tab.lastActivePaneId !== null &&
+      tab.lastActivePaneId !== activeTerminalId
+    ) {
       setActiveTerminal(tab.lastActivePaneId);
+    }
+  };
+
+  // 「ツリーを追加」: ディレクトリ選択ダイアログ → ピン留め登録
+  const handleAddPinnedDir = async (): Promise<void> => {
+    const picked = await window.api.dialog.selectDirectory();
+    if (!picked) return;
+    const ok = await addPinned(picked);
+    if (!ok) {
+      showErrorToast("ピン留めに失敗しました (既に登録済みか、無効なパス)");
+      return;
+    }
+    setSelectedTabCwd(picked);
+  };
+
+  // 既存タブのピン留め切替 (toggle: pinned ↔ unpinned)
+  const handleTogglePin = async (tab: CwdTab): Promise<void> => {
+    if (tab.pinned) {
+      // unpin: pinned-only なら次のタブへフォールバック
+      const wasSelected = tab.cwd === selectedTabCwd;
+      const ok = await removePinned(tab.cwd);
+      if (!ok) {
+        showErrorToast("ピン留め解除に失敗しました");
+        return;
+      }
+      if (wasSelected && tab.paneIds.length === 0) {
+        // 削除後の最初のタブへ (Sidebar 自身の effect でも補正される)
+        const remaining = tabs.filter((t) => t.cwd !== tab.cwd);
+        setSelectedTabCwd(remaining[0]?.cwd ?? null);
+      }
+    } else {
+      const ok = await addPinned(tab.cwd);
+      if (!ok) showErrorToast("ピン留めに失敗しました");
     }
   };
 
@@ -137,7 +188,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
       }}
     >
       <UndoRedoToolbar />
-      {tabs.length === 0 ? (
+      <SidebarTabs
+        tabs={tabs}
+        selectedCwd={selectedTabCwd}
+        onSelectTab={handleSelectTab}
+        onTogglePin={(tab) => void handleTogglePin(tab)}
+        onAddPinnedDir={() => void handleAddPinnedDir()}
+        view={view}
+        onSelectView={setView}
+      />
+      {tabs.length === 0 && view === "files" && (
         <div
           style={{
             padding: 12,
@@ -145,23 +205,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
             color: theme.colors.textSecondary,
           }}
         >
-          ターミナルが起動するとここに CWD が表示されます
+          ターミナルを起動するか、上の「+
+          ツリーを追加」でディレクトリを追加してください
         </div>
-      ) : (
-        <>
-          <SidebarTabs
-            tabs={tabs}
-            selectedCwd={selectedTabCwd}
-            onSelectTab={handleSelectTab}
-          />
-          {selectedTabCwd && (
-            <DirectoryTree
-              rootPath={selectedTabCwd}
-              onRequestEditMarkdown={onRequestEditMarkdown}
-            />
-          )}
-        </>
       )}
+      {view === "files" && selectedTabCwd && (
+        <DirectoryTree
+          rootPath={selectedTabCwd}
+          onRequestEditMarkdown={onRequestEditMarkdown}
+        />
+      )}
+      {view === "git" &&
+        (selectedTabCwd ? (
+          <GitPanel cwd={selectedTabCwd} />
+        ) : (
+          <div
+            style={{
+              padding: 12,
+              fontSize: 11,
+              color: theme.colors.textSecondary,
+            }}
+          >
+            CWD タブを選択すると、その Git リポジトリの状態を表示します
+          </div>
+        ))}
 
       <ResizeHandle containerRef={containerRef} />
     </aside>
