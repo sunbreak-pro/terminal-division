@@ -11,7 +11,6 @@ import {
   useRightSidebarStore,
   useRightSidebarOpen,
 } from "../stores/rightSidebarStore";
-import { useSettingsModalStore } from "../stores/settingsModalStore";
 import { PanelLeftIcon, PanelRightIcon } from "./Sidebar/icons";
 
 const Header: React.FC = React.memo(() => {
@@ -22,6 +21,10 @@ const Header: React.FC = React.memo(() => {
   const toggleSidebar = useSidebarStore((s) => s.toggleOpen);
   const rightSidebarOpen = useRightSidebarOpen();
   const toggleRightSidebar = useRightSidebarStore((s) => s.toggleOpen);
+  // 検索フィールドは sidebarStore.searchQuery を直接購読するので、
+  // DirectoryTree 側のフィルタと自動的に同期する（Header / Sidebar 双方向）
+  const searchQuery = useSidebarStore((s) => s.searchQuery);
+  const setSearchQuery = useSidebarStore((s) => s.setSearchQuery);
 
   const currentTheme = useCurrentTheme();
   const themeConfig = useThemeConfig();
@@ -117,15 +120,28 @@ const Header: React.FC = React.memo(() => {
     [activeTerminalId, theme.colors.buttonHover],
   );
 
-  const handleOpenSettings = useCallback(() => {
-    useSettingsModalStore.getState().open();
-  }, []);
-
-  const handleSettingsButtonEnter = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
-    },
-    [theme.colors.buttonHover],
+  // 中央検索フィールドのスタイル。Header の中央セクション内で flex:1 で広がり、
+  // 上限幅 420px に収めることで Header の左右コントロールと干渉しない。
+  const searchInputStyle = useMemo<React.CSSProperties>(
+    () => ({
+      width: "100%",
+      maxWidth: 420,
+      backgroundColor: theme.colors.background,
+      color: theme.colors.text,
+      border: `1px solid ${theme.colors.border}`,
+      borderRadius: theme.borderRadius,
+      padding: "5px 10px",
+      fontSize: 12,
+      fontFamily: "inherit",
+      outline: "none",
+      boxSizing: "border-box",
+    }),
+    [
+      theme.colors.background,
+      theme.colors.text,
+      theme.colors.border,
+      theme.borderRadius,
+    ],
   );
 
   return (
@@ -183,6 +199,37 @@ const Header: React.FC = React.memo(() => {
         </button>
       </div>
 
+      {/* 中央: ファイル名検索フィールド。サイドバーが閉じていても表示する仕様 */}
+      {/* （ユーザー要望: 常に Header 中央に置く）。値は sidebarStore に保持され、 */}
+      {/* DirectoryTree が同じ値を購読してフィルタする */}
+      <div
+        className="titlebar-no-drag"
+        style={{
+          flex: 1,
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          minWidth: 0,
+          padding: `0 ${theme.spacing.md}`,
+        }}
+      >
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="ファイル名で検索"
+          aria-label="ファイル名で検索"
+          spellCheck={false}
+          style={searchInputStyle}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = theme.colors.borderActive;
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = theme.colors.border;
+          }}
+        />
+      </div>
+
       <div
         className="titlebar-no-drag"
         style={{
@@ -190,11 +237,16 @@ const Header: React.FC = React.memo(() => {
           gap: theme.spacing.sm,
         }}
       >
+        {/* アイコンのみのボタンは padding を sm に詰めて視覚的なバランスを取る */}
         <button
           onClick={handleSplitVertical}
           disabled={!canSplitNow}
-          style={canSplitNow ? buttonStyle : disabledStyle}
+          style={{
+            ...(canSplitNow ? buttonStyle : disabledStyle),
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+          }}
           title="縦に分割 (Cmd+D)"
+          aria-label="縦に分割"
           onMouseEnter={handleSplitButtonEnter}
           onMouseLeave={handleButtonLeave}
         >
@@ -209,14 +261,17 @@ const Header: React.FC = React.memo(() => {
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="12" y1="3" x2="12" y2="21" />
           </svg>
-          縦分割
         </button>
 
         <button
           onClick={handleSplitHorizontal}
           disabled={!canSplitNow}
-          style={canSplitNow ? buttonStyle : disabledStyle}
+          style={{
+            ...(canSplitNow ? buttonStyle : disabledStyle),
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+          }}
           title="横に分割 (Cmd+Shift+D)"
+          aria-label="横に分割"
           onMouseEnter={handleSplitButtonEnter}
           onMouseLeave={handleButtonLeave}
         >
@@ -231,14 +286,17 @@ const Header: React.FC = React.memo(() => {
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="3" y1="12" x2="21" y2="12" />
           </svg>
-          横分割
         </button>
 
         <button
           onClick={handleChangeDirectory}
           disabled={!activeTerminalId}
-          style={activeTerminalId ? buttonStyle : disabledStyle}
+          style={{
+            ...(activeTerminalId ? buttonStyle : disabledStyle),
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+          }}
           title="ディレクトリを移動"
+          aria-label="ディレクトリを移動"
           onMouseEnter={handleDirectoryButtonEnter}
           onMouseLeave={handleButtonLeave}
         >
@@ -254,7 +312,6 @@ const Header: React.FC = React.memo(() => {
             <polyline points="12 11 12 17" />
             <polyline points="9 14 12 11 15 14" />
           </svg>
-          ディレクトリ移動
         </button>
 
         <button
@@ -285,29 +342,6 @@ const Header: React.FC = React.memo(() => {
           }}
         >
           <PanelRightIcon size={14} />
-        </button>
-
-        <button
-          onClick={handleOpenSettings}
-          style={buttonStyle}
-          title="設定 (Cmd+,)"
-          onMouseEnter={handleSettingsButtonEnter}
-          onMouseLeave={handleButtonLeave}
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-          設定
         </button>
       </div>
     </header>

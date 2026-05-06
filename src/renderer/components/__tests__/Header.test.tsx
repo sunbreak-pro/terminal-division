@@ -66,13 +66,19 @@ describe("Header", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the kept buttons (split / directory / settings)", () => {
+  it("renders the kept buttons (split / directory) and the center search field", () => {
     render(<Header />);
 
     expect(screen.getByTitle("縦に分割 (Cmd+D)")).toBeInTheDocument();
     expect(screen.getByTitle("横に分割 (Cmd+Shift+D)")).toBeInTheDocument();
     expect(screen.getByTitle("ディレクトリを移動")).toBeInTheDocument();
-    expect(screen.getByTitle("設定 (Cmd+,)")).toBeInTheDocument();
+    // 検索フィールド: Header 中央へ移設
+    expect(screen.getByPlaceholderText("ファイル名で検索")).toBeInTheDocument();
+  });
+
+  it("does NOT render the settings button (moved to Sidebar)", () => {
+    render(<Header />);
+    expect(screen.queryByTitle("設定 (Cmd+,)")).not.toBeInTheDocument();
   });
 
   it("does NOT render the close button (moved to per-pane SubHeader)", () => {
@@ -119,23 +125,16 @@ describe("Header", () => {
     expect(mockSplitTerminal).toHaveBeenCalledWith("terminal-1", "vertical");
   });
 
-  it("opens settings modal store on settings button click", async () => {
-    vi.mocked(terminalStore.useCanSplit).mockReturnValue(() => true);
-
-    const { useSettingsModalStore } =
-      await import("../../stores/settingsModalStore");
-    useSettingsModalStore.setState({
-      isOpen: false,
-      recordingShortcutId: null,
-    });
+  it("center search field writes to sidebarStore.searchQuery", async () => {
+    const { useSidebarStore } = await import("../../stores/sidebarStore");
+    useSidebarStore.setState({ searchQuery: "" });
 
     render(<Header />);
 
-    expect(useSettingsModalStore.getState().isOpen).toBe(false);
+    const input = screen.getByPlaceholderText("ファイル名で検索");
+    fireEvent.change(input, { target: { value: "foo.md" } });
 
-    fireEvent.click(screen.getByTitle("設定 (Cmd+,)"));
-
-    expect(useSettingsModalStore.getState().isOpen).toBe(true);
+    expect(useSidebarStore.getState().searchQuery).toBe("foo.md");
   });
 
   it("calls directory selection dialog on directory button click", async () => {

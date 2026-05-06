@@ -50,7 +50,6 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
   );
   const setEditingPath = useSidebarStore((s) => s.setEditingPath);
   const searchQuery = useSidebarStore((s) => s.searchQuery);
-  const setSearchQuery = useSidebarStore((s) => s.setSearchQuery);
 
   const [menu, setMenu] = useState<{
     x: number;
@@ -307,47 +306,8 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
         outlineOffset: -2,
       }}
     >
-      <div
-        style={{
-          padding: `${config.spacing.sm} ${config.spacing.sm}`,
-          borderBottom: `1px solid ${theme.colors.border}`,
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          minHeight: 36,
-          boxSizing: "border-box",
-        }}
-      >
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="ファイル名で検索"
-          aria-label="ファイル名で検索"
-          spellCheck={false}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            backgroundColor: theme.colors.background,
-            color: theme.colors.text,
-            border: `1px solid ${theme.colors.border}`,
-            borderRadius: 4,
-            padding: "5px 8px",
-            fontSize: 12,
-            fontFamily: "inherit",
-            outline: "none",
-            boxSizing: "border-box",
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = theme.colors.borderActive;
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = theme.colors.border;
-          }}
-        />
-      </div>
-
+      {/* 検索 input は Header 中央に移設済み（sidebarStore.searchQuery を共有）。 */}
+      {/* ここではフィルタ結果の表示だけを担当する。 */}
       <div style={{ flex: 1, overflow: "auto", padding: "4px 0" }}>
         {isSearching ? (
           <SearchResultsPanel
