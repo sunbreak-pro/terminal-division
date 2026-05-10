@@ -486,6 +486,9 @@ export function destroy(id: string): void {
   registry.delete(id);
   // サイズキャッシュのクリーンアップ
   lastSizes.delete(id);
+  // 「最後に送ったサイズ」も同 id のクリーンアップ対象（同じ id が再利用された時に
+  // 古い dedup 値で初回 IPC が抑止されるのを防ぐ）。
+  lastSentSizes.delete(id);
   // 保留中の pty.resize timer をクリア（破棄済みペインへ resize IPC が飛ぶのを防ぐ）
   const pending = pendingPtyResizes.get(id);
   if (pending) {
@@ -558,17 +561,35 @@ export function invalidateLastSize(id: string): void {
 // が再描画 → 古い描画が scrollback に残るループに入り、長文が縦に大量複製される。
 // xterm 側の reflow（fitAddon.fit / terminal.resize）は即時実行して見た目を維持しつつ、
 // PTY への通知だけ「最終サイズ」に集約することでこの再描画スパムを止める。
-const PTY_RESIZE_DEBOUNCE_MS = 80;
+//
+// 200ms にしているのは、間欠ドラッグ（ユーザーがマウスを少し止めて再ドラッグ）や、
+// 起動直後に複数の非同期ロード（RightSidebar の永続化値、windowZoom 初期化、
+// Panel 初回 measure 等）が ~100ms 間隔で連発するパターンを 1 発に集約するため。
+// 80ms だとこれらが素通りして TUI 側の再描画が複数回走り、複製が再発する。
+const PTY_RESIZE_DEBOUNCE_MS = 200;
 const pendingPtyResizes = new Map<
   string,
   { cols: number; rows: number; timer: ReturnType<typeof setTimeout> }
 >();
+
+// 「最後に PTY へ送ったサイズ」を独立に追跡する。
+// fit() の lastSizes は invalidateLastSize で破棄される（Panel.onResize や applyOptions で
+// 強制再 fit したい場面のため）が、その結果として「実サイズが変わっていないのに pty.resize
+// IPC が飛ぶ → SIGWINCH → TUI 再描画」が起きていた。lastSentSizes は invalidate 対象外
+// なので、cols/rows が前回送信と完全一致なら IPC をスキップする最後の砦になる。
+const lastSentSizes = new Map<string, { cols: number; rows: number }>();
 
 function schedulePtyResize(id: string, cols: number, rows: number): void {
   const existing = pendingPtyResizes.get(id);
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     pendingPtyResizes.delete(id);
+    // 前回 PTY に送ったサイズと完全一致なら IPC を skip する（SIGWINCH の no-op 抑止）。
+    // ここを抜けると debounce ウィンドウを跨いで同サイズ SIGWINCH が連発する状況で
+    // TUI（Claude Code 等）が複数回再描画 → 複製表示の原因になる。
+    const last = lastSentSizes.get(id);
+    if (last && last.cols === cols && last.rows === rows) return;
+    lastSentSizes.set(id, { cols, rows });
     try {
       window.api.pty.resize(id, cols, rows);
     } catch {
@@ -584,6 +605,11 @@ export function cancelPendingPtyResizes(): void {
     clearTimeout(entry.timer);
   }
   pendingPtyResizes.clear();
+}
+
+// テスト用: lastSentSizes をクリアする
+export function clearLastSentSizes(): void {
+  lastSentSizes.clear();
 }
 
 /**

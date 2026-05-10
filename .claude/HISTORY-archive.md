@@ -2,6 +2,45 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-05-06 - Header / Sidebar UI 調整（検索フィールド中央移設・分割ボタンアイコン化・設定ボタンを Sidebar 移設）
+
+#### 概要
+
+ユーザー要望「ファイル名検索フィールドを Header 中央に移設、分割ボタンはアイコンのみ表示、設定ボタンは LeftSidebar のツリーの一番下に新セクションとして position:sticky で常時表示」に対応。事前に AskUserQuestion で 4 点確認: (1) ブランチ運用は新ブランチ推奨を選択、(2) 検索フィールドはサイドバーを閉じても Header 中央に常時表示、(3) Header の設定ボタンは削除して Sidebar のみに置く、(4) ディレクトリ移動ボタンも分割ボタンと同じくアイコンのみで統一。Header を 3 セクション（左 = Title + Sidebar toggle / 中央 = 検索 input / 右 = 分割ボタン群 + RightSidebar toggle）に組み換え。検索 state は既に `sidebarStore.searchQuery` に存在していたため、Header から同じストアを購読して DirectoryTree と自動同期する形に（追加の state lifting 不要、双方向同期は Zustand 任せ）。DirectoryTree から旧検索 input ブロックと未使用になった `setSearchQuery` import を撤去（filter ロジックは維持）。Sidebar に新コンポーネント `SidebarSettingsSection` を追加し、DirectoryTree / GitPanel の下、ResizeHandle の上に配置。`flexShrink:0 + position:sticky bottom:0 + zIndex:1` で常時下端固定。設定アイコン + 「設定」ラベル付きボタンで `useSettingsModalStore.open()` を呼ぶ。Header.test.tsx を更新（「設定ボタン存在」→「検索フィールド存在 + 設定ボタン不在」、「設定ボタンクリックで modal 開く」→「検索入力で sidebarStore に書かれる」）。session-verifier 通過: 540/540 件グリーン + `npm run build` 通過。HISTORY ローリングアーカイブで 2026-04-30 エントリを `HISTORY-archive.md` に移動。
+
+#### 変更点
+
+- **`src/renderer/components/Header.tsx`**:
+  - `useSettingsModalStore` import と handleOpenSettings / handleSettingsButtonEnter ハンドラを削除
+  - `useSidebarStore` から `searchQuery` / `setSearchQuery` を購読
+  - `searchInputStyle` を `useMemo` で新規定義（max-width 420px、theme.colors.background / border / borderRadius、focus 時のみ borderActive 色に変化）
+  - JSX を `header (justify-content: space-between)` の中で 3 セクションに分割: 左（Title + Sidebar toggle、変更なし）/ 中央（`flex: 1` + `justifyContent: center` + `titlebar-no-drag` で囲った `<input type="search">`）/ 右（分割 V/H + ディレクトリ移動 + RightSidebar toggle）
+  - 縦分割 / 横分割 / ディレクトリ移動の 3 ボタンから `縦分割` / `横分割` / `ディレクトリ移動` の文字列ノードを削除しアイコンのみに。`aria-label` を追加してスクリーンリーダー対応、`padding` を `xs sm` に詰めて視覚バランス調整
+  - 設定ボタン全体（onClick / svg gear / 「設定」ラベル）を完全削除
+- **`src/renderer/components/Sidebar/DirectoryTree.tsx`**:
+  - 検索 input を含む 36 行のヘッダー div ブロック（line 310-348 相当）を削除し、`{/* 検索 input は Header 中央に移設済み（sidebarStore.searchQuery を共有）。*/}` のコメントに置換
+  - 未使用になった `const setSearchQuery = useSidebarStore((s) => s.setSearchQuery);` を削除（`searchQuery` 読み取りは filter ロジックで継続使用）
+- **`src/renderer/components/Sidebar/Sidebar.tsx`**:
+  - `useSettingsModalStore` import を追加
+  - `Sidebar` の return 内、GitPanel の下、ResizeHandle の上に `<SidebarSettingsSection />` を挿入
+  - 同ファイル末尾に `SidebarSettingsSection` コンポーネントを新規定義: `position: sticky; bottom: 0; flexShrink: 0; backgroundColor: theme.colors.headerBackground; borderTop; padding 6px 8px; zIndex: 1`。中身は `aria-label="設定を開く"` + 設定 svg gear アイコン (14px) + 「設定」ラベルの button、hover で `theme.colors.buttonHover` に背景色変化、クリックで `useSettingsModalStore.getState().open()` を呼ぶ
+  - DirectoryTree が `overflow:auto` を内部に持つため通常はツリーが押し出さないが、念のため sticky を併用（aside 自体がスクロールするレイアウト変更にも耐える防御）
+- **`src/renderer/components/__tests__/Header.test.tsx`**:
+  - `renders the kept buttons (split / directory / settings)` を `renders the kept buttons (split / directory) and the center search field` にリネーム + 設定ボタン assertion を削除し、`screen.getByPlaceholderText("ファイル名で検索")` の存在検証を追加
+  - `does NOT render the settings button (moved to Sidebar)` を新規追加（`queryByTitle("設定 (Cmd+,)")` で不在検証）
+  - `opens settings modal store on settings button click` を `center search field writes to sidebarStore.searchQuery` に置換: `useSidebarStore.setState({ searchQuery: "" })` で初期化 → input change → `useSidebarStore.getState().searchQuery` が `"foo.md"` になることを検証
+- **テスト合計**: 39 ファイル / 540 件グリーン（変更前 540 から維持）+ `npm run build` 通過
+- **設計判断**:
+  - **検索 state を sidebarStore で共有 vs prop drilling**: 検索 state は既に `sidebarStore.searchQuery` に存在し、DirectoryTree が購読していた。Header から同じストアを購読する形にすれば追加の state lifting / context が一切不要で、双方向同期は Zustand の購読機構が担保する。新しい store / context を切らないのが最もシンプル
+  - **検索フィールドをサイドバー閉じ時も常時表示**: ユーザーの明示要望に従う。値は保持されるがサイドバー閉じ時は filter 効果が見えない（DirectoryTree が描画されないため）。サイドバーを開けば即反映。「閉じてる時に typed→自動で開く」挙動は今回追加せず（要望に含まれない / スコープ最小化）
+  - **設定ボタンを Header から完全削除**: ユーザー回答により Header 重複を避ける選択。サイドバー閉じ時は Cmd+, ショートカットで設定を開く運用になる（既存 ShortcutSettings で登録済み）
+  - **ディレクトリ移動ボタンもアイコンのみに統一**: ユーザー回答により Header 視覚を統一。tooltip と aria-label で意味は伝わる
+  - **`SidebarSettingsSection` を inline コンポーネントとして同ファイル内に置いた理由**: 1 ファイル内で完結する小さい UI で、外部から再利用しない。`Sidebar.tsx` 内に同居させた方が「Sidebar の最下段セクション」という意味的まとまりが明確で、ファイル分割のオーバーヘッドに見合わない。テスト書きたくなったら抽出
+  - **`position: sticky; bottom: 0` を flexShrink:0 と併用した理由**: 通常は flexShrink:0 だけで十分（DirectoryTree の overflow:auto が内側に閉じているため）。ただし将来 aside 自体に `overflow-y:auto` を入れるレイアウト変更（例: タブ列が肥大化したケース）が起きても動くように sticky を保険として併用。`zIndex:1` で背後のツリーアイテムに重なる
+  - **テストインフラ拡張は最小に**: `Sidebar.tsx` 自体には pre-existing でユニットテストがなく、`window.api.sidebar.getWidth()` 等のモックも未整備。今回の `SidebarSettingsSection` は薄いラッパー（`useSettingsModalStore.open()` を呼ぶだけ）なので、テストインフラ拡張のコスト > テストの価値と判断。Header 側で「設定ボタンが Header から消えた」を担保するに留める
+  - **アイコンは Sidebar/icons.tsx に追加せず inline SVG を維持**: 設定ギアアイコンは Header から移すだけで新規ではない。検索アイコンも今回 input 内に置かないので不要。`icons.tsx` を肥大化させず、変更を該当 component 内に閉じる
+  - **HISTORY ローリングアーカイブ**: エントリ 5 件上限のため、本タスク追加時に最古の 2026-04-30 エントリを `HISTORY-archive.md` に移動
+
 ### 2026-05-06 - VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）+ xterm 全角リンクずれ修正
 
 #### 概要

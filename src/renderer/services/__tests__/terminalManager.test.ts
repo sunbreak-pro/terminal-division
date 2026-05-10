@@ -155,6 +155,9 @@ describe("terminalManager", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     __testMetas.clear();
+    // module-scope の Map をテスト間で持ち越さない（dedup テストの前提条件を安定させる）
+    terminalManager.cancelPendingPtyResizes();
+    terminalManager.clearLastSentSizes();
   });
 
   afterEach(() => {
@@ -375,8 +378,8 @@ describe("terminalManager", () => {
       const result = terminalManager.fit("test-fit-retry");
       // 1 回目は例外で null
       expect(result).toBeNull();
-      // debounce 時間を進めて pty.resize を発火させる
-      vi.advanceTimersByTime(100);
+      // debounce 時間を進めて pty.resize を発火させる（200ms debounce + 余裕）
+      vi.advanceTimersByTime(250);
       expect(mockPtyApi.resize).toHaveBeenCalledWith("test-fit-retry", 80, 24);
       vi.useRealTimers();
       rafSpy.mockRestore();
@@ -461,8 +464,8 @@ describe("terminalManager", () => {
       // debounce 期間中は IPC は飛んでいない
       expect(mockPtyApi.resize).not.toHaveBeenCalled();
 
-      // debounce 経過後、最終サイズだけが 1 回 IPC される
-      vi.advanceTimersByTime(100);
+      // debounce 経過後、最終サイズだけが 1 回 IPC される（200ms debounce + 余裕）
+      vi.advanceTimersByTime(250);
       expect(mockPtyApi.resize).toHaveBeenCalledTimes(1);
       expect(mockPtyApi.resize).toHaveBeenCalledWith(
         "test-debounce-coalesce",
@@ -471,6 +474,96 @@ describe("terminalManager", () => {
       );
 
       vi.useRealTimers();
+    });
+
+    // 再現対象のバグ: invalidateLastSize 経由の同サイズ fit() が複数回起きると、
+    // 80ms debounce を跨いで毎回 pty.resize IPC が飛び、TUI が同じ画面を何度も
+    // 再描画 → 長文の複製になる。lastSentSizes による dedup でこれを断つ。
+    it("dedups same-size pty.resize across debounce windows", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-dedup-same",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const proposeMock = instance.fitAddon
+        .proposeDimensions as unknown as ReturnType<typeof vi.fn>;
+      mockPtyApi.resize.mockClear();
+
+      // 1 回目: 60x24 を IPC で送る
+      proposeMock.mockReturnValueOnce({ cols: 60, rows: 24 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        60;
+      terminalManager.fit("test-dedup-same");
+      vi.advanceTimersByTime(250);
+      expect(mockPtyApi.resize).toHaveBeenCalledTimes(1);
+      expect(mockPtyApi.resize).toHaveBeenLastCalledWith(
+        "test-dedup-same",
+        60,
+        24,
+      );
+
+      // 2 回目: invalidate → fit() を呼ぶが提案サイズは同じ 60x24
+      // → IPC は飛ばない（dedup）
+      terminalManager.invalidateLastSize("test-dedup-same");
+      proposeMock.mockReturnValueOnce({ cols: 60, rows: 24 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        60;
+      terminalManager.fit("test-dedup-same");
+      vi.advanceTimersByTime(250);
+      expect(mockPtyApi.resize).toHaveBeenCalledTimes(1); // まだ 1 回のまま
+
+      // 3 回目: サイズが変わったら IPC は飛ぶ
+      terminalManager.invalidateLastSize("test-dedup-same");
+      proposeMock.mockReturnValueOnce({ cols: 70, rows: 24 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        70;
+      terminalManager.fit("test-dedup-same");
+      vi.advanceTimersByTime(250);
+      expect(mockPtyApi.resize).toHaveBeenCalledTimes(2);
+      expect(mockPtyApi.resize).toHaveBeenLastCalledWith(
+        "test-dedup-same",
+        70,
+        24,
+      );
+    });
+
+    // dedup 状態は destroy() でクリアされる（同 id 再利用時に「初回 IPC が抑止される」
+    // 退行を防ぐ）
+    it("destroy() clears lastSentSize so same id can fire again", () => {
+      const instance = terminalManager.getOrCreate(
+        "test-dedup-destroy",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const proposeMock = instance.fitAddon
+        .proposeDimensions as unknown as ReturnType<typeof vi.fn>;
+      mockPtyApi.resize.mockClear();
+
+      proposeMock.mockReturnValueOnce({ cols: 90, rows: 30 });
+      (instance.terminal as unknown as { cols: number; rows: number }).cols =
+        90;
+      (instance.terminal as unknown as { cols: number; rows: number }).rows =
+        30;
+      terminalManager.fit("test-dedup-destroy");
+      vi.advanceTimersByTime(250);
+      expect(mockPtyApi.resize).toHaveBeenCalledTimes(1);
+
+      terminalManager.destroy("test-dedup-destroy");
+
+      // 同 id で再生成 → 同サイズでも初回 IPC は飛ぶ（lastSentSizes が消えているため）
+      const inst2 = terminalManager.getOrCreate(
+        "test-dedup-destroy",
+        defaultOptions,
+        defaultCallbacks,
+      );
+      const proposeMock2 = inst2.fitAddon
+        .proposeDimensions as unknown as ReturnType<typeof vi.fn>;
+      proposeMock2.mockReturnValueOnce({ cols: 90, rows: 30 });
+      (inst2.terminal as unknown as { cols: number; rows: number }).cols = 90;
+      (inst2.terminal as unknown as { cols: number; rows: number }).rows = 30;
+      terminalManager.fit("test-dedup-destroy");
+      vi.advanceTimersByTime(250);
+      expect(mockPtyApi.resize).toHaveBeenCalledTimes(2);
     });
 
     it("cancelPendingPtyResizes drops pending IPC", () => {
@@ -485,7 +578,7 @@ describe("terminalManager", () => {
       terminalManager.fit("test-debounce-cancel");
       terminalManager.cancelPendingPtyResizes();
 
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(250);
       expect(mockPtyApi.resize).not.toHaveBeenCalled();
 
       vi.useRealTimers();
@@ -504,7 +597,7 @@ describe("terminalManager", () => {
       // debounce 経過前に destroy（ペインを閉じた状況を模擬）
       terminalManager.destroy("test-debounce-destroy");
 
-      vi.advanceTimersByTime(200);
+      vi.advanceTimersByTime(250);
       // 破棄済みペインへ pty.resize は飛ばない
       expect(mockPtyApi.resize).not.toHaveBeenCalled();
 

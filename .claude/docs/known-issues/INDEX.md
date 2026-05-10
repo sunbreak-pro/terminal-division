@@ -26,10 +26,11 @@
 
 ## Fixed
 
-| #                                             | タイトル                                          | Resolved   | キーワード                                                                       |
-| --------------------------------------------- | ------------------------------------------------- | ---------- | -------------------------------------------------------------------------------- |
-| [001](./001-packaged-app-japanese-garbled.md) | パッケージ化後の日本語入力文字化け                | 2026-02-04 | node-pty encoding, LANG/LC_ALL, LSEnvironment, macOS パッケージ                  |
-| [002](./002-scrollback-cols-mismatch.md)      | Scrollback の cols 不整合（過去行が極狭幅で固定） | 2026-04-27 | xterm.js, fitAddon, pty.resize, ResizeObserver, react-resizable-panels, viewMode |
+| #                                             | タイトル                                             | Resolved   | キーワード                                                                                                           |
+| --------------------------------------------- | ---------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------- |
+| [001](./001-packaged-app-japanese-garbled.md) | パッケージ化後の日本語入力文字化け                   | 2026-02-04 | node-pty encoding, LANG/LC_ALL, LSEnvironment, macOS パッケージ                                                      |
+| [002](./002-scrollback-cols-mismatch.md)      | Scrollback の cols 不整合（過去行が極狭幅で固定）    | 2026-04-27 | xterm.js, fitAddon, pty.resize, ResizeObserver, react-resizable-panels, viewMode                                     |
+| [004](./004-claude-code-text-duplication.md)  | Claude Code (Ink TUI) の長文が 3〜4 回重複表示される | 2026-05-10 | SIGWINCH, pty.resize debounce, lastSentSize dedup, Ink redraw, RightSidebar 永続化 useEffect 集約, schedulePtyResize |
 
 ---
 

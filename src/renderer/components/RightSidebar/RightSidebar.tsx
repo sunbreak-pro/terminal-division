@@ -21,34 +21,32 @@ export const RightSidebar: React.FC = () => {
   const setWidth = useRightSidebarStore((s) => s.setWidth);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // 永続化値の取得が終わるまで isOpen の IPC 送信を保留する。
-  // この保留がないと、初期 isOpen=false がそのまま main に送信されて
-  // 前回保存した open=true を上書きしてしまう。
-  const [openInitialized, setOpenInitialized] = useState(false);
-  const [fullscreenInitialized, setFullscreenInitialized] = useState(false);
+  // 永続化値の取得が終わるまで isOpen / isFullscreen の IPC 送信を保留する。
+  // この保留がないと、初期 false 値がそのまま main に送信されて前回保存値を上書きしてしまう。
+  const [persistInitialized, setPersistInitialized] = useState(false);
 
-  // 起動時に永続化された幅を復元
+  // 起動時に永続化された width / open / fullscreen を一括復元する。
+  // 旧実装では 3 本の useEffect が独立に走り、各 then() の resolve タイミングが
+  // ~10〜100ms ずれて 3 連続のレイアウト変更（=メインターミナル領域の width 振動）を
+  // 引き起こしていた。これが PTY resize IPC の連発と SIGWINCH スパムを誘発し、
+  // 前面 TUI（Claude Code 等）の再描画で長文が複製される原因の 1 つになっていた。
+  // Promise.all で 3 値を同時に取得し、setState を 1 フレーム内に集約することで
+  // ResizeObserver / Panel.onResize が 1 度しか発火しないようにする。
   useEffect(() => {
     let canceled = false;
-    void window.api.rightSidebar.getWidth().then((w) => {
-      if (!canceled && typeof w === "number") {
-        setWidth(w);
-      }
-    });
-    return () => {
-      canceled = true;
-    };
-  }, [setWidth]);
-
-  // 起動時に永続化された開閉状態を復元
-  useEffect(() => {
-    let canceled = false;
-    void window.api.rightSidebar.getOpen().then((open) => {
+    void Promise.all([
+      window.api.rightSidebar.getWidth(),
+      window.api.rightSidebar.getOpen(),
+      window.api.rightSidebar.getFullscreen(),
+    ]).then(([w, open, fullscreen]) => {
       if (canceled) return;
-      if (typeof open === "boolean" && open) {
-        useRightSidebarStore.getState().setOpen(true);
+      const store = useRightSidebarStore.getState();
+      if (typeof w === "number") store.setWidth(w);
+      if (typeof open === "boolean" && open) store.setOpen(true);
+      if (typeof fullscreen === "boolean" && fullscreen) {
+        store.setFullscreen(true);
       }
-      setOpenInitialized(true);
+      setPersistInitialized(true);
     });
     return () => {
       canceled = true;
@@ -71,30 +69,15 @@ export const RightSidebar: React.FC = () => {
 
   // 開閉状態が変わったら永続化（初期化完了後のみ）
   useEffect(() => {
-    if (!openInitialized) return;
+    if (!persistInitialized) return;
     window.api.rightSidebar.setOpen(isOpen);
-  }, [isOpen, openInitialized]);
-
-  // 起動時に永続化された全画面状態を復元
-  useEffect(() => {
-    let canceled = false;
-    void window.api.rightSidebar.getFullscreen().then((fullscreen) => {
-      if (canceled) return;
-      if (typeof fullscreen === "boolean" && fullscreen) {
-        useRightSidebarStore.getState().setFullscreen(true);
-      }
-      setFullscreenInitialized(true);
-    });
-    return () => {
-      canceled = true;
-    };
-  }, []);
+  }, [isOpen, persistInitialized]);
 
   // 全画面状態が変わったら永続化（初期化完了後のみ）
   useEffect(() => {
-    if (!fullscreenInitialized) return;
+    if (!persistInitialized) return;
     window.api.rightSidebar.setFullscreen(isFullscreen);
-  }, [isFullscreen, fullscreenInitialized]);
+  }, [isFullscreen, persistInitialized]);
 
   if (!isOpen) return null;
 

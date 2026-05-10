@@ -1,5 +1,40 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-10 - Claude Code (Ink TUI) 長文 3〜4 回複製の根本修正（pty.resize lastSentSize dedup + debounce 200ms + RightSidebar 永続化ロード集約）
+
+#### 概要
+
+ユーザー報告「claude のチャットが長引くと同じ文章や要素が 3〜4 回連続で表示されて文脈を追えない」「前回も依頼したが改善されていない」に対応。前回修正（commit `2c68760`, 2026-05-02、Known Issue 002 系統）で 80ms `schedulePtyResize` debounce を入れて「ドラッグ中の連発スパム」は止めていたが、(a) debounce タイマー切れ後に **前回送信値と同じ cols/rows でも IPC を再発射する経路** と (b) 80ms が短すぎて間欠ドラッグ・非同期初期化ラッシュを取りこぼす経路が残存していた。Ink ベース TUI（Claude Code）は SIGWINCH ごとに「N 行戻ってクリア → 再描画」する仕様で、長文で生きた領域がスクロールアウトすると消去コマンドが空振り → 古いブロックが残ったまま新しい描画が下に追記される複製現象を起こす。今回の修正は 3 段構え: (A) `terminalManager.ts` に `lastSentSizes: Map<string, {cols, rows}>` を追加し schedulePtyResize の timer 発火時に「最後に送ったサイズと完全一致」なら IPC を skip、(B) `PTY_RESIZE_DEBOUNCE_MS` を 80ms → 200ms へ引き上げて間欠発火を 1 発に集約、(C) `RightSidebar.tsx` の `getWidth` / `getOpen` / `getFullscreen` の永続化ロード 3 useEffect を `Promise.all` で 1 本に集約して起動直後のレイアウト 3 連発を断つ。`destroy()` でも `lastSentSizes.delete(id)` を実行し同 id 再利用時の初回 IPC 抑止退行を防ぐ。テストは dedup の 2 ケース（同サイズ skip / destroy 後の再生成で復活）を新規追加 + 既存 debounce タイマー値を 100ms → 250ms に追従更新。Known Issue 004（連番 003 は廃番のため 004 採番）として `.claude/docs/known-issues/` に文書化、INDEX.md に Fixed 行追加。session-verifier 通過: 555/555 件グリーン（dedup +2）+ `npm run build` 通過。コミット範囲は本セッション起因の 3 ファイル + 関連 .claude のみに絞る（pre-existing で M 状態だった他のファイルは別ブランチ作業のため触らない）。
+
+#### 変更点
+
+- **`src/renderer/services/terminalManager.ts`**:
+  - `PTY_RESIZE_DEBOUNCE_MS` を 80 → 200（間欠ドラッグと起動直後の非同期初期化ラッシュを 1 発に集約。コメントに 200ms 採用根拠を追記）
+  - 新規モジュールスコープ Map `lastSentSizes: Map<string, {cols, rows}>` を追加（fit() の `lastSizes` は invalidateLastSize で破棄されるが、`lastSentSizes` は invalidate 対象外で「PTY が知っているサイズ」の独立記録として機能）
+  - `schedulePtyResize` の setTimeout コールバック内で `lastSentSizes.get(id)` と (cols, rows) が完全一致なら早期 return、一致しなければ `lastSentSizes.set(id, {cols, rows})` してから `window.api.pty.resize` を発射
+  - `destroy(id)` の cleanup に `lastSentSizes.delete(id)` を追加（同 id を再生成したとき初回 IPC が抑止される退行を防ぐ）
+  - テスト用 `clearLastSentSizes(): void` を新規 export（beforeEach から呼ぶ）
+- **`src/renderer/components/RightSidebar/RightSidebar.tsx`**:
+  - 旧 3 本の独立 useEffect（`getWidth.then(setWidth)` / `getOpen.then(setOpen)` / `getFullscreen.then(setFullscreen)`）を 1 本にマージ。`Promise.all([...])` で 3 値を同時取得し、`store.setWidth/setOpen/setFullscreen` を 1 フレーム内に集約することで ResizeObserver / Panel.onResize の 3 連発を 1 発に
+  - `openInitialized` / `fullscreenInitialized` の 2 state を `persistInitialized: boolean` に統合
+  - 既存の「open / fullscreen 変化時の永続化」useEffect 2 本は `persistInitialized` ガードに統一更新（挙動は維持）
+- **`src/renderer/services/__tests__/terminalManager.test.ts`** (+2 件):
+  - `dedups same-size pty.resize across debounce windows`: 同サイズで 2 回 fit() を呼んでも IPC は 1 回しか飛ばないこと、サイズ変化があれば追加で飛ぶことを検証
+  - `destroy() clears lastSentSize so same id can fire again`: destroy 後に同 id を getOrCreate → 同サイズでも初回 IPC が飛ぶこと（dedup 状態の id レベルクリーンアップ）を検証
+  - 既存 `terminalManager.fit() retry path` / `coalesces rapid fit() calls` / `cancelPendingPtyResizes` / `destroy() cancels pending` の `vi.advanceTimersByTime` を 100/200ms → 250ms に追従更新
+  - `beforeEach` に `terminalManager.cancelPendingPtyResizes()` + `terminalManager.clearLastSentSizes()` を追加してテスト間の Map 持ち越しを排除
+- **新規 `.claude/docs/known-issues/004-claude-code-text-duplication.md`**: Symptom（罫線テーブル → リスト形式に変わったあと同段落が 3〜4 回連続出力される具体例）/ Root Cause（Ink の N 行戻り消去がスクロールアウトで空振り + 自分側 no-op SIGWINCH 連発の合算）/ Fix（A/B/C 3 段の対応詳細）/ Lessons Learned（debounce ≠ dedup、invalidate API の副作用、複数非同期初期化は Promise.all で集約）/ References（関連ファイル行番号 + Known Issue 002 への相互リンク + 前回修正コミット 2c68760）
+- **`.claude/docs/known-issues/INDEX.md`**: Fixed セクションに 004 行を追加（連番 003 は archive 済 stream-json 用に予約済のため 004 採番、運用ルール「連番は廃番後も再利用しない」を遵守）
+- **テスト合計**: 40 ファイル / 555 件グリーン（変更前 553 から +2）+ `npm run build` 通過 / `npx tsc --noEmit -p tsconfig.web.json` で本セッション起因の型エラー 0（既存の 12 件は範囲外）
+- **設計判断**:
+  - **dedup を schedulePtyResize の発射時点で行った理由**: fit() の lastSizes 同等位置で dedup する案もあったが、それでは「invalidateLastSize → 同サイズ fit() → schedule → 発射」の経路が依然として IPC を打ってしまう。「最後に PTY へ送った値」と「fit が提案する次の値」を独立に追跡することで、invalidate 操作の副作用（強制再 fit）を許容しつつ no-op SIGWINCH だけを完全に止められる。SplitContainer.handlePanelResize / applyOptions / 起動時 setZoom の各経路に個別ガードを足す案より中央集約の方が安全
+  - **debounce を 200ms にした根拠**: 80ms はドラッグ 1 回の coalesce には足りるが、人間がドラッグ中に 100ms 程度止まる動作を取りこぼしていた。200ms はユーザーの「マウス移動 → 確認 → 再移動」の自然な間（120〜250ms 程度）をカバーしつつ、最終サイズ反映の体感遅延としては許容範囲（xterm 側 reflow は即時）。これ以上長くするとリサイズ確定の体感が鈍るので 200ms で打ち止め
+  - **Promise.all で永続化ロードを集約した根拠**: 旧実装は 3 useEffect が独立して mount 後 `void Promise.then(...)` を打っていたため、各 then() の resolve タイミングが ~10〜100ms ずれてレイアウト変更を 3 連発していた。Promise.all で 3 IPC を同時に投げ、resolve したらまとめて setState することで React のバッチ機構が 1 レンダーに収束する → ResizeObserver の発火も 1 回に。IPC 個別失敗の handling は今回スコープ外（既存もエラー時はサイレントだったため挙動維持）
+  - **Known Issue 002 との関係**: 002 が「scrollback 内の cols 不整合（過去行が極狭幅で固定）」で resize 経路の取りこぼしを直したのに対し、004 は「PTY へ送る SIGWINCH の no-op 連発」で同じ resize 経路の別側面を直す。002 で `invalidateLastSize` を導入したことが、まさに 004 の dedup 必要性を生んだ（fit() の同サイズ判定が invalidate でバイパスされる構造）。両方を併存させて初めて scrollback 健全性 + TUI 再描画抑止の両立が成り立つ
+  - **連番 004 を採番した根拠**: INDEX.md の運用ルールに「連番は廃番後も再利用しない」と明記されている。003 は Withdrawn セクションで archive/003-claude-cli-stream-json.md として保管中のため 004 を新規採番
+  - **コミット範囲を限定**: working tree には別セッション由来の M ファイル（windowZoomStore / TerminalPane / Header / Settings 周辺等）が多数残存していたが、本タスクの責任範囲は terminalManager.ts / RightSidebar.tsx / 関連テスト / .claude のみ。誤って他作業を巻き込まないため `git add` で 3 コードファイル + .claude 配下のみ明示指定し、RightSidebar.tsx は本タスク部分（Promise.all 集約 = 永続化 useEffect 周辺）のみであり既に M だった他箇所は手を入れていないため `git add` の対象になる差分は本タスク 1 件のみ
+  - **HISTORY ローリングアーカイブ**: エントリ 5 件上限のため、本タスク追加時に最古の 2026-05-06「Header / Sidebar UI 調整」エントリを `HISTORY-archive.md` に移動
+
 ### 2026-05-10 - RightSidebar 全画面モード + Markdown ペイン分割機能（最大 6 / 二分木 / ペイン別タブ列）
 
 #### 概要
@@ -123,42 +158,3 @@
 - **Phase 2 判断**: SessionStart hook で他チャットの Outbox 最新エントリを自動読み込みするかは試運転後に判断（手動「outbox 確認して」指示で十分なら hook 不要）
 - **Phase 4 統合**: 既存 `active-sessions/` / `locks/` 機構と comm Shared State を統合する設計を Phase 1 運用後に検討
 - **アンステージ変更**: 別セッション由来の `.claude/skills/feature-files` が working tree に残存。本コミットは `.claude/CLAUDE.md` + `.claude/HISTORY.md` + `.claude/HISTORY-archive.md` + `.claude/comm/` (+MEMORY.md は更新時のみ) に絞る
-
-### 2026-05-06 - Header / Sidebar UI 調整（検索フィールド中央移設・分割ボタンアイコン化・設定ボタンを Sidebar 移設）
-
-#### 概要
-
-ユーザー要望「ファイル名検索フィールドを Header 中央に移設、分割ボタンはアイコンのみ表示、設定ボタンは LeftSidebar のツリーの一番下に新セクションとして position:sticky で常時表示」に対応。事前に AskUserQuestion で 4 点確認: (1) ブランチ運用は新ブランチ推奨を選択、(2) 検索フィールドはサイドバーを閉じても Header 中央に常時表示、(3) Header の設定ボタンは削除して Sidebar のみに置く、(4) ディレクトリ移動ボタンも分割ボタンと同じくアイコンのみで統一。Header を 3 セクション（左 = Title + Sidebar toggle / 中央 = 検索 input / 右 = 分割ボタン群 + RightSidebar toggle）に組み換え。検索 state は既に `sidebarStore.searchQuery` に存在していたため、Header から同じストアを購読して DirectoryTree と自動同期する形に（追加の state lifting 不要、双方向同期は Zustand 任せ）。DirectoryTree から旧検索 input ブロックと未使用になった `setSearchQuery` import を撤去（filter ロジックは維持）。Sidebar に新コンポーネント `SidebarSettingsSection` を追加し、DirectoryTree / GitPanel の下、ResizeHandle の上に配置。`flexShrink:0 + position:sticky bottom:0 + zIndex:1` で常時下端固定。設定アイコン + 「設定」ラベル付きボタンで `useSettingsModalStore.open()` を呼ぶ。Header.test.tsx を更新（「設定ボタン存在」→「検索フィールド存在 + 設定ボタン不在」、「設定ボタンクリックで modal 開く」→「検索入力で sidebarStore に書かれる」）。session-verifier 通過: 540/540 件グリーン + `npm run build` 通過。HISTORY ローリングアーカイブで 2026-04-30 エントリを `HISTORY-archive.md` に移動。
-
-#### 変更点
-
-- **`src/renderer/components/Header.tsx`**:
-  - `useSettingsModalStore` import と handleOpenSettings / handleSettingsButtonEnter ハンドラを削除
-  - `useSidebarStore` から `searchQuery` / `setSearchQuery` を購読
-  - `searchInputStyle` を `useMemo` で新規定義（max-width 420px、theme.colors.background / border / borderRadius、focus 時のみ borderActive 色に変化）
-  - JSX を `header (justify-content: space-between)` の中で 3 セクションに分割: 左（Title + Sidebar toggle、変更なし）/ 中央（`flex: 1` + `justifyContent: center` + `titlebar-no-drag` で囲った `<input type="search">`）/ 右（分割 V/H + ディレクトリ移動 + RightSidebar toggle）
-  - 縦分割 / 横分割 / ディレクトリ移動の 3 ボタンから `縦分割` / `横分割` / `ディレクトリ移動` の文字列ノードを削除しアイコンのみに。`aria-label` を追加してスクリーンリーダー対応、`padding` を `xs sm` に詰めて視覚バランス調整
-  - 設定ボタン全体（onClick / svg gear / 「設定」ラベル）を完全削除
-- **`src/renderer/components/Sidebar/DirectoryTree.tsx`**:
-  - 検索 input を含む 36 行のヘッダー div ブロック（line 310-348 相当）を削除し、`{/* 検索 input は Header 中央に移設済み（sidebarStore.searchQuery を共有）。*/}` のコメントに置換
-  - 未使用になった `const setSearchQuery = useSidebarStore((s) => s.setSearchQuery);` を削除（`searchQuery` 読み取りは filter ロジックで継続使用）
-- **`src/renderer/components/Sidebar/Sidebar.tsx`**:
-  - `useSettingsModalStore` import を追加
-  - `Sidebar` の return 内、GitPanel の下、ResizeHandle の上に `<SidebarSettingsSection />` を挿入
-  - 同ファイル末尾に `SidebarSettingsSection` コンポーネントを新規定義: `position: sticky; bottom: 0; flexShrink: 0; backgroundColor: theme.colors.headerBackground; borderTop; padding 6px 8px; zIndex: 1`。中身は `aria-label="設定を開く"` + 設定 svg gear アイコン (14px) + 「設定」ラベルの button、hover で `theme.colors.buttonHover` に背景色変化、クリックで `useSettingsModalStore.getState().open()` を呼ぶ
-  - DirectoryTree が `overflow:auto` を内部に持つため通常はツリーが押し出さないが、念のため sticky を併用（aside 自体がスクロールするレイアウト変更にも耐える防御）
-- **`src/renderer/components/__tests__/Header.test.tsx`**:
-  - `renders the kept buttons (split / directory / settings)` を `renders the kept buttons (split / directory) and the center search field` にリネーム + 設定ボタン assertion を削除し、`screen.getByPlaceholderText("ファイル名で検索")` の存在検証を追加
-  - `does NOT render the settings button (moved to Sidebar)` を新規追加（`queryByTitle("設定 (Cmd+,)")` で不在検証）
-  - `opens settings modal store on settings button click` を `center search field writes to sidebarStore.searchQuery` に置換: `useSidebarStore.setState({ searchQuery: "" })` で初期化 → input change → `useSidebarStore.getState().searchQuery` が `"foo.md"` になることを検証
-- **テスト合計**: 39 ファイル / 540 件グリーン（変更前 540 から維持）+ `npm run build` 通過
-- **設計判断**:
-  - **検索 state を sidebarStore で共有 vs prop drilling**: 検索 state は既に `sidebarStore.searchQuery` に存在し、DirectoryTree が購読していた。Header から同じストアを購読する形にすれば追加の state lifting / context が一切不要で、双方向同期は Zustand の購読機構が担保する。新しい store / context を切らないのが最もシンプル
-  - **検索フィールドをサイドバー閉じ時も常時表示**: ユーザーの明示要望に従う。値は保持されるがサイドバー閉じ時は filter 効果が見えない（DirectoryTree が描画されないため）。サイドバーを開けば即反映。「閉じてる時に typed→自動で開く」挙動は今回追加せず（要望に含まれない / スコープ最小化）
-  - **設定ボタンを Header から完全削除**: ユーザー回答により Header 重複を避ける選択。サイドバー閉じ時は Cmd+, ショートカットで設定を開く運用になる（既存 ShortcutSettings で登録済み）
-  - **ディレクトリ移動ボタンもアイコンのみに統一**: ユーザー回答により Header 視覚を統一。tooltip と aria-label で意味は伝わる
-  - **`SidebarSettingsSection` を inline コンポーネントとして同ファイル内に置いた理由**: 1 ファイル内で完結する小さい UI で、外部から再利用しない。`Sidebar.tsx` 内に同居させた方が「Sidebar の最下段セクション」という意味的まとまりが明確で、ファイル分割のオーバーヘッドに見合わない。テスト書きたくなったら抽出
-  - **`position: sticky; bottom: 0` を flexShrink:0 と併用した理由**: 通常は flexShrink:0 だけで十分（DirectoryTree の overflow:auto が内側に閉じているため）。ただし将来 aside 自体に `overflow-y:auto` を入れるレイアウト変更（例: タブ列が肥大化したケース）が起きても動くように sticky を保険として併用。`zIndex:1` で背後のツリーアイテムに重なる
-  - **テストインフラ拡張は最小に**: `Sidebar.tsx` 自体には pre-existing でユニットテストがなく、`window.api.sidebar.getWidth()` 等のモックも未整備。今回の `SidebarSettingsSection` は薄いラッパー（`useSettingsModalStore.open()` を呼ぶだけ）なので、テストインフラ拡張のコスト > テストの価値と判断。Header 側で「設定ボタンが Header から消えた」を担保するに留める
-  - **アイコンは Sidebar/icons.tsx に追加せず inline SVG を維持**: 設定ギアアイコンは Header から移すだけで新規ではない。検索アイコンも今回 input 内に置かないので不要。`icons.tsx` を肥大化させず、変更を該当 component 内に閉じる
-  - **HISTORY ローリングアーカイブ**: エントリ 5 件上限のため、本タスク追加時に最古の 2026-04-30 エントリを `HISTORY-archive.md` に移動
