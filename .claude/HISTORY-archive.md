@@ -2,6 +2,23 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-05-02 - Chat UI 完全廃止（T3-5 撤回）
+
+#### 概要
+
+T3-5 として実装した Claude Code Chat UI を機能ごと撤回。Claude サブスクリプション認証を内蔵したまま第三者にビルドが渡るリスク（規約上グレー〜アウト）を避けるため、コードを残さず完全削除した。`viewMode: "cli" | "md" | "chat"` を `"cli" | "md"` に縮約、`AppSettings.chat` を schema から除去、`chat:*` IPC 10 チャネル全廃。削除直前のコードは `pre-chat-removal` タグで保全しているため、復活時は git history から個別 cherry-pick 可能。テスト 479 件・electron-vite build 全グリーン。（計画書: archive/2026-04-30-remove-chat-ui.md）
+
+#### 変更点
+
+- **削除（17 ファイル）**: `src/renderer/components/ChatPane/` 配下 8 ファイル（ChatPaneView / MessageList / MessageBubble / ChatInput / ChatStatusBar / ChatWelcome / ChatTrustPanel / SlashMenu）、`chatSessionStore.ts` + テスト、`chatBridge.ts`、`types/chat.ts`、`chat-session-manager.ts`、`claude-process-detector.ts` + テスト、`slash-items.ts` + テスト、`trusted-dirs.ts` + テスト、`shared/chat-events.ts`
+- **部分修正（17 ファイル）**: `ipc-handlers.ts`（chat:\_ ハンドラ 8 種削除）、`window-manager.ts`、`pty-manager.ts`、`preload/index.ts`（`window.api.chat` 全削除）、`renderer/main.tsx`、`renderer/App.tsx`（chat 分岐削除）、`TerminalPane.tsx`、`TerminalSubHeader.tsx`、`terminalMetaStore.ts`（ViewMode 縮約）、`terminalStore.ts`、`settingsStore.ts`、`shared/settings.ts`（ChatSettings 型全削除）、`.claude/CLAUDE.md`、`docs/known-issues/INDEX.md`
+- **アーカイブ移動**: `docs/known-issues/003-claude-cli-stream-json.md` → `docs/known-issues/archive/`（Status を Withdrawn に更新）
+- **既存 archive 更新**: `archive/2026-04-29-claude-code-chat-ui.md` の Status を COMPLETED → WITHDRAWN
+- **IPC チャネル削除**: `chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:checkTrust` / `chat:trust` / `chat:listSlashItems` / `chat:event` / `chat:claudeDetected` の計 10 種
+- **Branch / Tag**: `feat/remove-chat-ui` ブランチで作業（main 未マージ）。削除直前を `pre-chat-removal` タグで保全
+- **残存リスク**: 既存ユーザーの `userData/trusted-dirs.json` は不活性ファイル化、実害なし
+- **Coding 判断**: trusted-dirs / slash-items / claude-process-detector は他用途への流用可能性があったが構造的に chat 専用 API 形状のため機能ごと削除
+
 ### 2026-04-30 - アプリ全体ズーム機能追加 + per-pane フォントズームを MD/Chat に拡張
 
 #### 概要

@@ -1,5 +1,25 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-10 - チャット間ファイル通信プロトコル (.claude/comm/) Phase 1 配置 + CLAUDE.md §9 更新
+
+#### 概要
+
+複数 Claude チャット間の非同期通信仕組み Phase 1（Outbox のみ）を本プロジェクトに導入。`~/.claude/templates/comm-protocol/` に作成したグローバルテンプレートから `.claude/comm/` を展開し、CLAUDE.md §9 Document System 末尾に「並行チャット間通信」サブセクションを追加した。中核設計は単一書き込み者・複数読み取り者ルール（各チャット専用 Outbox + 他 Outbox 読み取り専用）+ append-only 構造で、同時編集衝突を設計レベルで排除する。Anthropic 公式 (Harness Design / Multi-agent Research System / Effective Harnesses) の「ファイル経由のエージェント間通信」パターンに準拠。本プロジェクトは既に `active-sessions/` / `locks/` 機構を持つため、Phase 4 (Shared State + ロック) 導入時に既存資産との統合がスムーズに行える。Claude Code はファイル監視機能を持たないため、相手チャットのメッセージ取得は手動指示が必要（Phase 2 の SessionStart hook 自動読み込みで解消予定）。
+
+#### 変更点
+
+- **新規 `.claude/comm/README.md`**: Phase 1 プロトコル定義（ファイル構造 / 命名規則 `chat-<name>` / Outbox フォーマット (timestamp + 宛先タグ + 本文の append-only) / 宛先タグ仕様 (`@all` / `@chat-name` / `@self`) / 衝突対策 4 層 (設計 / append-only / ロック (Phase 4) / git) / アンチパターン (他 Outbox 編集禁止 / 過去エントリ書き換え禁止)）
+- **新規 `.claude/comm/outbox/.gitkeep`** + **`.claude/comm/archive/.gitkeep`**: Outbox / アーカイブディレクトリ確保
+- **`.claude/CLAUDE.md`**: §9 Document System 末尾に「並行チャット間通信」サブセクションを追加（プロトコル参照リンク + 運用開始時のチャット名宣言 + 書き込み・読み取り・衝突対策の 5 項目 + 既存 active-sessions / locks との Phase 4 統合予定の言及）
+- **テンプレート由来の運用**: グローバル `~/.claude/templates/comm-protocol/` から `cp -r` で一式コピー、サンプル `outbox/EXAMPLE-chat-engineer.md` のみ削除して空 outbox 状態で運用開始
+
+#### 残課題
+
+- **動作確認**: 並行 Claude チャット 2 つで Outbox 書き込み → grep 読み取り → 返信の往復を試運転し、フォーマット書き込みの自然さ・context 消費量を確認
+- **Phase 2 判断**: SessionStart hook で他チャットの Outbox 最新エントリを自動読み込みするかは試運転後に判断（手動「outbox 確認して」指示で十分なら hook 不要）
+- **Phase 4 統合**: 既存 `active-sessions/` / `locks/` 機構と comm Shared State を統合する設計を Phase 1 運用後に検討
+- **アンステージ変更**: 別セッション由来の `.claude/skills/feature-files` が working tree に残存。本コミットは `.claude/CLAUDE.md` + `.claude/HISTORY.md` + `.claude/HISTORY-archive.md` + `.claude/comm/` (+MEMORY.md は更新時のみ) に絞る
+
 ### 2026-05-06 - Header / Sidebar UI 調整（検索フィールド中央移設・分割ボタンアイコン化・設定ボタンを Sidebar 移設）
 
 #### 概要
@@ -199,20 +219,3 @@
   - **`pty.create` 直後の初期 resize は debounce 経由にしない**: TerminalPane の pty.create flow にある `window.api.pty.resize(id, cols, rows)` は startup の one-shot で、direct 呼び出しのまま残した。これは「PTY が初期出力を流す前に正しい cols を知っておく必要がある」一種の同期点で、80ms 遅らせると zsh 起動メッセージが小さい cols（24 cols のシェルデフォルト）で wrap されるため。fit 経由ではないので新 debounce path とは独立に動く
   - **テスト書き換えの方針**: SplitContainer / TerminalPane の責務が「fit を呼ぶ」までになったので、コンポーネント層では `pty.resize` を検証しない。`pty.resize` の挙動は `terminalManager.test.ts` でドメインごとにカバー（debounce coalesce / cancel / destroy）。これにより責務境界が tests に反映され、将来 caller を増やしても terminalManager 側のテストでデバウンスが担保される
   - **既知の Issue #002（scrollback cols 不整合）との関係**: 2026-04-27 のフィックスでは「fit が呼ばれない経路」を 5 つ塞いだが、今回見つかった「fit が**呼ばれすぎる**経路」は対角線の問題。`MIN_REASONABLE_COLS` ガード + pty.resize debounce で双方向の防御が揃う
-
-### 2026-05-02 - Chat UI 完全廃止（T3-5 撤回）
-
-#### 概要
-
-T3-5 として実装した Claude Code Chat UI を機能ごと撤回。Claude サブスクリプション認証を内蔵したまま第三者にビルドが渡るリスク（規約上グレー〜アウト）を避けるため、コードを残さず完全削除した。`viewMode: "cli" | "md" | "chat"` を `"cli" | "md"` に縮約、`AppSettings.chat` を schema から除去、`chat:*` IPC 10 チャネル全廃。削除直前のコードは `pre-chat-removal` タグで保全しているため、復活時は git history から個別 cherry-pick 可能。テスト 479 件・electron-vite build 全グリーン。（計画書: archive/2026-04-30-remove-chat-ui.md）
-
-#### 変更点
-
-- **削除（17 ファイル）**: `src/renderer/components/ChatPane/` 配下 8 ファイル（ChatPaneView / MessageList / MessageBubble / ChatInput / ChatStatusBar / ChatWelcome / ChatTrustPanel / SlashMenu）、`src/renderer/stores/chatSessionStore.ts` + テスト、`src/renderer/services/chatBridge.ts`、`src/renderer/types/chat.ts`、`src/main/chat-session-manager.ts`、`src/main/claude-process-detector.ts` + テスト、`src/main/slash-items.ts` + テスト、`src/main/trusted-dirs.ts` + テスト、`src/shared/chat-events.ts`
-- **部分修正（17 ファイル）**: `src/main/ipc-handlers.ts`（chat:_ ハンドラ 8 種 + import 3 行 + before-quit の killAll 削除）、`src/main/window-manager.ts`（chatSessionManager / claudeProcessDetector の register/unregister 削除）、`src/main/pty-manager.ts`（claudeProcessDetector.feedChunk / reset 3 箇所削除）、`src/preload/index.ts`（`window.api.chat` ブリッジ全削除 + ChatEventEnvelope import 削除）、`src/renderer/main.tsx`（initChatBridge 削除）、`src/renderer/App.tsx`（CHAT*FONT_SIZE*_ import 削除、resolveActiveViewMode の戻り型を `"cli" \| "md" \| null` に縮約、adjustGlobalFontSize / resetGlobalFontSize から chat 分岐削除）、`src/renderer/components/TerminalPane.tsx`（ChatPaneView import / showChat / mountChat / hasChatSession 削除）、`src/renderer/components/TerminalSubHeader.tsx`（CLI/Chat segmented タブ + 「Chat 起動」吹き出しアイコン削除、handleClickChatTab / handleCloseChatTab / handleStartChat 削除、segmentStyle 関数削除）、`src/renderer/stores/terminalMetaStore.ts`（ViewMode を `"cli" \| "md"` に縮約）、`src/renderer/stores/terminalStore.ts`（chatSessionStore import + closeTerminal 内の chat.dispose / remove 削除）、`src/renderer/stores/settingsStore.ts`（patch.chat マージ + useChatSettings セレクタ削除）、`src/renderer/stores/__tests__/terminalStore.test.ts`（window.api.chat モック削除）、`src/shared/settings.ts`（ChatSettings 型 / validateChatSettings / CHAT_FONT_SIZE_MIN/MAX 定数 / DEFAULT_SETTINGS.chat / cloneDefaults / mergeSettings / validateAppSettings の chat フィールド全削除）、`src/shared/__tests__/settings.test.ts`（base AppSettings の chat フィールド + chat clamp 2 ケース削除）、`.claude/CLAUDE.md`（§T2-10 から chat 記述全削除）、`.claude/docs/known-issues/INDEX.md`（Issue 003 を Withdrawn セクションへ移動）
-- **アーカイブ移動**: `.claude/docs/known-issues/003-claude-cli-stream-json.md` → `.claude/docs/known-issues/archive/003-claude-cli-stream-json.md`（Status を Withdrawn に更新）
-- **既存 archive 更新**: `.claude/archive/2026-04-29-claude-code-chat-ui.md` の Status を COMPLETED → WITHDRAWN、Withdrawn 日付・理由を追記
-- **IPC チャネル削除**: `chat:start` / `chat:send` / `chat:stop` / `chat:dispose` / `chat:getSessionId` / `chat:checkTrust` / `chat:trust` / `chat:listSlashItems` / `chat:event` / `chat:claudeDetected` の計 10 種
-- **Branch / Tag**: `feat/remove-chat-ui` ブランチで作業中（main からは未マージ）。削除直前のスナップショットを `pre-chat-removal` タグで保全（main の HEAD = 41322e2 の `chore(chat): WIP polish snapshot before removal` を指す）。復活時は `git checkout pre-chat-removal -- <path>` で個別取得可能
-- **残存リスク（記録）**: 既存ユーザーの `userData/trusted-dirs.json` は削除されないが、Reader が消えたため不活性ファイル化するだけで実害なし。次バージョンで起動時 cleanup を入れるかは別タスクで判断
-- **Coding 判断**: trusted-dirs / slash-items / claude-process-detector は他用途への流用可能性があったが、構造的に chat 専用 API 形状（CWD 信頼確認 / `/` コマンド補完 / OSC 0 ✳ Claude Code バナー検出）であり、汎用的な再利用には設計しなおしが必要なので機能ごと削除した

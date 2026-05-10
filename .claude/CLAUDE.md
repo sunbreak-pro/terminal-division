@@ -297,3 +297,13 @@ type: `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore`
 ### skills/
 
 プロジェクト固有のスキルと、グローバルスキルへのシンボリックリンクを `.claude/skills/` 配下に配置。実体は `~/dev/Claude/skill-lib/` で一元管理（グローバル運用ルール参照）。
+
+### 並行チャット間通信
+
+`.claude/comm/` 経由で複数 Claude チャット間の非同期通信を行う（Phase 1: Outbox のみ）。既存の `active-sessions/` / `locks/` 機構と将来 Phase 4 で統合予定。
+
+- **プロトコル定義**: [`.claude/comm/README.md`](./comm/README.md)
+- **運用開始時**: ユーザーがチャット名（`chat-<name>`）を宣言してから作業開始
+- **書き込み**: 自分の Outbox（`comm/outbox/chat-<name>.md`）にのみ追記。他チャットの Outbox は編集禁止
+- **読み取り**: 他チャットの Outbox は読み取り専用。`@<自分>` または `@all` 宛を grep で確認
+- **衝突対策**: 単一書き込み者ルール + append-only。同時編集が起きえない設計
