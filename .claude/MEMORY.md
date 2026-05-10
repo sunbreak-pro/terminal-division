@@ -6,9 +6,9 @@
 
 ## 直近の完了
 
+- VSCode 起動 fallback (open -a) + 4 ショートカット追加（VSCode 起動 / cd ピッカー / フルスクリーン切替 / ファイル名検索フォーカス） ✅（2026-05-10）
+- ピン留めタブ手動選択時の auto-sync 巻き戻し修正（pinned-only ツリー表示） ✅（2026-05-10）
 - チャット間ファイル通信プロトコル (.claude/comm/) Phase 1 配置 + CLAUDE.md §9 更新 ✅（2026-05-10）
-- Header / Sidebar UI 調整（検索フィールド中央移設・分割アイコン化・設定ボタン Sidebar 移設） ✅（2026-05-06）
-- VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）+ xterm 全角リンクずれ修正 ✅（2026-05-06）
 
 ## 予定
 

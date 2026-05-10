@@ -94,13 +94,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ onRequestEditMarkdown }) => {
     return buildCwdTabs(inputs, pinnedPaths);
   }, [metas, pinnedPaths]);
 
-  // アクティブペインの CWD に対応するタブを自動選択（双方向同期その 1）
+  // アクティブペインの CWD に対応するタブを自動選択（双方向同期その 1）。
+  // 「アクティブペインの id か CWD が実際に変わったとき」だけシンクする。
+  // selectedTabCwd を deps に入れると、ユーザーがピン留めタブを手動選択した
+  // 直後にこの effect が再発火し、すぐアクティブペインのタブへ巻き戻ってしまう。
+  // それを防ぐため、最後にシンクした (id, cwd) を ref で覚え、変化があったときだけ走らせる。
+  const lastSyncedActiveRef = useRef<{ id: string | null; cwd: string | null }>(
+    { id: null, cwd: null },
+  );
   useEffect(() => {
-    if (!activeTerminalId) return;
-    const activeMeta = metas.get(activeTerminalId);
-    const activeCwd = activeMeta?.cwd;
+    if (!activeTerminalId) {
+      lastSyncedActiveRef.current = { id: null, cwd: null };
+      return;
+    }
+    const activeCwd = metas.get(activeTerminalId)?.cwd ?? null;
     if (!activeCwd) return;
-    // 末尾スラッシュ正規化はタブ側で済んでいる
+    if (
+      lastSyncedActiveRef.current.id === activeTerminalId &&
+      lastSyncedActiveRef.current.cwd === activeCwd
+    ) {
+      // 前回シンク以降アクティブペインは動いていない → ユーザーの手動タブ選択を尊重
+      return;
+    }
+    lastSyncedActiveRef.current = { id: activeTerminalId, cwd: activeCwd };
     const matched = tabs.find((t) => t.paneIds.includes(activeTerminalId));
     if (matched && matched.cwd !== selectedTabCwd) {
       setSelectedTabCwd(matched.cwd);

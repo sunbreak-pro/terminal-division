@@ -1,5 +1,23 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-10 - ピン留めタブ手動選択時の auto-sync 巻き戻し修正
+
+#### 概要
+
+「ツリーにピン留めする機能はうまく追加できているが、パネル（=ペイン）に表示されていないものはツリーも表示されない」というユーザー報告に対応。原因は Sidebar の「アクティブペイン → タブ自動同期」effect が依存配列に `selectedTabCwd` を含んでいたため、ユーザーが pinned-only タブを手動選択した直後に effect が再発火 → アクティブペイン由来のタブへ即座に巻き戻していたこと。これにより pinned-only ツリーの DirectoryTree が描画される機会が無かった。修正は最後にシンクした `(activeTerminalId, activeCwd)` を `useRef` で保持し、その組が実際に変わったとき（= ペイン切替 or `cd`）だけ自動シンクを発火させるパターンに変更。selectedTabCwd 変化での再発火は ref 一致で早期 return される。`.md` を RightSidebar で開く経路 (`openMarkdownInRightSidebar`) はもともとペイン非依存（グローバル `markdownTabsStore` に追加して右サイドバーを開くだけ）のため、ツリーが描画されればコンテキストメニュー「編集する」/シングルクリックで自動的に開くようになる（追加修正不要）。session-verifier 通過: 540/540 件グリーン、変更ファイル内の TS エラー 0。
+
+#### 変更点
+
+- **`src/renderer/components/Sidebar/Sidebar.tsx`**:
+  - `useRef` を import に追加
+  - active-pane → tab 自動同期 effect を改修: `lastSyncedActiveRef: { id, cwd }` を導入し、effect 冒頭で前回シンク値と一致したら早期 return（= ユーザーの手動タブ選択を尊重）
+  - activeTerminalId が null になったら ref を `{ null, null }` にリセット（次にペインが復活したとき確実にシンクが走るようにする）
+  - 既存の依存配列 `[activeTerminalId, metas, tabs, selectedTabCwd, setSelectedTabCwd]` は維持（exhaustive-deps 準拠 + selectedTabCwd は比較式内で参照）
+
+#### 残課題
+
+- **アンステージ変更**: 別セッション由来の `Header.tsx` / `App.tsx` / `file-system-handler.ts` / `ipc-handlers.ts` / `preload/index.ts` / `shortcuts/registry.ts` / `.claude/skills/feature-files` が working tree に残存。本コミットは `Sidebar.tsx` + `.claude/MEMORY.md` + `.claude/HISTORY.md` に限定する
+
 ### 2026-05-10 - チャット間ファイル通信プロトコル (.claude/comm/) Phase 1 配置 + CLAUDE.md §9 更新
 
 #### 概要
