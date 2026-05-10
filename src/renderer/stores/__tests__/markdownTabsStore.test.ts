@@ -3,11 +3,11 @@ import { useMarkdownTabsStore } from "../markdownTabsStore";
 
 describe("markdownTabsStore", () => {
   beforeEach(() => {
-    useMarkdownTabsStore.setState({ tabs: [], activeTabId: null });
+    useMarkdownTabsStore.setState({ tabs: [] });
   });
 
   describe("openMarkdown", () => {
-    it("adds a new tab and activates it", () => {
+    it("adds a new tab and returns its id", () => {
       const result = useMarkdownTabsStore
         .getState()
         .openMarkdown("/work/a.md", "# A");
@@ -18,10 +18,9 @@ describe("markdownTabsStore", () => {
       const state = useMarkdownTabsStore.getState();
       expect(state.tabs.length).toBe(1);
       expect(state.tabs[0].filePath).toBe("/work/a.md");
-      expect(state.activeTabId).toBe(state.tabs[0].id);
     });
 
-    it("activates existing tab when same filePath is opened twice (no duplicate)", () => {
+    it("returns the same tabId when same filePath is opened twice (no duplicate)", () => {
       const r1 = useMarkdownTabsStore
         .getState()
         .openMarkdown("/work/a.md", "# A");
@@ -53,25 +52,22 @@ describe("markdownTabsStore", () => {
   });
 
   describe("closeTab", () => {
-    it("removes the tab and falls back active to the previous tab", () => {
+    it("removes the tab without affecting siblings", () => {
       const r1 = useMarkdownTabsStore.getState().openMarkdown("/a.md", "");
       const r2 = useMarkdownTabsStore.getState().openMarkdown("/b.md", "");
       const r3 = useMarkdownTabsStore.getState().openMarkdown("/c.md", "");
       if (!r1.ok || !r2.ok || !r3.ok) throw new Error("setup failed");
-      // active=t3 を閉じる → 残 [t1, t2]、active=t2 (左隣) になる
       useMarkdownTabsStore.getState().closeTab(r3.tabId);
       const state = useMarkdownTabsStore.getState();
       expect(state.tabs.map((t) => t.filePath)).toEqual(["/a.md", "/b.md"]);
-      expect(state.activeTabId).toBe(r2.tabId);
     });
 
-    it("clears activeTabId when last tab is closed", () => {
+    it("clears the tabs list when last tab is closed", () => {
       const r = useMarkdownTabsStore.getState().openMarkdown("/a.md", "");
       if (!r.ok) throw new Error("setup failed");
       useMarkdownTabsStore.getState().closeTab(r.tabId);
       const state = useMarkdownTabsStore.getState();
       expect(state.tabs.length).toBe(0);
-      expect(state.activeTabId).toBeNull();
     });
   });
 

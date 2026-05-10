@@ -10,6 +10,7 @@ import { useSidebarStore, useSidebarOpen } from "../stores/sidebarStore";
 import {
   useRightSidebarStore,
   useRightSidebarOpen,
+  useRightSidebarFullscreen,
 } from "../stores/rightSidebarStore";
 import { PanelLeftIcon, PanelRightIcon } from "./Sidebar/icons";
 
@@ -20,7 +21,11 @@ const Header: React.FC = React.memo(() => {
   const sidebarOpen = useSidebarOpen();
   const toggleSidebar = useSidebarStore((s) => s.toggleOpen);
   const rightSidebarOpen = useRightSidebarOpen();
+  const rightSidebarFullscreen = useRightSidebarFullscreen();
   const toggleRightSidebar = useRightSidebarStore((s) => s.toggleOpen);
+  const toggleRightSidebarFullscreen = useRightSidebarStore(
+    (s) => s.toggleFullscreen,
+  );
   // 検索フィールドは sidebarStore.searchQuery を直接購読するので、
   // DirectoryTree 側のフィルタと自動的に同期する（Header / Sidebar 双方向）
   const searchQuery = useSidebarStore((s) => s.searchQuery);
@@ -344,6 +349,71 @@ const Header: React.FC = React.memo(() => {
           }}
         >
           <PanelRightIcon size={14} />
+        </button>
+
+        <button
+          type="button"
+          className="titlebar-no-drag"
+          onClick={toggleRightSidebarFullscreen}
+          title={
+            rightSidebarFullscreen
+              ? "Markdown サイドバーを通常表示に戻す"
+              : "Markdown サイドバーを全画面表示にする"
+          }
+          aria-pressed={rightSidebarFullscreen}
+          aria-label="Markdown サイドバー全画面表示"
+          style={{
+            ...buttonStyle,
+            padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+            color: rightSidebarFullscreen
+              ? theme.colors.text
+              : theme.colors.textSecondary,
+            border: rightSidebarFullscreen
+              ? `1px solid ${theme.colors.borderActive}`
+              : `1px solid ${theme.colors.border}`,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = theme.colors.buttonHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "transparent";
+          }}
+        >
+          {rightSidebarFullscreen ? (
+            // 全画面 ON: 縮小アイコン
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 21H5a2 2 0 0 1-2-2v-4" />
+              <path d="M15 3h4a2 2 0 0 1 2 2v4" />
+              <path d="M21 15v4a2 2 0 0 1-2 2h-4" />
+              <path d="M3 9V5a2 2 0 0 1 2-2h4" />
+            </svg>
+          ) : (
+            // 全画面 OFF: 拡大アイコン
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
+              <path d="M3 16v3a2 2 0 0 0 2 2h3" />
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
+            </svg>
+          )}
         </button>
       </div>
     </header>

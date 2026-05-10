@@ -4,10 +4,12 @@
 
 import { isMarkdownPath } from "../utils/markdownFile";
 import { useMarkdownTabsStore } from "../stores/markdownTabsStore";
+import { useMarkdownLayoutStore } from "../stores/markdownLayoutStore";
 import { useRightSidebarStore } from "../stores/rightSidebarStore";
 import { showErrorToast } from "../components/Sidebar/ErrorToast";
 
 // 内部実装: ファイル読込 → openMarkdown → サイドバー自動オープン。
+// ペイン分割導入後は、開いた tabId をアクティブペインに割り当てるところまでが責務。
 async function loadAndOpen(filePath: string): Promise<void> {
   const result = await window.api.fs.readFile(filePath);
   if (!result.ok) {
@@ -35,6 +37,8 @@ async function loadAndOpen(filePath: string): Promise<void> {
     }
     return;
   }
+  // タブをアクティブペインに紐付ける（既存タブなら所有ペインを active 化）。
+  useMarkdownLayoutStore.getState().attachTabToActivePane(opened.tabId);
   // 自動でサイドバーを開く
   useRightSidebarStore.getState().setOpen(true);
 }

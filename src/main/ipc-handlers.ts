@@ -526,6 +526,12 @@ export function setupIpcHandlers(): void {
   ipcMain.on("rightSidebar:setOpen", (_, open: boolean) => {
     rightSidebarStateManager.setOpen(open);
   });
+  ipcMain.handle("rightSidebar:getFullscreen", () =>
+    rightSidebarStateManager.getFullscreen(),
+  );
+  ipcMain.on("rightSidebar:setFullscreen", (_, fullscreen: boolean) => {
+    rightSidebarStateManager.setFullscreen(fullscreen);
+  });
 
   // ========== Session persistence ==========
 

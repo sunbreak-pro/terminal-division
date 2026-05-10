@@ -10,6 +10,7 @@ describe("rightSidebarStore", () => {
   beforeEach(() => {
     useRightSidebarStore.setState({
       isOpen: false,
+      isFullscreen: false,
       width: RIGHT_SIDEBAR_WIDTH_BOUNDS.default,
     });
   });
@@ -114,6 +115,49 @@ describe("rightSidebarStore", () => {
       useRightSidebarStore.getState().setOpen(false);
       // 参照同一性で no-op を確認（再レンダー抑止の意図確認）
       expect(useRightSidebarStore.getState()).toBe(initial);
+    });
+  });
+
+  describe("setFullscreen / toggleFullscreen", () => {
+    it("turning fullscreen on auto-opens the sidebar", () => {
+      expect(useRightSidebarStore.getState().isOpen).toBe(false);
+      useRightSidebarStore.getState().setFullscreen(true);
+      const s = useRightSidebarStore.getState();
+      expect(s.isFullscreen).toBe(true);
+      expect(s.isOpen).toBe(true);
+    });
+
+    it("turning fullscreen off keeps the sidebar open", () => {
+      useRightSidebarStore.getState().setFullscreen(true);
+      useRightSidebarStore.getState().setFullscreen(false);
+      const s = useRightSidebarStore.getState();
+      expect(s.isFullscreen).toBe(false);
+      // 全画面を解除しても、開いたままにする（width で再表示される）
+      expect(s.isOpen).toBe(true);
+    });
+
+    it("toggleFullscreen flips state and auto-opens when entering fullscreen", () => {
+      useRightSidebarStore.getState().toggleFullscreen();
+      expect(useRightSidebarStore.getState().isFullscreen).toBe(true);
+      expect(useRightSidebarStore.getState().isOpen).toBe(true);
+      useRightSidebarStore.getState().toggleFullscreen();
+      expect(useRightSidebarStore.getState().isFullscreen).toBe(false);
+    });
+
+    it("toggleOpen while fullscreen closes both and clears fullscreen", () => {
+      useRightSidebarStore.getState().setFullscreen(true);
+      useRightSidebarStore.getState().toggleOpen();
+      const s = useRightSidebarStore.getState();
+      expect(s.isOpen).toBe(false);
+      expect(s.isFullscreen).toBe(false);
+    });
+
+    it("setOpen(false) while fullscreen also clears fullscreen", () => {
+      useRightSidebarStore.getState().setFullscreen(true);
+      useRightSidebarStore.getState().setOpen(false);
+      const s = useRightSidebarStore.getState();
+      expect(s.isOpen).toBe(false);
+      expect(s.isFullscreen).toBe(false);
     });
   });
 

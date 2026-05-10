@@ -1,5 +1,50 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-10 - RightSidebar 全画面モード + Markdown ペイン分割機能（最大 6 / 二分木 / ペイン別タブ列）
+
+#### 概要
+
+ユーザー要望「RightSidebar 内でも分割機能を実装させたい。さらに RightSidebar の幅を 100%（leftSidebar とは被らない）の全画面モードも実装したい」に対応。事前に AskUserQuestion で 4 点確認: (1) 分割の中身は「Markdown 同士の分割（タブは併存）」、(2) 最大ペイン数は「メインと同じ 6」、(3) 全画面起動方法は「Header にトグルボタン追加」、(4) 全画面時のメインターミナルは「完全に隠す（display:none で生存）」。実装は 2 フェーズ。Phase 1（全画面）: `rightSidebarStore` に `isFullscreen` / `toggleFullscreen` を追加（fullscreen 化時はサイドバーを自動オープン、closeOpen と連動して fullscreen も解除）、`right-sidebar-state.json` に永続化フィールド追加、IPC `rightSidebar:get/setFullscreen` 追加、Header に拡大/縮小アイコンのトグル button 追加、App.tsx で fullscreen 時にメインターミナル領域を `display:none` + flex 0（PTY/xterm はインスタンス保持で復帰時に状態維持）。Phase 2（ペイン分割）: 旧 `markdownTabsStore.activeTabId` を廃止して「グローバルなタブ集合」のみに縮小、新規 `markdownLayoutStore` に二分木 + 各葉ペインの `tabIds[]` / `activeTabId` を持たせ、最大 6 ペイン。`MdSplitContainer` (react-resizable-panels で再帰描画) + `MdPaneView` (ペインヘッダー: タブ列 / `+` ファイル追加 / 縦分割 V / 横分割 H / クローズ) の 2 コンポーネントを新設し、RightSidebar 本体は aside + ResizeHandle + MdSplitContainer に簡素化。`markdownOpenService.openMarkdownInRightSidebar` は `attachTabToActivePane(tabId)` を呼んでアクティブペインに紐付け、既存タブの場合は所属ペインを active 化（同パスを別ペインで重複表示しない不変条件）。`UnsavedChangesModal` の reason に `close-pane` を復活させ、ペイン閉じ時の dirty タブ警告に対応。session-verifier 通過: 548 → 553 件グリーン（rightSidebarStore +5、markdownLayoutStore +11、markdownTabsStore は activeTabId 廃止に合わせ書換）+ `npm run build` グリーン。
+
+#### 変更点
+
+- **新規 `src/renderer/types/mdLayout.ts`**: `MdPane` (`{ id, parentId, tabIds: string[], activeTabId: string | null }`) / `MdSplitNode` (`{ id, type:'split', direction, children, parentId }`) / `isMdPane` 型ガード。`SplitDirection` は terminalStore から流用
+- **新規 `src/renderer/stores/markdownLayoutStore.ts`**: 二分木 store。`MAX_MD_PANES = 6` / `splitPane` (新葉を兄弟として追加し新葉を active 化) / `closePane` (兄弟を昇格、最後の 1 葉は閉じない) / `attachTabToActivePane` (既存所有ペインを優先 active 化、なければ active ペインに append) / `setPaneActiveTab` / `removeTabFromPane` (左隣 fallback 含む) / `findPaneByTabId` / `resetToSinglePane` (テスト用) + `collectMdPaneIdsInOrder` で DFS 葉走査。Map のミューテーションは常に new Map で wrap、`set` 内のサブスクライバ中間状態を回避
+- **新規 `src/renderer/components/RightSidebar/MdSplitContainer.tsx`**: SplitContainer (terminal 用) と同じく `react-resizable-panels` の Group/Panel/Separator で二分木を再帰描画。Separator id は `md-handle-` プレフィックスでターミナル側と区別
+- **新規 `src/renderer/components/RightSidebar/MdPaneView.tsx`**: 葉ペイン UI。タブ列 + `+` (ファイルピッカー起動) + 縦分割 / 横分割 / クローズボタン (1 ペイン時はクローズ非表示) + MarkdownEditor 表示エリア。クリック時に `setActivePane(paneId)` でフォーカス取得、active なペインは `boxShadow: inset 0 0 0 1px borderActive` で薄く強調。ペインクローズ時、dirty タブがあれば 1 件目を起点に `UnsavedChangesModal(reason="close-pane")` 警告 → 確認後 closePane + 全 tabIds を `markdownTabsStore.closeTab` で消す
+- **`src/renderer/stores/markdownTabsStore.ts`**: `activeTabId` / `setActive` を削除し「全タブの集合」のみ管理に縮小。`openMarkdown(filePath, content)` の戻り値型は維持（既存 `markdownOpenService` が tabId を期待）。`closeTab` は対象タブだけ削除、`clearAll` も同様
+- **`src/renderer/stores/rightSidebarStore.ts`**:
+  - `isFullscreen: boolean` + `setFullscreen` / `toggleFullscreen` を追加
+  - `setFullscreen(true)` は同時に `isOpen=true` に倒す（fullscreen 化は必ずサイドバーを開く）
+  - `setOpen(false)` / `toggleOpen()` で fullscreen 解除と同時に閉じる連動を追加（fullscreen のまま隠す中間状態を作らない）
+  - 新セレクタ `useRightSidebarFullscreen`
+- **`src/main/right-sidebar-state.ts`**: `RightSidebarState` に `isFullscreen` 追加。`load()` は型ガード後 state にセット、`getFullscreen` / `setFullscreen` を追加
+- **`src/main/ipc-handlers.ts`**: `rightSidebar:getFullscreen` / `rightSidebar:setFullscreen` の 2 ハンドラを既存 setOpen の直下に追加
+- **`src/preload/index.ts`**: `window.api.rightSidebar.{getFullscreen,setFullscreen}` を公開
+- **`src/renderer/components/Header.tsx`**: 既存 `PanelRightIcon` トグル直後に「全画面切替」button を追加。fullscreen ON/OFF でアイコンを「縮小（4 角内向き矢印）/ 拡大（4 角外向き矢印）」で切替。pressed 状態は `borderActive` で視覚化
+- **`src/renderer/App.tsx`**:
+  - `useRightSidebarFullscreen` を購読
+  - メインターミナル領域 (`<SplitContainer />` を内包する div) を fullscreen 時 `flex: '0 0 0' / display:'none' / width:0` に切替（PTY と xterm はマウントされたまま、復帰時の state 維持）
+  - `Sidebar` (左) は常に表示維持（要件「leftSidebar とは被らない」を踏襲）
+- **`src/renderer/components/RightSidebar/RightSidebar.tsx`**: 大幅簡素化。タブ列 / `+` ボタン / MarkdownEditor 直接配置はすべて `MdPaneView` に移譲。aside ルート + ResizeHandle (fullscreen 時は非表示) + `<MdSplitContainer />` の 3 構成に。fullscreen 時は `width:'100%' / flex:1 / borderLeft:'none'` で leftSidebar 隣に張り付き
+- **`src/renderer/services/markdownOpenService.ts`**: `loadAndOpen` の `openMarkdown` 成功直後に `useMarkdownLayoutStore.getState().attachTabToActivePane(tabId)` を呼び、サイドバー自動オープンの直前で実行。既存テスト（モックは `openMarkdown` の戻り値型のみ依存）は破壊しない
+- **`src/renderer/components/UnsavedChangesModal.tsx`**: `UnsavedReason` を `"open-other" | "close-pane"` に拡張、`close-pane` の文言「このペインを閉じると、編集中のタブが失われます。」を追加（旧仕様で一度削除されていた reason を復活）
+- **`src/renderer/stores/__tests__/markdownLayoutStore.test.ts`** (新規 11 件): 初期 1 ペイン / splitPane で兄弟ペイン作成と active 切替 / `MAX_MD_PANES` で false / 最後の 1 ペインは閉じない / closePane で親 split 折り畳み + active 復帰 / attachTabToActivePane の append + activate / 既存所有ペインへの再 attach / removeTabFromPane の左隣 fallback / 全タブ消滅で `activeTabId=null` / `findPaneByTabId` のクロスペイン検索 / `collectMdPaneIdsInOrder` の DFS 順序
+- **`src/renderer/stores/__tests__/rightSidebarStore.test.ts`** (+5 件): `setFullscreen(true)` でサイドバー自動オープン / `setFullscreen(false)` 時はサイドバー開いたまま / `toggleFullscreen` の往復 / `toggleOpen` 時に fullscreen も解除 / `setOpen(false)` 時に fullscreen も解除
+- **`src/renderer/stores/__tests__/markdownTabsStore.test.ts`**: `activeTabId` 廃止に合わせて「returns the same tabId when same filePath」「removes the tab without affecting siblings」など 9 件を書き換え
+- **テスト合計**: 40 ファイル / 553 件グリーン（変更前 548 から +5）+ `npm run build` 通過
+- **session-verifier 経由の追加修正**: `markdownLayoutStore.attachTabToActivePane` が `state.activePaneId` の有無で `findPaneIdContainingTab` 呼び出しを分岐していたのを撤去（active が一時的に null でも所有ペインを優先して見つけるべきため）
+- **設計判断**:
+  - **markdownTabsStore から activeTabId を取り除いた理由**: 各ペインがそれぞれ独立したタブ列を持つ要件のため、グローバル 1 個の `activeTabId` は意味的に成立しない。ペイン分割なしの旧 UX では「サイドバー全体で 1 タブ active」だったが、分割導入で「ペインごとに 1 タブ active」に変わる。store を 2 段階（タブ集合 + レイアウト）に分けることで責務が明確になり、レイアウト永続化を見送る判断（CLAUDE.md §3.7 に沿って MD はセッション内のみ）も自然に成立
+  - **同一ファイルの複数ペイン同時表示を禁止した理由**: `attachTabToActivePane` で「既存タブを持つペインがあればそちらを active 化」する不変条件にしたのは、`markdownEditorRegistry` が tabId 単位で 1 つの imperative API しか持てないため、同 tabId を 2 つの CodeMirror インスタンスで描画すると save/focus の宛先競合が起きること。仕様としても「同じファイルを並べて見たい」要望は今回出ていないため、シンプル側に倒した
+  - **fullscreen と isOpen の連動**: 「fullscreen で閉じる」は中間状態として意味がない（次に開いたとき何幅で出すかが曖昧）。`setFullscreen(true)` で必ず `isOpen=true` にし、`toggleOpen() / setOpen(false)` で fullscreen も解除することで、(1) 通常表示 (2) 全画面 (3) 非表示 の 3 状態に絞り込む。永続化値読み込み時の race condition は既存 `openInitialized` パターンを踏襲して `fullscreenInitialized` フラグで対処
+  - **メインターミナルを `display:none` で生存させる根拠**: T2-8 の MD タブで採用済みのパターンと同じ。PTY と xterm のインスタンスは React のライフサイクルから独立した `terminalManager` registry にあるので、display:none でも node-pty プロセスは生き続け、`xterm` の scrollback も保持される。fullscreen 解除で見た目が即復帰し、ユーザーが意図しない PTY 終了を起こさない
+  - **ペイン分割を terminalStore と別 store にした理由**: 葉ノードの形が違う（terminal pane は `{id, parentId}` のみ、md pane は `tabIds[] / activeTabId` 持ち）ため共通化できない。重複コードがあるが、二分木操作は約 250 行で収まり、共通化のオーバーヘッド > 重複のコストと判断。`MdSplitContainer` も SplitContainer と似ているが、`paneNumber` / `terminalManager.fit` が無い分こちらが小さい
+  - **新ペインを「空」で開始する選択**: 分割直後に元ペインのタブを引き継ぐ実装も検討したが、「同一ファイルを 2 ペインに見せる」が引き起こす registry 競合を避けるため断念。空ペインで開始 → ユーザーが `+` ボタンで明示的にファイルを選ぶ動線にした。空ペインのプレースホルダ「ファイルを選択してください」は既存 RightSidebar の空状態と同文言で統一感を維持
+  - **ペインクローズ時の dirty 警告**: 1 件目の dirty タブを代表として `UnsavedChangesModal(close-pane)` を出す。複数 dirty が含まれる場合の「全部 save / 全部 discard / キャンセル」の理想 UX はあるが、本機能のメインフローではないため最小実装。ユーザーがキャンセルすればペインは閉じず、save/discard を選べば「ペイン全体を破棄して進める」割り切り
+  - **icon を inline SVG で書いた理由**: 既存 Header / TerminalSubHeader と同じ作法に揃えた（`Sidebar/icons.tsx` には enter していない）。fullscreen トグルの 4 角矢印アイコンは設定アプリ等でも標準的で、命名のオーバーヘッドが見合わない
+  - **HISTORY ローリングアーカイブ**: 5 件上限のため、本タスク追加時に最古の 2026-05-06 「VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）」エントリを `HISTORY-archive.md` に移動
+
 ### 2026-05-10 - VSCode 起動 fallback (open -a) + 4 ショートカット追加（VSCode 起動 / cd ピッカー / フルスクリーン切替 / ファイル名検索フォーカス）
 
 #### 概要
@@ -117,56 +162,3 @@
   - **テストインフラ拡張は最小に**: `Sidebar.tsx` 自体には pre-existing でユニットテストがなく、`window.api.sidebar.getWidth()` 等のモックも未整備。今回の `SidebarSettingsSection` は薄いラッパー（`useSettingsModalStore.open()` を呼ぶだけ）なので、テストインフラ拡張のコスト > テストの価値と判断。Header 側で「設定ボタンが Header から消えた」を担保するに留める
   - **アイコンは Sidebar/icons.tsx に追加せず inline SVG を維持**: 設定ギアアイコンは Header から移すだけで新規ではない。検索アイコンも今回 input 内に置かないので不要。`icons.tsx` を肥大化させず、変更を該当 component 内に閉じる
   - **HISTORY ローリングアーカイブ**: エントリ 5 件上限のため、本タスク追加時に最古の 2026-04-30 エントリを `HISTORY-archive.md` に移動
-
-### 2026-05-06 - VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）+ xterm 全角リンクずれ修正
-
-#### 概要
-
-ユーザー要望「VSCode の基本機能をトレース」した 4 機能（Git 連携 / 拡張子別ファイルアイコン / パス hover panel / ペインに紐付かない追加ツリー）を 1 セッションで実装。先行して報告された xterm 上の Markdown リンク左ずれ + ENOENT エラーポップアップも修正。Material Icon Theme は npm 公式 (MIT) を導入し Vite の `import.meta.glob` で 1238 個の SVG をアセット化（dev では絶対 glob が renderer root 解決で失敗するバグを発見、相対パスに修正）。Hover panel は xterm の `registerLinkProvider` の hover/leave コールバックを活用、文字列 offset → セル列マップで全角文字混在時の表示位置ずれを解消。ピン留めツリーは独自永続化 (`pinned-directories.json`) + `path-validator` の動的 allow リスト方式で HOME 外パスにも対応。Git 連携は `simple-git` を main プロセスで動かし、左サイドバーのタブ列末尾に「⎇ Git」モード切替を追加して同じ列内に統合（CWD タブと相互排他）。Status / branch list/switch/create/delete / stage / unstage / commit / push / pull / fetch / diff の全主要操作 + 縦リサイズ可能な Staged/変更セクションを実装。中盤で報告された 2 件のバグ（ピン留め失敗 = validatePath ホワイトリスト範囲外、Git「読み込み中…」永続化 = refresh の Promise.all 例外で loading 凍結）も同セッション内で根本修正。session-verifier 通過で 535/535 → 539/539 PASS、`npm run build` グリーン。
-
-#### 変更点
-
-- **新規 `src/renderer/utils/xtermLine.ts`**: `buildOffsetToColumnMap(line)` で文字列 offset → 1-based セル列マップを構築。継続セル (width=0) スキップ、全角文字を正しく 2 セル分カウント。`terminalManager.ts` の link provider が直接 `m.start + 1` を column に渡していた既知の制限（コメントに「ずれる可能性があるが許容」と明記済み）を解消
-- **`src/renderer/services/markdownOpenService.ts`**: `result.error.startsWith("ENOENT")` を判定して `ファイルが見つかりません: <basename>` の簡潔 toast に切替。長い stat 文字列をユーザに見せない
-- **`src/renderer/utils/markdownPath.ts`**: `findPaths(line)` を新規追加し `kind: "md" \| "path"` で md / 一般パスを統合検出。`findMarkdownPaths` は `findPaths` を kind フィルタする薄いラッパに（後方互換維持）。一般パス用 regex 追加（拡張子非限定、URL 範囲除外、末尾装飾文字 trim）
-- **`src/renderer/services/terminalManager.ts`**: link provider を unified に書き換え、`hover` / `leave` / `activate` を全 dispatch。`TerminalCallbacks` に `onPathOpen` / `onPathHover` / `onPathLeave` を追加。`buildOffsetToColumnMap` を import して range.x を正確化
-- **新規 `src/renderer/stores/pathHoverStore.ts`** + **`src/renderer/components/PathHoverTooltip.tsx`**: tooltip 状態を Zustand global シングルトンに集約（StrictMode race 回避）。`position: fixed` + `pointer-events: none` でターミナル操作を妨げない
-- **`src/main/ipc-handlers.ts`**: `shell:openPath` IPC 追加（`shell.openPath` でファイル/ディレクトリを OS デフォルトハンドラに渡す）
-- **新規 `material-icon-theme` (npm, MIT, v5.34.0)**: + **`src/renderer/utils/materialIconResolver.ts`**: `generateManifest()` を 1 度だけ実行、`import.meta.glob('../../../node_modules/material-icon-theme/icons/*.svg', { eager: true, query: '?url' })` で全 SVG をアセット化。`fileNames` 完全一致 → `fileExtensions` 最長一致 → `EXT_TO_LANGUAGE_ID` 経由 `languageIds` → デフォルトの順で解決
-- **`src/renderer/components/Sidebar/icons.tsx`**: `FileTypeIcon` / `FolderTypeIcon` を新規追加（解決失敗時は既存 outline `FileIcon` / `FolderIcon` にフォールバック）。`DirectoryTree.tsx` / `TreeNode.tsx` / `SidebarTabs.tsx` の呼び出しを `name` 引数付きに置換
-- **新規 `src/main/pinned-directories.ts`**: `pinned-directories.json` で永続化、最大 50 件、実在チェック付き。起動時 / add / remove で動的 allow リスト同期
-- **`src/main/path-validator.ts`**: 動的 allow リスト `dynamicAllowed: Set<string>` を追加。`registerDynamicAllowedPath` / `unregisterDynamicAllowedPath` を export。`validatePath` は静的 prefix と動的リストの両方をチェック
-- **`src/main/ipc-handlers.ts`**: `pinnedDirs:get/add/remove` IPC 追加。`pinnedDirs:add` は `validatePath` を**通さず** `pinnedDirectoryManager.add` 直渡し（OS ダイアログで明示的に選んだパスは信頼）
-- **新規 `src/renderer/stores/pinnedDirsStore.ts`**: 楽観更新 + IPC 失敗時 rollback の Zustand。`init()` / `add(path)` / `remove(path)` / `paths`
-- **`src/renderer/utils/labelCollision.ts`**: `CwdTab` に `pinned: boolean` / `lastActivePaneId: string \| null` 追加。`buildCwdTabs(panes, pinnedCwds[])` でペイン由来 + pinned-only タブを統合構築（順序: ペイン由来 createdAt 昇順 → pinned-only 追加順）
-- **`src/renderer/components/Sidebar/Sidebar.tsx`** / **`SidebarTabs.tsx`**: 「+ ツリーを追加」ボタン + コンテキストメニューに「ピン留めする/外す」+ pinned タブの 📌 アイコン。pane-less タブ選択時は `setActiveTerminal` をスキップ
-- **新規 `simple-git` (npm, v3.36.0)** + **`src/main/git-manager.ts`**: repo root キャッシュ + status / branch / stage / commit / push / pull / fetch / diff / branchSwitch・Create・Delete。エラーは全て `{ ok: false, error }` で統一返却（throw しない）
-- **`src/main/ipc-handlers.ts`**: `git:*` の 13 ハンドラ追加（全て `validatePath` 通過後 `gitManager` へ委譲）
-- **`src/preload/index.ts`**: `window.api.git.*` / `window.api.pinnedDirs.*` / `window.api.shell.openPath` を公開
-- **新規 `src/renderer/stores/gitStore.ts`**: `repos: Map<cwd, RepoState>` で CWD ごとに status / branches / loading / error を管理。`refresh(cwd)` は `Promise.all([status, branchList])` を **try/catch で wrap** し、例外時に `error` 文言で確定して loading: true 凍結を防ぐ。`runOp(cwd, op, name)` は成功で auto refresh、失敗で toast
-- **新規 `src/renderer/components/Sidebar/GitPanel.tsx`**: ブランチ表示 + Fetch/Pull/Push/+Branch + ブランチ list (切替/削除) + Staged / 変更 (各々 `resize: vertical` で縦リサイズ可、デフォルト 160px / 240px、min 80 / max 60vh) + コミットボックス + diff modal。loading 表示にも「再読込」ボタン (state 腐敗時の recovery)
-- **`src/renderer/stores/sidebarStore.ts`**: `view: 'files' \| 'git'` と `setView` 追加
-- **`src/renderer/components/Sidebar/SidebarTabs.tsx`**: 末尾に「⎇ Git」モード切替タブ追加（CWD タブ選択時は `view='files'` へ自動復帰）
-- **`src/renderer/components/Sidebar/Sidebar.tsx`**: `view==='git'` のとき `<GitPanel cwd={selectedTabCwd} />`、それ以外は従来 `<DirectoryTree />`
-- **新規テスト 47 件**: `xtermLine.test.ts` (6) / `materialIconResolver.test.ts` (15) / `markdownPath.test.ts` (+11 = `findPaths` 経路検証) / `labelCollision.test.ts` (+7 = pinned 統合) / `pinnedDirsStore.test.ts` (8) / `gitStore.test.ts` (6) / `pathHoverStore.test.ts` (4) + `markdownOpenService.test.ts` (+2 = ENOENT / EACCES 文言)
-- **`src/renderer/test/setup.ts`**: `mockShellApi.openPath` / `mockPinnedDirsApi` / `mockGitApi` を追加
-- **テスト合計**: 39 ファイル / 539 件グリーン（修正前 488 から +51 件）+ `npm run build` 通過（renderer 3.59 MB、+1.4 MB は SVG data URL inline 分）
-- **同セッション内バグ修正 2 件**:
-  - **「ピン留めに失敗しました」**: 原因は `validatePath` がホワイトリスト方式で HOME 外を弾いていたこと。`pinnedDirs:add` IPC を `validatePath` 通過なしに変更 + 動的 allow リスト機構を追加し、ピン留め後の `fs:readDir` 等 downstream 操作も透過
-  - **Git「情報を読み込み中…」永続化**: 原因は `gitStore.refresh` の `Promise.all` を try/catch せず IPC rejection で loading: true 凍結。try/catch + `console.error` 診断ログ + GitPanel に「再読込」ボタンを追加して recovery 可能に
-- **session-verifier 経由の追加修正**:
-  - `src/renderer/utils/materialIconResolver.ts` 先頭に `/// <reference types="vite/client" />` を追加（`import.meta.glob` 型解決）
-  - `src/renderer/stores/__tests__/gitStore.test.ts` で Promise constructor 内代入の TS 制御フロー narrowing 回避（明示 cast）
-  - `src/renderer/components/Sidebar/GitPanel.tsx` の diff useEffect に `.catch` 追加（unhandled rejection 防止）
-- **設計判断**:
-  - **Material Icon Theme を選んだ理由**: VSCode 標準 (Seti) は VSCode 内蔵フォントで外部公開なし。VSCode の人気 Material Icon Theme は同作者が `material-icon-theme` npm (MIT) として正式公開しており、`generateManifest()` で完全な拡張子→アイコンのマッピングが取れる。週次更新でメンテも活発
-  - **Vite glob の絶対パスと相対パスの罠**: `import.meta.glob('/node_modules/...')` は vitest ではプロジェクトルート基準で動くが、electron-vite renderer は root が `src/renderer/` のため `src/renderer/node_modules/` を探して 0 個マッチで build 通過。テストは通るが production で SVG が一切バンドルされない隠れバグになる。**ソースファイルからの相対 glob を使うのが両環境で確実**
-  - **path-validator 動的 allow リストで「ホーム外ピン留め」を許す**: 静的 ALLOWED_PREFIXES だけだと `/opt/projects` 等を扱えず開発用途で詰む。OS ダイアログで明示選択したパスは信頼してよいので、選択時に `registerDynamicAllowedPath` で許可リスト追加 + 起動時に永続パスを再登録。defense-in-depth の趣旨は維持しつつ、ユーザー操作で広げられる構造にした
-  - **Git タブを CWD タブ列に統合（モード切替式）**: 別サイドバー / モーダルではなく、既存 CWD タブの末尾に「⎇ Git」を置き、選択するとサイドバー下半分が GitPanel に切替わる。CWD と Git は同じリポジトリを別視点で見るものなので、選択 = 文脈共有が UX として自然。CWD タブ選択時は `view='files'` に自動復帰させて相互排他に
-  - **simple-git は CLI 委譲、認証はユーザー環境に任せる**: `~/.gitconfig` / `ssh-agent` / `osxkeychain` 等の既存セットアップがそのまま効く。HTTPS 認証や 2FA を内蔵処理しない方針。代わりに `git push` 等の rejection はそのまま `error` 文字列としてユーザに返す
-  - **gitStore.refresh の try/catch は防御 1 段目**: 観測された「読み込み中…永続化」は IPC のどこかで例外伝播していた可能性が高いが、根本原因の特定よりも「loading: true で固まらない不変条件」を強制する方が再発防止に強い。GitPanel 側にも「再読込」ボタンを置き、state 腐敗時のユーザ recovery 経路を確保
-  - **Staged / 変更セクションは CSS resize: vertical**: 独自リサイズハンドル実装は不要。Chromium ネイティブの resize ハンドル（右下のドットドラッグ）が動作良好で、min-height/max-height で範囲を縛るだけ。各セクション独立スクロールにすることで多ファイル時にも見やすい
-  - **path hover panel は markdown link provider を unified 化**: 別 provider を 2 つ重ねると xterm 上で範囲衝突の挙動が複雑化するため、`findPaths` で kind を返す統一 provider にし、activate でルーティング（md → 右サイドバー / その他 → shell.openPath）。hover/leave コールバックは kind を問わず一律発火
-  - **画面構成変更時の「再起動忘れ」リスクの認知**: dev mode で main process 変更時は Electron 再起動が必要。本セッションで Git タブ「読み込み中」の誤認原因の一つの可能性。今後 main 側変更時は `npm run dev` 再起動を user に明示する運用に
-  - **VSCode の Seti は外部公開されていない事実**: 当初「VSCode 標準アイコンを使えば」と考えたが、Seti は VSCode 内蔵フォントで配布対象外。Material Icon Theme で代替するのが現実解と判明（web-researcher による調査結果）
-

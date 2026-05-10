@@ -1,10 +1,11 @@
 import { create } from "zustand";
 
-// 右サイドバー Markdown エディタのグローバル単一ストア。
-// 旧仕様（terminalMetaStore.mdTabs）はペイン単位だったが、
-// Markdown 表示を右サイドバーに一本化したことでアプリ全体で 1 つのタブ列に集約する。
+// 右サイドバー Markdown エディタの「全タブ集合」グローバルストア。
+// 旧仕様の activeTabId / setActive はペイン分割に伴い廃止し、
+// 「どのタブがどのペインで表示中か」は markdownLayoutStore が管理する。
+// 当ストアはタブ id / filePath / savedContent / dirty / loadedAt のみを扱う。
 
-// アプリ全体で同時に開ける MD タブの最大数。旧仕様の MD_TABS_MAX を踏襲。
+// アプリ全体で同時に開ける MD タブの最大数。
 export const MD_TABS_MAX = 8;
 
 export interface MdTab {
@@ -25,11 +26,9 @@ type OpenResult =
 
 interface MarkdownTabsStore {
   tabs: MdTab[];
-  activeTabId: string | null;
 
-  // 新規ファイルを開く（既に同 path のタブがあれば既存をアクティブ化）。
+  // 新規ファイルを開く（既に同 path のタブがあれば既存 id を返す）。
   openMarkdown: (filePath: string, content: string) => OpenResult;
-  setActive: (tabId: string | null) => void;
   closeTab: (tabId: string) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
   markSaved: (tabId: string, content: string) => void;
@@ -47,14 +46,12 @@ function newTabId(): string {
 
 export const useMarkdownTabsStore = create<MarkdownTabsStore>((set, get) => ({
   tabs: [],
-  activeTabId: null,
 
   openMarkdown: (filePath, content) => {
     const { tabs } = get();
     const existing = tabs.find((t) => t.filePath === filePath);
     if (existing) {
-      // 既存タブをアクティブ化（savedContent / dirty は破壊しない）。
-      set({ activeTabId: existing.id });
+      // 既存タブの savedContent / dirty は破壊しない。
       return { ok: true, tabId: existing.id, existed: true };
     }
     if (tabs.length >= MD_TABS_MAX) {
@@ -67,31 +64,14 @@ export const useMarkdownTabsStore = create<MarkdownTabsStore>((set, get) => ({
       dirty: false,
       loadedAt: nextSeq(),
     };
-    set({ tabs: [...tabs, tab], activeTabId: tab.id });
+    set({ tabs: [...tabs, tab] });
     return { ok: true, tabId: tab.id, existed: false };
   },
 
-  setActive: (tabId) => {
-    if (tabId !== null && !get().tabs.some((t) => t.id === tabId)) return;
-    if (get().activeTabId === tabId) return;
-    set({ activeTabId: tabId });
-  },
-
   closeTab: (tabId) => {
-    const { tabs, activeTabId } = get();
-    const idx = tabs.findIndex((t) => t.id === tabId);
-    if (idx === -1) return;
-    const newTabs = tabs.filter((t) => t.id !== tabId);
-    let newActiveId: string | null = activeTabId;
-    if (activeTabId === tabId) {
-      if (newTabs.length === 0) {
-        newActiveId = null;
-      } else {
-        const fallback = newTabs[Math.max(0, idx - 1)] ?? newTabs[0];
-        newActiveId = fallback.id;
-      }
-    }
-    set({ tabs: newTabs, activeTabId: newActiveId });
+    const { tabs } = get();
+    if (!tabs.some((t) => t.id === tabId)) return;
+    set({ tabs: tabs.filter((t) => t.id !== tabId) });
   },
 
   setDirty: (tabId, dirty) => {
@@ -113,7 +93,7 @@ export const useMarkdownTabsStore = create<MarkdownTabsStore>((set, get) => ({
     set({ tabs: newTabs });
   },
 
-  clearAll: () => set({ tabs: [], activeTabId: null }),
+  clearAll: () => set({ tabs: [] }),
 
   canOpenMore: () => get().tabs.length < MD_TABS_MAX,
 }));

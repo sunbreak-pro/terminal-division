@@ -2,6 +2,58 @@
 
 HISTORY.md のローリングアーカイブ。エントリが 5 件を超えた際に古いものをここへ移動する（降順、最新が先頭）。
 
+### 2026-05-06 - VSCode 風 4 機能追加（Material アイコン / パス hover panel / ピン留めツリー / Git 連携）+ xterm 全角リンクずれ修正
+
+#### 概要
+
+ユーザー要望「VSCode の基本機能をトレース」した 4 機能（Git 連携 / 拡張子別ファイルアイコン / パス hover panel / ペインに紐付かない追加ツリー）を 1 セッションで実装。先行して報告された xterm 上の Markdown リンク左ずれ + ENOENT エラーポップアップも修正。Material Icon Theme は npm 公式 (MIT) を導入し Vite の `import.meta.glob` で 1238 個の SVG をアセット化（dev では絶対 glob が renderer root 解決で失敗するバグを発見、相対パスに修正）。Hover panel は xterm の `registerLinkProvider` の hover/leave コールバックを活用、文字列 offset → セル列マップで全角文字混在時の表示位置ずれを解消。ピン留めツリーは独自永続化 (`pinned-directories.json`) + `path-validator` の動的 allow リスト方式で HOME 外パスにも対応。Git 連携は `simple-git` を main プロセスで動かし、左サイドバーのタブ列末尾に「⎇ Git」モード切替を追加して同じ列内に統合（CWD タブと相互排他）。Status / branch list/switch/create/delete / stage / unstage / commit / push / pull / fetch / diff の全主要操作 + 縦リサイズ可能な Staged/変更セクションを実装。中盤で報告された 2 件のバグ（ピン留め失敗 = validatePath ホワイトリスト範囲外、Git「読み込み中…」永続化 = refresh の Promise.all 例外で loading 凍結）も同セッション内で根本修正。session-verifier 通過で 535/535 → 539/539 PASS、`npm run build` グリーン。
+
+#### 変更点
+
+- **新規 `src/renderer/utils/xtermLine.ts`**: `buildOffsetToColumnMap(line)` で文字列 offset → 1-based セル列マップを構築。継続セル (width=0) スキップ、全角文字を正しく 2 セル分カウント。`terminalManager.ts` の link provider が直接 `m.start + 1` を column に渡していた既知の制限（コメントに「ずれる可能性があるが許容」と明記済み）を解消
+- **`src/renderer/services/markdownOpenService.ts`**: `result.error.startsWith("ENOENT")` を判定して `ファイルが見つかりません: <basename>` の簡潔 toast に切替。長い stat 文字列をユーザに見せない
+- **`src/renderer/utils/markdownPath.ts`**: `findPaths(line)` を新規追加し `kind: "md" \| "path"` で md / 一般パスを統合検出。`findMarkdownPaths` は `findPaths` を kind フィルタする薄いラッパに（後方互換維持）。一般パス用 regex 追加（拡張子非限定、URL 範囲除外、末尾装飾文字 trim）
+- **`src/renderer/services/terminalManager.ts`**: link provider を unified に書き換え、`hover` / `leave` / `activate` を全 dispatch。`TerminalCallbacks` に `onPathOpen` / `onPathHover` / `onPathLeave` を追加。`buildOffsetToColumnMap` を import して range.x を正確化
+- **新規 `src/renderer/stores/pathHoverStore.ts`** + **`src/renderer/components/PathHoverTooltip.tsx`**: tooltip 状態を Zustand global シングルトンに集約（StrictMode race 回避）。`position: fixed` + `pointer-events: none` でターミナル操作を妨げない
+- **`src/main/ipc-handlers.ts`**: `shell:openPath` IPC 追加（`shell.openPath` でファイル/ディレクトリを OS デフォルトハンドラに渡す）
+- **新規 `material-icon-theme` (npm, MIT, v5.34.0)**: + **`src/renderer/utils/materialIconResolver.ts`**: `generateManifest()` を 1 度だけ実行、`import.meta.glob('../../../node_modules/material-icon-theme/icons/*.svg', { eager: true, query: '?url' })` で全 SVG をアセット化。`fileNames` 完全一致 → `fileExtensions` 最長一致 → `EXT_TO_LANGUAGE_ID` 経由 `languageIds` → デフォルトの順で解決
+- **`src/renderer/components/Sidebar/icons.tsx`**: `FileTypeIcon` / `FolderTypeIcon` を新規追加（解決失敗時は既存 outline `FileIcon` / `FolderIcon` にフォールバック）。`DirectoryTree.tsx` / `TreeNode.tsx` / `SidebarTabs.tsx` の呼び出しを `name` 引数付きに置換
+- **新規 `src/main/pinned-directories.ts`**: `pinned-directories.json` で永続化、最大 50 件、実在チェック付き。起動時 / add / remove で動的 allow リスト同期
+- **`src/main/path-validator.ts`**: 動的 allow リスト `dynamicAllowed: Set<string>` を追加。`registerDynamicAllowedPath` / `unregisterDynamicAllowedPath` を export。`validatePath` は静的 prefix と動的リストの両方をチェック
+- **`src/main/ipc-handlers.ts`**: `pinnedDirs:get/add/remove` IPC 追加。`pinnedDirs:add` は `validatePath` を**通さず** `pinnedDirectoryManager.add` 直渡し（OS ダイアログで明示的に選んだパスは信頼）
+- **新規 `src/renderer/stores/pinnedDirsStore.ts`**: 楽観更新 + IPC 失敗時 rollback の Zustand。`init()` / `add(path)` / `remove(path)` / `paths`
+- **`src/renderer/utils/labelCollision.ts`**: `CwdTab` に `pinned: boolean` / `lastActivePaneId: string \| null` 追加。`buildCwdTabs(panes, pinnedCwds[])` でペイン由来 + pinned-only タブを統合構築（順序: ペイン由来 createdAt 昇順 → pinned-only 追加順）
+- **`src/renderer/components/Sidebar/Sidebar.tsx`** / **`SidebarTabs.tsx`**: 「+ ツリーを追加」ボタン + コンテキストメニューに「ピン留めする/外す」+ pinned タブの 📌 アイコン。pane-less タブ選択時は `setActiveTerminal` をスキップ
+- **新規 `simple-git` (npm, v3.36.0)** + **`src/main/git-manager.ts`**: repo root キャッシュ + status / branch / stage / commit / push / pull / fetch / diff / branchSwitch・Create・Delete。エラーは全て `{ ok: false, error }` で統一返却（throw しない）
+- **`src/main/ipc-handlers.ts`**: `git:*` の 13 ハンドラ追加（全て `validatePath` 通過後 `gitManager` へ委譲）
+- **`src/preload/index.ts`**: `window.api.git.*` / `window.api.pinnedDirs.*` / `window.api.shell.openPath` を公開
+- **新規 `src/renderer/stores/gitStore.ts`**: `repos: Map<cwd, RepoState>` で CWD ごとに status / branches / loading / error を管理。`refresh(cwd)` は `Promise.all([status, branchList])` を **try/catch で wrap** し、例外時に `error` 文言で確定して loading: true 凍結を防ぐ。`runOp(cwd, op, name)` は成功で auto refresh、失敗で toast
+- **新規 `src/renderer/components/Sidebar/GitPanel.tsx`**: ブランチ表示 + Fetch/Pull/Push/+Branch + ブランチ list (切替/削除) + Staged / 変更 (各々 `resize: vertical` で縦リサイズ可、デフォルト 160px / 240px、min 80 / max 60vh) + コミットボックス + diff modal。loading 表示にも「再読込」ボタン (state 腐敗時の recovery)
+- **`src/renderer/stores/sidebarStore.ts`**: `view: 'files' \| 'git'` と `setView` 追加
+- **`src/renderer/components/Sidebar/SidebarTabs.tsx`**: 末尾に「⎇ Git」モード切替タブ追加（CWD タブ選択時は `view='files'` へ自動復帰）
+- **`src/renderer/components/Sidebar/Sidebar.tsx`**: `view==='git'` のとき `<GitPanel cwd={selectedTabCwd} />`、それ以外は従来 `<DirectoryTree />`
+- **新規テスト 47 件**: `xtermLine.test.ts` (6) / `materialIconResolver.test.ts` (15) / `markdownPath.test.ts` (+11 = `findPaths` 経路検証) / `labelCollision.test.ts` (+7 = pinned 統合) / `pinnedDirsStore.test.ts` (8) / `gitStore.test.ts` (6) / `pathHoverStore.test.ts` (4) + `markdownOpenService.test.ts` (+2 = ENOENT / EACCES 文言)
+- **`src/renderer/test/setup.ts`**: `mockShellApi.openPath` / `mockPinnedDirsApi` / `mockGitApi` を追加
+- **テスト合計**: 39 ファイル / 539 件グリーン（修正前 488 から +51 件）+ `npm run build` 通過（renderer 3.59 MB、+1.4 MB は SVG data URL inline 分）
+- **同セッション内バグ修正 2 件**:
+  - **「ピン留めに失敗しました」**: 原因は `validatePath` がホワイトリスト方式で HOME 外を弾いていたこと。`pinnedDirs:add` IPC を `validatePath` 通過なしに変更 + 動的 allow リスト機構を追加し、ピン留め後の `fs:readDir` 等 downstream 操作も透過
+  - **Git「情報を読み込み中…」永続化**: 原因は `gitStore.refresh` の `Promise.all` を try/catch せず IPC rejection で loading: true 凍結。try/catch + `console.error` 診断ログ + GitPanel に「再読込」ボタンを追加して recovery 可能に
+- **session-verifier 経由の追加修正**:
+  - `src/renderer/utils/materialIconResolver.ts` 先頭に `/// <reference types="vite/client" />` を追加（`import.meta.glob` 型解決）
+  - `src/renderer/stores/__tests__/gitStore.test.ts` で Promise constructor 内代入の TS 制御フロー narrowing 回避（明示 cast）
+  - `src/renderer/components/Sidebar/GitPanel.tsx` の diff useEffect に `.catch` 追加（unhandled rejection 防止）
+- **設計判断**:
+  - **Material Icon Theme を選んだ理由**: VSCode 標準 (Seti) は VSCode 内蔵フォントで外部公開なし。VSCode の人気 Material Icon Theme は同作者が `material-icon-theme` npm (MIT) として正式公開しており、`generateManifest()` で完全な拡張子→アイコンのマッピングが取れる。週次更新でメンテも活発
+  - **Vite glob の絶対パスと相対パスの罠**: `import.meta.glob('/node_modules/...')` は vitest ではプロジェクトルート基準で動くが、electron-vite renderer は root が `src/renderer/` のため `src/renderer/node_modules/` を探して 0 個マッチで build 通過。テストは通るが production で SVG が一切バンドルされない隠れバグになる。**ソースファイルからの相対 glob を使うのが両環境で確実**
+  - **path-validator 動的 allow リストで「ホーム外ピン留め」を許す**: 静的 ALLOWED_PREFIXES だけだと `/opt/projects` 等を扱えず開発用途で詰む。OS ダイアログで明示選択したパスは信頼してよいので、選択時に `registerDynamicAllowedPath` で許可リスト追加 + 起動時に永続パスを再登録。defense-in-depth の趣旨は維持しつつ、ユーザー操作で広げられる構造にした
+  - **Git タブを CWD タブ列に統合（モード切替式）**: 別サイドバー / モーダルではなく、既存 CWD タブの末尾に「⎇ Git」を置き、選択するとサイドバー下半分が GitPanel に切替わる。CWD と Git は同じリポジトリを別視点で見るものなので、選択 = 文脈共有が UX として自然。CWD タブ選択時は `view='files'` に自動復帰させて相互排他に
+  - **simple-git は CLI 委譲、認証はユーザー環境に任せる**: `~/.gitconfig` / `ssh-agent` / `osxkeychain` 等の既存セットアップがそのまま効く。HTTPS 認証や 2FA を内蔵処理しない方針。代わりに `git push` 等の rejection はそのまま `error` 文字列としてユーザに返す
+  - **gitStore.refresh の try/catch は防御 1 段目**: 観測された「読み込み中…永続化」は IPC のどこかで例外伝播していた可能性が高いが、根本原因の特定よりも「loading: true で固まらない不変条件」を強制する方が再発防止に強い。GitPanel 側にも「再読込」ボタンを置き、state 腐敗時のユーザ recovery 経路を確保
+  - **Staged / 変更セクションは CSS resize: vertical**: 独自リサイズハンドル実装は不要。Chromium ネイティブの resize ハンドル（右下のドットドラッグ）が動作良好で、min-height/max-height で範囲を縛るだけ。各セクション独立スクロールにすることで多ファイル時にも見やすい
+  - **path hover panel は markdown link provider を unified 化**: 別 provider を 2 つ重ねると xterm 上で範囲衝突の挙動が複雑化するため、`findPaths` で kind を返す統一 provider にし、activate でルーティング（md → 右サイドバー / その他 → shell.openPath）。hover/leave コールバックは kind を問わず一律発火
+  - **画面構成変更時の「再起動忘れ」リスクの認知**: dev mode で main process 変更時は Electron 再起動が必要。本セッションで Git タブ「読み込み中」の誤認原因の一つの可能性。今後 main 側変更時は `npm run dev` 再起動を user に明示する運用に
+  - **VSCode の Seti は外部公開されていない事実**: 当初「VSCode 標準アイコンを使えば」と考えたが、Seti は VSCode 内蔵フォントで配布対象外。Material Icon Theme で代替するのが現実解と判明（web-researcher による調査結果）
+
 ### 2026-05-04 - Markdown 表示を右サイドバーに一本化（ペイン内 viewMode 廃止）
 
 #### 概要

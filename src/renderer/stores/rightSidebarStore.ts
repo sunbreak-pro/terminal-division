@@ -33,22 +33,57 @@ export function clampRightSidebarWidth(width: number): number {
 
 interface RightSidebarStore {
   isOpen: boolean;
+  isFullscreen: boolean;
   width: number;
   setOpen: (open: boolean) => void;
   toggleOpen: () => void;
+  setFullscreen: (fullscreen: boolean) => void;
+  toggleFullscreen: () => void;
   setWidth: (width: number) => void;
 }
 
 export const useRightSidebarStore = create<RightSidebarStore>((set, get) => ({
   isOpen: false,
+  isFullscreen: false,
   width: DEFAULT_WIDTH,
 
   setOpen: (open) => {
     if (get().isOpen === open) return;
+    // 閉じるときに fullscreen も解除しておく（次回開いたとき通常幅で戻す）。
+    if (!open && get().isFullscreen) {
+      set({ isOpen: open, isFullscreen: false });
+      return;
+    }
     set({ isOpen: open });
   },
 
-  toggleOpen: () => set((s) => ({ isOpen: !s.isOpen })),
+  toggleOpen: () => {
+    const { isOpen, isFullscreen } = get();
+    if (isOpen && isFullscreen) {
+      set({ isOpen: false, isFullscreen: false });
+      return;
+    }
+    set({ isOpen: !isOpen });
+  },
+
+  setFullscreen: (fullscreen) => {
+    if (get().isFullscreen === fullscreen) return;
+    // fullscreen を ON にするときはサイドバーも自動で開く。
+    if (fullscreen) {
+      set({ isFullscreen: true, isOpen: true });
+    } else {
+      set({ isFullscreen: false });
+    }
+  },
+
+  toggleFullscreen: () => {
+    const { isFullscreen } = get();
+    if (isFullscreen) {
+      set({ isFullscreen: false });
+    } else {
+      set({ isFullscreen: true, isOpen: true });
+    }
+  },
 
   setWidth: (width) => {
     const clamped = clampRightSidebarWidth(width);
@@ -61,3 +96,5 @@ export const useRightSidebarOpen = (): boolean =>
   useRightSidebarStore((s) => s.isOpen);
 export const useRightSidebarWidth = (): number =>
   useRightSidebarStore((s) => s.width);
+export const useRightSidebarFullscreen = (): boolean =>
+  useRightSidebarStore((s) => s.isFullscreen);

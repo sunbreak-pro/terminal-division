@@ -8,6 +8,7 @@ import fs from "fs";
 interface RightSidebarState {
   width: number;
   isOpen: boolean;
+  isFullscreen: boolean;
 }
 
 const DEFAULT_WIDTH = 480;
@@ -20,6 +21,7 @@ class RightSidebarStateManager {
   private state: RightSidebarState = {
     width: DEFAULT_WIDTH,
     isOpen: false,
+    isFullscreen: false,
   };
   private saveTimer: NodeJS.Timeout | null = null;
 
@@ -38,9 +40,12 @@ class RightSidebarStateManager {
         if (raw && typeof raw.isOpen === "boolean") {
           this.state.isOpen = raw.isOpen;
         }
+        if (raw && typeof raw.isFullscreen === "boolean") {
+          this.state.isFullscreen = raw.isFullscreen;
+        }
       }
     } catch {
-      this.state = { width: DEFAULT_WIDTH, isOpen: false };
+      this.state = { width: DEFAULT_WIDTH, isOpen: false, isFullscreen: false };
     }
   }
 
@@ -75,6 +80,15 @@ class RightSidebarStateManager {
 
   setOpen(open: boolean): void {
     this.state.isOpen = !!open;
+    this.scheduleSave();
+  }
+
+  getFullscreen(): boolean {
+    return this.state.isFullscreen;
+  }
+
+  setFullscreen(fullscreen: boolean): void {
+    this.state.isFullscreen = !!fullscreen;
     this.scheduleSave();
   }
 }

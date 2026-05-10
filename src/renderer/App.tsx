@@ -25,6 +25,7 @@ import {
   useThemeStore,
 } from "./stores/themeStore";
 import { useSettingsStore } from "./stores/settingsStore";
+import { useWindowZoomStore } from "./stores/windowZoomStore";
 import { useSettingsModalStore } from "./stores/settingsModalStore";
 import { SettingsModal } from "./components/SettingsModal";
 import { getAllTerminalIds } from "./utils/layoutUtils";
@@ -38,6 +39,7 @@ import { useFileOpsHistoryStore } from "./stores/fileOpsHistoryStore";
 import { undoLast, redoLast } from "./services/fileOpsService";
 import { startSessionPersist } from "./services/sessionPersist";
 import { useMarkdownDialogStore } from "./stores/markdownDialogStore";
+import { useRightSidebarFullscreen } from "./stores/rightSidebarStore";
 import { isMarkdownPath } from "./utils/markdownFile";
 import {
   SHORTCUT_DEFINITIONS,
@@ -45,14 +47,7 @@ import {
   resolveShortcutKey,
   type ShortcutId,
 } from "./shortcuts/registry";
-import {
-  FONT_SIZE_MIN,
-  FONT_SIZE_MAX,
-  EDITOR_FONT_SIZE_MIN,
-  EDITOR_FONT_SIZE_MAX,
-  DEFAULT_SETTINGS,
-  clampNumber,
-} from "../shared/settings";
+import { APP_ZOOM_STEP } from "../shared/settings";
 
 // xterm の隠し textarea は ASCII 制御のためのプロキシで、ユーザーが直接編集する
 // 通常の input/textarea ではない。Cmd+Z 等を sidebar / terminal にディスパッチする
@@ -74,50 +69,15 @@ function isInsideMarkdownEditor(target: EventTarget | null): boolean {
   return !!target.closest("[data-md-editor-tab]");
 }
 
-// MarkdownEditor 内のいずれかの要素に現在 focus があるか（Cmd+= の対象判定用）。
-function isMarkdownEditorFocused(): boolean {
-  if (typeof document === "undefined") return false;
-  const el = document.activeElement;
-  if (!(el instanceof HTMLElement)) return false;
-  return !!el.closest("[data-md-editor-tab]");
+// Cmd+; / Cmd+- / Cmd+0: アプリ全体ズーム（webFrame.setZoomFactor）を操作する。
+// ウィンドウごと独立した windowZoomStore を更新するため、複数ウィンドウ間で同期しない。
+// AppSettings.general.appZoomFactor は触らない（次回起動時のデフォルトには反映されない）。
+function adjustAppZoom(delta: number): void {
+  useWindowZoomStore.getState().adjustZoom(delta);
 }
 
-// Cmd+= / Cmd+- 共通: フォーカスが MarkdownEditor 内なら editor.fontSize を、
-// それ以外（CLI / Sidebar / 何もなし）は terminal.fontSize を動かす。
-function adjustGlobalFontSize(delta: number): void {
-  const settings = useSettingsStore.getState().settings;
-  if (isMarkdownEditorFocused()) {
-    const current = settings.editor.fontSize;
-    const next = clampNumber(
-      current + delta,
-      EDITOR_FONT_SIZE_MIN,
-      EDITOR_FONT_SIZE_MAX,
-      current,
-    );
-    if (next === current) return;
-    useSettingsStore.getState().update({ editor: { fontSize: next } });
-    return;
-  }
-  const current = settings.terminal.fontSize;
-  const next = clampNumber(
-    current + delta,
-    FONT_SIZE_MIN,
-    FONT_SIZE_MAX,
-    current,
-  );
-  if (next === current) return;
-  useSettingsStore.getState().update({ terminal: { fontSize: next } });
-}
-
-// Cmd+0: フォーカスに応じてファクトリーデフォルトに戻す。
-function resetGlobalFontSize(): void {
-  if (isMarkdownEditorFocused()) {
-    useSettingsStore.getState().update({
-      editor: { fontSize: DEFAULT_SETTINGS.editor.fontSize },
-    });
-    return;
-  }
-  useSettingsStore.getState().update({ terminal: { fontSize: 14 } });
+function resetAppZoom(): void {
+  useWindowZoomStore.getState().resetZoom();
 }
 
 const EDITABLE_PASSTHROUGH_IDS: ReadonlySet<ShortcutId> = new Set([
@@ -155,6 +115,10 @@ const App: React.FC = () => {
   // 旧仕様の OpenConfirmRequest（ペイン選択）は廃止し、UnsavedRequest のみ残る。
   const dialogRequest = useMarkdownDialogStore((s) => s.current);
   const dismissDialog = useMarkdownDialogStore((s) => s.dismiss);
+
+  // RightSidebar 全画面時はメインターミナル領域を隠す（display:none で生存）。
+  // PTY と xterm のインスタンスは保持されるため、復帰後も状態が維持される。
+  const rightSidebarFullscreen = useRightSidebarFullscreen();
 
   // Sidebar からの「編集する」/シングルクリック要求 → 右サイドバーで開く + 自動オープン。
   const handleRequestEditMarkdown = useCallback((filePath: string): void => {
@@ -417,31 +381,31 @@ const App: React.FC = () => {
           input.select();
         }
       },
-      "font-zoom-in": (e) => {
+      "app-zoom-in": (e) => {
         e.preventDefault();
         e.stopPropagation();
-        adjustGlobalFontSize(+1);
+        adjustAppZoom(+APP_ZOOM_STEP);
       },
-      "font-zoom-out": (e) => {
+      "app-zoom-out": (e) => {
         e.preventDefault();
         e.stopPropagation();
-        adjustGlobalFontSize(-1);
+        adjustAppZoom(-APP_ZOOM_STEP);
       },
-      "font-zoom-reset": (e) => {
+      "app-zoom-reset": (e) => {
         e.preventDefault();
         e.stopPropagation();
-        resetGlobalFontSize();
+        resetAppZoom();
       },
     };
 
     const handleKeyDown = (e: KeyboardEvent): void => {
-      // フォントズームは IME ガードより先に処理する。
+      // アプリ全体ズームは IME ガードより先に処理する。
       if (e.metaKey && !e.ctrlKey && !e.altKey) {
         const earlyBindings = useSettingsStore.getState().settings.shortcuts;
-        const zoomInKey = resolveShortcutKey("font-zoom-in", earlyBindings);
-        const zoomOutKey = resolveShortcutKey("font-zoom-out", earlyBindings);
+        const zoomInKey = resolveShortcutKey("app-zoom-in", earlyBindings);
+        const zoomOutKey = resolveShortcutKey("app-zoom-out", earlyBindings);
         const zoomResetKey = resolveShortcutKey(
-          "font-zoom-reset",
+          "app-zoom-reset",
           earlyBindings,
         );
         const isZoomIn =
@@ -460,21 +424,21 @@ const App: React.FC = () => {
           isZoomIn &&
           useSettingsModalStore.getState().recordingShortcutId === null
         ) {
-          handlers["font-zoom-in"]?.(e);
+          handlers["app-zoom-in"]?.(e);
           return;
         }
         if (
           isZoomOut &&
           useSettingsModalStore.getState().recordingShortcutId === null
         ) {
-          handlers["font-zoom-out"]?.(e);
+          handlers["app-zoom-out"]?.(e);
           return;
         }
         if (
           isZoomReset &&
           useSettingsModalStore.getState().recordingShortcutId === null
         ) {
-          handlers["font-zoom-reset"]?.(e);
+          handlers["app-zoom-reset"]?.(e);
           return;
         }
       }
@@ -523,16 +487,16 @@ const App: React.FC = () => {
     moveFocus,
   ]);
 
-  // 表示メニューからのフォントズーム IPC を購読する。
+  // 表示メニュー（または globalShortcut）からのアプリ全体ズーム IPC を購読する。
   useEffect(() => {
-    const offIn = window.api.menu.onFontZoomIn(() => {
-      adjustGlobalFontSize(+1);
+    const offIn = window.api.menu.onAppZoomIn(() => {
+      adjustAppZoom(+APP_ZOOM_STEP);
     });
-    const offOut = window.api.menu.onFontZoomOut(() => {
-      adjustGlobalFontSize(-1);
+    const offOut = window.api.menu.onAppZoomOut(() => {
+      adjustAppZoom(-APP_ZOOM_STEP);
     });
-    const offReset = window.api.menu.onFontZoomReset(() => {
-      resetGlobalFontSize();
+    const offReset = window.api.menu.onAppZoomReset(() => {
+      resetAppZoom();
     });
     return () => {
       offIn();
@@ -546,21 +510,16 @@ const App: React.FC = () => {
     return startSessionPersist();
   }, []);
 
-  // アプリ全体ズームを WebFrame に反映する。
-  const appZoomFactor = useSettingsStore(
-    (s) => s.settings.general.appZoomFactor,
-  );
-  useEffect(() => {
-    window.api.window.setZoomFactor(appZoomFactor);
-  }, [appZoomFactor]);
-
-  // 起動時に settings をロード
+  // 起動時に settings をロードし、アプリ全体ズームの初期値を windowZoomStore に注入する。
+  // 以降は windowZoomStore の setZoom が直接 webFrame.setZoomFactor を呼ぶため、
+  // settings.general.appZoomFactor の変化を購読する必要はない（=ウィンドウ間で同期しない）。
   useEffect(() => {
     void useSettingsStore
       .getState()
       .load()
       .then((loaded) => {
         useThemeStore.getState().setThemeIdLocal(loaded.theme.currentThemeId);
+        useWindowZoomStore.getState().setZoom(loaded.general.appZoomFactor);
       });
   }, []);
 
@@ -585,7 +544,15 @@ const App: React.FC = () => {
         }}
       >
         <Sidebar onRequestEditMarkdown={handleRequestEditMarkdown} />
-        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
+        <div
+          style={{
+            flex: rightSidebarFullscreen ? "0 0 0" : 1,
+            minWidth: 0,
+            width: rightSidebarFullscreen ? 0 : undefined,
+            overflow: "hidden",
+            display: rightSidebarFullscreen ? "none" : "block",
+          }}
+        >
           <SplitContainer />
         </div>
         <RightSidebar />

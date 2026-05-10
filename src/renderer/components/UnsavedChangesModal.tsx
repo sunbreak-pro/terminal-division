@@ -3,8 +3,8 @@ import { useCurrentTheme, useThemeConfig } from "../stores/themeStore";
 import { getFileName } from "../utils/markdownFile";
 
 // "open-other": 別 Markdown を開く / 現在のタブを閉じる際の警告。
-// 旧仕様の "switch-to-cli" / "close-pane" は右サイドバー一本化により廃止。
-export type UnsavedReason = "open-other";
+// "close-pane": 右サイドバー内ペインを閉じる際、未保存タブを巻き込む警告。
+export type UnsavedReason = "open-other" | "close-pane";
 
 interface UnsavedChangesModalProps {
   isOpen: boolean;
@@ -19,6 +19,8 @@ function reasonText(reason: UnsavedReason): string {
   switch (reason) {
     case "open-other":
       return "このタブを閉じると、編集中の内容は失われます。";
+    case "close-pane":
+      return "このペインを閉じると、編集中のタブが失われます。";
   }
 }
 

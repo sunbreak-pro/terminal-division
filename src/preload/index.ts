@@ -323,6 +323,10 @@ const api = {
     getOpen: (): Promise<boolean> => ipcRenderer.invoke("rightSidebar:getOpen"),
     setOpen: (open: boolean): void =>
       ipcRenderer.send("rightSidebar:setOpen", open),
+    getFullscreen: (): Promise<boolean> =>
+      ipcRenderer.invoke("rightSidebar:getFullscreen"),
+    setFullscreen: (fullscreen: boolean): void =>
+      ipcRenderer.send("rightSidebar:setFullscreen", fullscreen),
   },
   session: {
     save: (payload: SerializedLayout): void =>
@@ -334,13 +338,13 @@ const api = {
     // session-state.json 書き込み失敗を renderer に通知（toast 表示）
     onSaveFailed: createIpcListener<{ message: string }>("session:saveFailed"),
   },
-  // 表示メニューからのフォントズーム IPC。
-  // Chromium が Cmd+= / Cmd+- / Cmd+0 をブラウザ層で消費するため、
-  // メニューアクセラレータ経由で受け取って renderer 側で処理する。
+  // 表示メニュー / globalShortcut からのアプリ全体ズーム IPC。
+  // Chromium が Cmd+; / Cmd+- / Cmd+0 をブラウザ層で消費するため、
+  // メニューアクセラレータ or globalShortcut 経由で受け取って renderer 側で処理する。
   menu: {
-    onFontZoomIn: createIpcListener<void>("font-zoom:in"),
-    onFontZoomOut: createIpcListener<void>("font-zoom:out"),
-    onFontZoomReset: createIpcListener<void>("font-zoom:reset"),
+    onAppZoomIn: createIpcListener<void>("app-zoom:in"),
+    onAppZoomOut: createIpcListener<void>("app-zoom:out"),
+    onAppZoomReset: createIpcListener<void>("app-zoom:reset"),
   },
 };
 
