@@ -9,11 +9,13 @@ export type ShortcutId =
   | "close-pane"
   | "insert-file-path"
   | "find-in-pane"
+  | "change-directory"
   // Sidebar
   | "toggle-sidebar"
   | "reload-tree"
   | "undo"
   | "redo"
+  | "focus-file-search"
   // Navigation
   | "focus-up"
   | "focus-down"
@@ -36,7 +38,9 @@ export type ShortcutId =
   | "font-zoom-out"
   | "font-zoom-reset"
   // App
-  | "open-settings";
+  | "open-settings"
+  | "open-in-vscode"
+  | "toggle-fullscreen";
 
 export type ShortcutCategory =
   | "Terminal Management"
@@ -88,12 +92,24 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     label: "ペイン内検索 / パス履歴",
     defaultKey: "Cmd+F",
   },
+  {
+    id: "change-directory",
+    category: "Terminal Management",
+    label: "ディレクトリを移動（cd ピッカー）",
+    defaultKey: "Cmd+Shift+O",
+  },
   // Sidebar
   {
     id: "toggle-sidebar",
     category: "Sidebar",
     label: "サイドバーの開閉",
     defaultKey: "Cmd+.",
+  },
+  {
+    id: "focus-file-search",
+    category: "Sidebar",
+    label: "ファイル名検索にフォーカス",
+    defaultKey: "Cmd+P",
   },
   {
     id: "reload-tree",
@@ -225,6 +241,18 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     category: "App",
     label: "設定を開く",
     defaultKey: "Cmd+,",
+  },
+  {
+    id: "open-in-vscode",
+    category: "App",
+    label: "アクティブな CWD を VSCode で開く",
+    defaultKey: "Cmd+Shift+E",
+  },
+  {
+    id: "toggle-fullscreen",
+    category: "App",
+    label: "フルスクリーン切替",
+    defaultKey: "Ctrl+Cmd+F",
   },
 ];
 

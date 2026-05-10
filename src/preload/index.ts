@@ -67,6 +67,8 @@ const api = {
         // 範囲外などは黙って無視（renderer 側で clamp 済みのため通常は起きない）
       }
     },
+    // フルスクリーンとウィンドウサイズ表示の切替（ショートカットから叩く）
+    toggleFullScreen: (): void => ipcRenderer.send("window:toggleFullScreen"),
   },
   app: {
     // vibrancy 切替後の再起動。renderer 側で確認モーダルを出してから呼ぶ。

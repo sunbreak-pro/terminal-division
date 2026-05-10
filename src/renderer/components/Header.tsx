@@ -214,6 +214,8 @@ const Header: React.FC = React.memo(() => {
         }}
       >
         <input
+          id="header-file-search"
+          data-file-search-input
           type="search"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}

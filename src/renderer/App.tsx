@@ -3,7 +3,11 @@ import Header from "./components/Header";
 import SplitContainer from "./components/SplitContainer";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { RightSidebar } from "./components/RightSidebar/RightSidebar";
-import { ErrorToastHost } from "./components/Sidebar/ErrorToast";
+import {
+  ErrorToastHost,
+  showErrorToast,
+} from "./components/Sidebar/ErrorToast";
+import { useTerminalMetaStore } from "./stores/terminalMetaStore";
 import { PathHoverTooltip } from "./components/PathHoverTooltip";
 import { UnsavedChangesModal } from "./components/UnsavedChangesModal";
 import {
@@ -367,6 +371,51 @@ const App: React.FC = () => {
       "open-settings": (e) => {
         e.preventDefault();
         useSettingsModalStore.getState().open();
+      },
+      "change-directory": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!activeTerminalId) return;
+        void window.api.dialog.selectDirectory().then((selectedPath) => {
+          if (!selectedPath || !activeTerminalId) return;
+          // シングルクオート安全化（'\'' でクオート閉じ→エスケープ→再開）
+          const escaped = selectedPath.replace(/'/g, "'\\''");
+          window.api.pty.write(activeTerminalId, `cd '${escaped}'\n`);
+        });
+      },
+      "open-in-vscode": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!activeTerminalId) return;
+        const meta = useTerminalMetaStore
+          .getState()
+          .metas.get(activeTerminalId);
+        const target = meta?.cwd;
+        if (!target) {
+          showErrorToast("アクティブなターミナルの CWD が取得できません");
+          return;
+        }
+        void window.api.fs.openInVSCode(target).then((res) => {
+          if (!res.ok) {
+            showErrorToast(
+              "VSCode を起動できませんでした（`code` コマンドが PATH にありますか？）",
+            );
+          }
+        });
+      },
+      "toggle-fullscreen": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.api.window.toggleFullScreen();
+      },
+      "focus-file-search": (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const input = document.getElementById("header-file-search");
+        if (input instanceof HTMLInputElement) {
+          input.focus();
+          input.select();
+        }
       },
       "font-zoom-in": (e) => {
         e.preventDefault();

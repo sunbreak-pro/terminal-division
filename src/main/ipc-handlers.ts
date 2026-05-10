@@ -605,6 +605,15 @@ export function setupIpcHandlers(): void {
     },
   );
 
+  // フルスクリーン切替。renderer のショートカットから叩かれる。
+  // BrowserWindow.setFullScreen で macOS 標準のスペース遷移付きフルスクリーンを使う
+  // （setSimpleFullScreen ではなく）。トグル動作のみで、明示的な on/off API は出さない
+  ipcMain.on("window:toggleFullScreen", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    win.setFullScreen(!win.isFullScreen());
+  });
+
   // ウィンドウ不透明度を即時反映。再起動不要。
   ipcMain.on("window:setOpacity", (event, value: number) => {
     const win = BrowserWindow.fromWebContents(event.sender);

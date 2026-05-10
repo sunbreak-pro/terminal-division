@@ -125,6 +125,14 @@ describe("Header", () => {
     expect(mockSplitTerminal).toHaveBeenCalledWith("terminal-1", "vertical");
   });
 
+  it("exposes id=header-file-search on the search input for focus shortcut", () => {
+    render(<Header />);
+    const byId = document.getElementById("header-file-search");
+    expect(byId).toBeInstanceOf(HTMLInputElement);
+    // placeholder 経由でも同じ要素を取れること（ショートカットと UI ラベルが同じ input を指す）
+    expect(byId).toBe(screen.getByPlaceholderText("ファイル名で検索"));
+  });
+
   it("center search field writes to sidebarStore.searchQuery", async () => {
     const { useSidebarStore } = await import("../../stores/sidebarStore");
     useSidebarStore.setState({ searchQuery: "" });

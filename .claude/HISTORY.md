@@ -1,5 +1,46 @@
 # HISTORY.md - 変更履歴
 
+### 2026-05-10 - VSCode 起動 fallback (open -a) + 4 ショートカット追加（VSCode 起動 / cd ピッカー / フルスクリーン切替 / ファイル名検索フォーカス）
+
+#### 概要
+
+ユーザー要望「LeftSidebar の『VSCode で開く』が PATH に `code` がないと失敗する。修正＋ショートカットも追加。さらに『ディレクトリ移動』『フルスクリーン⇄通常画面切替』『ファイル名検索フォーカス』のショートカットも実装」に対応。事前に AskUserQuestion で 2 点確認: (1) ショートカット 4 つのデフォルトキーは推奨セット（VSCode=⌘⇧E / cd=⌘⇧O / fullscreen=⌃⌘F / 検索 focus=⌘P）、(2) VSCode 起動は `code` を試して失敗時に `open -a "Visual Studio Code"` フォールバック。VSCode 起動の修正は `file-system-handler.ts:openInVSCode` を `trySpawn(cmd, args)` クロージャ化して逐次フォールバック構造に書き換え。`code` の `error` イベントまたは exit≠0 時に macOS なら `open -a "Visual Studio Code" <path>` を試す。これで Shell Command: Install 'code' command 未実行ユーザでも /Applications 配下から起動可能になる（command injection 回避のため `shell:false` + argv 配列で渡す既存方針を継承）。フルスクリーン切替は main プロセスに `window:toggleFullScreen` IPC を新設し、`BrowserWindow.setFullScreen(!isFullScreen())` で macOS 標準のスペース遷移付きフルスクリーンをトグル（`setSimpleFullScreen` ではない）。preload で `window.api.window.toggleFullScreen()` を公開。新規ショートカットは `registry.ts` に 4 ID 追加（`change-directory` / `focus-file-search` / `open-in-vscode` / `toggle-fullscreen`）して既存 settings UI から再バインド可能に。`App.tsx` の keydown ハンドラに 4 ハンドラ追加: change-directory は Header の `handleChangeDirectory` と同等のフロー（`dialog.selectDirectory` → CWD escape → `cd '<path>'`）、open-in-vscode は `useTerminalMetaStore` から active CWD を取得して `fs.openInVSCode` 呼出（CWD null 時は toast）、toggle-fullscreen は preload API 直叩き、focus-file-search は `document.getElementById("header-file-search")` で focus + select。Header の中央検索 input に `id="header-file-search"` + `data-file-search-input` 属性を付与してショートカットから到達できるように。session-verifier 通過: 540 → 541 件グリーン（Header テスト +1: id 属性検証）+ `npm run build` 通過。コミット範囲は今回作業の 7 ファイル限定（Sidebar.tsx の別セッション差分はユーザー判断で除外）。
+
+#### 変更点
+
+- **`src/main/file-system-handler.ts`**: `openInVSCode(targetPath)` を内部関数 `trySpawn(cmd, args)` 化して逐次フォールバック構造に。`code` を試行 → 失敗（`error` イベントまたは exit code ≠ 0 を 200ms 以内に観測）時に `process.platform === "darwin"` なら `open -a "Visual Studio Code" <path>` を試行。`shell:false` + detached + stdio:ignore + env:process.env の既存セキュリティ方針は両 spawn で共通。引数を argv 配列で渡すため targetPath にバッククオート / `$()` を含んでも shell が解釈せず command injection を防ぐ
+- **`src/main/ipc-handlers.ts`**: `window:toggleFullScreen` ハンドラを `window:setOpacity` の手前に追加。`BrowserWindow.fromWebContents(event.sender)` で発火元ウィンドウを取得し `win.setFullScreen(!win.isFullScreen())` をトグル。明示的 on/off API は出さず toggle のみ提供
+- **`src/preload/index.ts`**: `window.api.window` ネームスペースに `toggleFullScreen(): void` を追加（`ipcRenderer.send("window:toggleFullScreen")`）。setOpacity / setZoomFactor と同じレベルの薄いラッパー
+- **`src/renderer/shortcuts/registry.ts`**:
+  - `ShortcutId` ユニオンに 4 ID 追加: `"change-directory"` (Terminal Management) / `"focus-file-search"` (Sidebar) / `"open-in-vscode"` (App) / `"toggle-fullscreen"` (App)
+  - `SHORTCUT_DEFINITIONS` に対応エントリ追加: defaultKey は `Cmd+Shift+O` / `Cmd+P` / `Cmd+Shift+E` / `Ctrl+Cmd+F`。`Cmd+P` は VSCode 風のクイックオープン感覚に合わせる、`Ctrl+Cmd+F` は macOS 標準フルスクリーンキー
+  - 既存の「ID 一意性」テスト（`SHORTCUT_DEFINITIONS / getDefinition` describe）が新規 4 ID も自動カバー
+- **`src/renderer/App.tsx`**:
+  - `useTerminalMetaStore` import / `showErrorToast` import を追加（ErrorToast から名前付き再 export）
+  - `handlers` レコードの `open-settings` の直後に 4 ハンドラを追加
+    - `change-directory`: `window.api.dialog.selectDirectory()` → 選択結果を `'\''` でシングルクオートエスケープ → `cd '<escaped>'\n` を `pty.write`。CWD なし / dialog cancel / activeTerminal なしは no-op
+    - `open-in-vscode`: `useTerminalMetaStore.getState().metas.get(activeTerminalId)?.cwd` で active CWD を取得。null なら「アクティブなターミナルの CWD が取得できません」トースト。`window.api.fs.openInVSCode(target)` の `ok=false` 時は既存の DirectoryTree と同じ「`code` コマンドが PATH にありますか？」トーストを表示（fallback 後も失敗した稀ケース用）
+    - `toggle-fullscreen`: `window.api.window.toggleFullScreen()` を直接呼ぶ
+    - `focus-file-search`: `document.getElementById("header-file-search")` を取得し `instanceof HTMLInputElement` でガード → `focus()` + `select()`（既存値があれば全選択して即上書きできる）
+  - 4 ハンドラ全てで `e.preventDefault()` + `e.stopPropagation()` を呼び、xterm 等への伝播を抑止
+- **`src/renderer/components/Header.tsx`**: 中央検索 `<input type="search">` に `id="header-file-search"` と `data-file-search-input` を付与。ショートカットから到達するための anchor。既存の placeholder / aria-label / sidebarStore.searchQuery 双方向バインドはそのまま維持
+- **`src/renderer/components/__tests__/Header.test.tsx`**: 「`exposes id=header-file-search on the search input for focus shortcut`」テストを追加（新規 1 件）。`document.getElementById("header-file-search")` が `HTMLInputElement` であり、`getByPlaceholderText("ファイル名で検索")` と同一要素を指すことを検証。これでショートカットと UI ラベルが同じ input を指す不変条件をテストレベルで担保
+- **テスト合計**: 39 ファイル / 541 件グリーン（変更前 540 から +1 件）+ `npx electron-vite build` 通過
+- **設計判断**:
+  - **VSCode 起動を `code` → `open -a` フォールバック構造にした根拠**: 多くのユーザーは VSCode をインストールしているが Shell Command: Install 'code' command を実行していない（macOS 設定 1 ステップ）。`open -a "Visual Studio Code" <path>` は /Applications 配下を直接探すため、PATH 設定不要で確実に起動できる。Cursor 等の派生エディタを使う場合は `open -a` 単体は不向きだが、その層は通常 `code`（あるいは `cursor`）コマンドを導入済みのため `code` 経路が成功する想定
+  - **shell:false + argv 配列を継承**: 既存実装のセキュリティ方針（path に `$()` / バッククオート / セミコロン等が含まれても shell に解釈されない）を fallback 側でも維持。`open` コマンドも `["-a", "Visual Studio Code", path]` の argv 渡しで安全
+  - **トースト文言は据え置き**: fallback 後も失敗するケースは「VSCode 自体がインストールされていない」or「macOS 以外」の極めて稀な状況。文言を変えると既存ユーザの体験が変わってしまうため、現状の「`code` コマンドが PATH にありますか？」のままにした（fallback 自体は内部処理）
+  - **ショートカット ID の所属カテゴリ**: `change-directory` は Terminal Management（CWD 操作はターミナル中心の機能）、`focus-file-search` は Sidebar（検索 input は Header にあるが用途はサイドバーツリーのフィルタ）、`open-in-vscode` / `toggle-fullscreen` は App（外部ツール / ウィンドウ全体に影響する操作）。SettingsModal のグループ表示に直結する分類のため意味的境界を意識した
+  - **`Cmd+P` を選んだ理由**: VSCode のクイックオープンと同じキーで、ユーザーの筋肉記憶を活かせる。本アプリの検索 input も「ファイル名で絞る」用途で意味的にも合致。`Cmd+Shift+P` の選択肢もあったが「VSCode のコマンドパレット」と意味がずれる
+  - **`Cmd+Shift+O` を `change-directory` に充てた理由**: `Cmd+O` は既存の `insert-file-path`（ファイル選択してパス挿入）に取られている。`Cmd+Shift+O` は VSCode の「シンボルへ移動」だが、本アプリにシンボル機能はないため衝突しない。`Cmd+G`（Go）は xterm の検索次へ送りで使う場面が将来出る可能性があり避けた
+  - **`Ctrl+Cmd+F` を `toggle-fullscreen` に充てた理由**: macOS 標準のフルスクリーンキー。Electron menu に登録していなくても OS が認識するので、Window メニューに項目を追加せずに registry で完結させた。`F11` は macOS では F-row が brightness 等に取られるためサブ
+  - **`Cmd+Shift+E` を `open-in-vscode` に充てた理由**: E は Editor の頭文字で記憶しやすい。VSCode 自身の `Cmd+Shift+E` は「エクスプローラ表示」で意味は近く、ユーザーが混乱しにくい。`Cmd+Shift+V` は xterm のペーストで使われる場面があり避けた
+  - **`BrowserWindow.setFullScreen` を選んだ理由（vs `setSimpleFullScreen`）**: macOS の native フルスクリーン（別 Space に遷移、上部メニューバー隠れる）は `setFullScreen` のみで実現。`setSimpleFullScreen` は同 Space 内でウィンドウを画面いっぱいにするだけで「大画面」感は弱い。ユーザーの「FullScreen と WindowScreen の切り替え（大画面、通常画面）」要望は明確に native フルスクリーンを期待している
+  - **`document.getElementById` を使った理由（vs ref forwarding）**: Header コンポーネントは React.memo で App.tsx から ref を引くのが煩雑。focus 用の anchor が DOM 1 箇所に固定されているこのケースでは ID 直接参照のほうがシンプルで失敗パスも明示的（`instanceof HTMLInputElement` ガードで unmount 時クラッシュなし）。Header 側のテストで「ID が確かに input に付いている」不変条件を担保しているので、リファクタリング時の breakage も検出可能
+  - **active CWD が null のときのトースト出し分け**: VSCode 起動の前に CWD null チェックを入れて専用トースト。CWD 未取得＝シェル起動直後 / OSC 7 が来る前のごく短い時間 だが、ユーザーがちょうどその瞬間にショートカットを叩く可能性は低くないため明示的にメッセージを出す
+  - **テスト追加範囲の判断**: registry.ts の新規 4 ID は既存「ID 一意性」テストが自動カバー、`file-system-handler.ts` の trySpawn ロジックは spawn の mock コストが高いのでスキップ、Header の id 属性は単純な属性テストとしてコスト低 × 価値（ショートカットと UI を結びつける不変条件）のため追加。session-verifier のガイドライン「1 verify 最大 3 ファイル」内に収めて 1 ファイル追加に留めた
+  - **コミット範囲を 7 ファイル限定**: Sidebar.tsx の別セッション差分（pinned タブ auto-sync 修正）が working tree に残っていたが、AskUserQuestion でユーザーが「今回の作業だけコミット」を選択。論理的にも独立しているため取り違えを避けて意図通りに分離
+
 ### 2026-05-10 - ピン留めタブ手動選択時の auto-sync 巻き戻し修正
 
 #### 概要
@@ -129,111 +170,3 @@
   - **画面構成変更時の「再起動忘れ」リスクの認知**: dev mode で main process 変更時は Electron 再起動が必要。本セッションで Git タブ「読み込み中」の誤認原因の一つの可能性。今後 main 側変更時は `npm run dev` 再起動を user に明示する運用に
   - **VSCode の Seti は外部公開されていない事実**: 当初「VSCode 標準アイコンを使えば」と考えたが、Seti は VSCode 内蔵フォントで配布対象外。Material Icon Theme で代替するのが現実解と判明（web-researcher による調査結果）
 
-### 2026-05-04 - Markdown 表示を右サイドバーに一本化（ペイン内 viewMode 廃止）
-
-#### 概要
-
-ユーザー要望「現在 markdown を表示するとパネル選択が必要だが、右サイドバーを新設してそこに表示させたい。リサイズ可能で最大幅は中央付近まで、Markdown クリックで自動オープン、未選択時は『ファイルを選択してください』と表示」を実装。設計判断 3 点をユーザーに確認: (A) ペイン内 MD 機能（CLI/MD タブ UI / `viewMode` / OpenMarkdownModal）を**完全廃止して右サイドバー一本化**、(B) 複数タブを残して既存 mdTabs 機能を**グローバル化（ペイン非依存の単一ストア）**、(C) Header 右側にパネルアイコンを追加し**自動開閉のみ**（ショートカット追加なし）。サイドバー幅は絶対値 px で永続化し、表示時に `window.innerWidth × 0.5` を上限として実行時 clamp。`viewMode` 概念と `mdTabs` をペインスコープから外し、`markdownTabsStore`（グローバル MD タブ）+ `rightSidebarStore`（開閉 / 幅）を新設。`MarkdownEditor` は `paneId` 依存を撤去して `tabId` のみで動作するよう書き換え。`TerminalPane` から `viewMode` / `mdTabs` / md→cli 復帰時の re-fit ロジックを撤去（xterm 常時表示）。`TerminalSubHeader` から CLI/MD タブ UI と dirty 警告フローを撤去（タイトル rename / clear / insert / close は維持）。Sidebar からの「編集する」/シングルクリックは `openMarkdownInRightSidebar(filePath)` に簡素化し、自動オープン。Header 右側に `PanelRightIcon` のトグルボタンを追加。session-state スキーマから `mdTabFilePaths` を削除（後方互換: 旧 JSON が残っていても validator で黙って無視）。発見した起動時レースコンディション（永続化値読込前の `setOpen(false)` 上書き）を `openInitialized` フラグで解消。テスト 480 件（既存 467 + 新規 22 [markdownTabsStore 9 + rightSidebarStore 13]）+ `npm run build` グリーン。
-
-#### 変更点
-
-- **新規 `src/main/right-sidebar-state.ts`**: `right-sidebar-state.json` で width / isOpen を永続化。`width` は MIN=320 / 物理上限 4000 で clamp（実際の上限は renderer 側でウィンドウ幅の 50% に再 clamp）、save は 250ms debounce
-- **新規 `src/renderer/stores/rightSidebarStore.ts`**: `isOpen` / `width` / `setOpen` / `toggleOpen` / `setWidth`（clamp 経由）。`effectiveMaxWidth()` で `window.innerWidth × RIGHT_SIDEBAR_MAX_RATIO(=0.5)` を返し、`clampRightSidebarWidth()` でドラッグ中・mount 時に再 clamp
-- **新規 `src/renderer/stores/markdownTabsStore.ts`**: ペイン非依存の単一 MD タブ管理。`tabs: MdTab[]` / `activeTabId` / `openMarkdown(filePath, content)` / `setActive` / `closeTab` / `setDirty` / `markSaved` / `canOpenMore` / `clearAll`、上限 `MD_TABS_MAX = 8` を踏襲。`useMdTab(tabId)` セレクタ提供
-- **新規 `src/renderer/components/RightSidebar/RightSidebar.tsx`**: aside ルート + タブ列（既存 mdTabs UI のスタイル踏襲）+ MarkdownEditor + 左端 ResizeHandle + 空状態「ファイルを選択してください」。dirty タブ close 時は `UnsavedChangesModal`（reason="open-other"）で警告。永続化値読込完了まで `setOpen` IPC 送信を保留する `openInitialized` フラグで起動時レース解消。`window.resize` イベントで現在幅を再 clamp
-- **新規 `src/renderer/components/RightSidebar/RightSidebarResizeHandle.tsx`**: 左端ドラッグハンドル。`rect.right - e.clientX + 2` で「右端からの距離 = 新しい幅」を計算（左サイドバーと逆方向）
-- **新規 `src/renderer/components/RightSidebar/RightSidebarFilePicker.tsx`**: 「+」ボタンから開く Portal ドロップダウン。検索フィールド + 全 watch 中 CWD の .md 最大 50 件 + 末尾「ファイルを選択...」（`dialog.selectFiles`）。旧 `MdTabPickerDropdown` のペイン依存版を置き換え
-- **`src/main/ipc-handlers.ts`**: `rightSidebar:getWidth` / `setWidth` / `getOpen` / `setOpen` の 4 ハンドラを追加
-- **`src/preload/index.ts`**: `window.api.rightSidebar.{getWidth,setWidth,getOpen,setOpen}` を公開
-- **`src/renderer/components/MarkdownEditor.tsx`**: `paneId` props 削除、`tabId` のみで動作。`useMdTab(tabId)` で `markdownTabsStore` から tab を購読。`onMouseDownCapture` の `setActiveTerminal(paneId)` を撤去（右サイドバーは terminal とは独立）
-- **`src/renderer/components/TerminalPane.tsx`**:
-  - `MarkdownEditor` import / `viewMode` / `mdTabs` / `activeMdTabId` / `isOverlayed` / `prevOverlayedRef` / md→cli 復帰時の `useLayoutEffect` re-fit ロジックを全削除
-  - xterm container を常時 `display: block` に（`isOverlayed ? "none" : "block"` を撤廃）
-  - `requestEditMarkdownFromTerminal(abs, id)` → `requestEditMarkdownFromTerminal(abs)` に変更（paneId 不要）
-- **`src/renderer/components/TerminalSubHeader.tsx`**: CLI/MD タブ UI（`showTabs` / `mdTabs.map` / `+` ボタン / `MdTabPickerDropdown` 起動 / `handleClickCliTab` / `handleClickMdTab` / `handleCloseMdTab`）を全削除。`handleClosePane` の dirty 警告ロジックも撤去（MD はペイン非依存になったため）。タイトル rename / process display / scrollback clear / file insert / close pane は維持
-- **`src/renderer/services/markdownOpenService.ts`**: 大幅簡素化（314 行 → 56 行）。ペイン選択ダイアログ / `NEW_PANE_CHOICE` / `openMarkdownInPane` / `openMarkdownInNewPane` / CWD 内外判定を全廃。`openMarkdownInRightSidebar(filePath)` 単一エントリポイントに統一（読込 → openMarkdown → `setOpen(true)`）。旧 `requestEditMarkdownFromSidebar` / `requestEditMarkdownFromTerminal` は互換シムとして残し内部で `openMarkdownInRightSidebar` を呼ぶ
-- **`src/renderer/stores/terminalMetaStore.ts`**: `viewMode` / `mdTabs` / `activeMdTabId` フィールド削除、関連 actions（`openMarkdown` / `setViewMode` / `setActiveMdTab` / `closeMdTab` / `setMdDirty` / `markMdSaved` / `clearMarkdown` / `canOpenMoreMd`）削除。`hydrateMetas` の `mdTabFilePaths` 引数を撤去
-- **`src/renderer/stores/markdownDialogStore.ts`**: `OpenConfirmRequest` 型を削除し、`UnsavedRequest` のみに簡素化。`showOpenConfirm` action 削除、`paneId` フィールド削除（タブ ID で十分）
-- **`src/renderer/components/UnsavedChangesModal.tsx`**: `UnsavedReason` を `"switch-to-cli" \| "open-other" \| "close-pane"` から `"open-other"` のみに縮約。文言を「このタブを閉じると、編集中の内容は失われます」に更新
-- **`src/renderer/services/sessionRestore.ts`**: serialize / restore から `mdTabFilePaths` を削除（葉ペインの `cwd` のみ保存対象に戻す）。旧 JSON に `mdTabFilePaths` が残っていても無視
-- **`src/renderer/services/sessionPersist.ts`**: `hasMdTabPathsChanged` を削除、`hasCwdChanged` のみで保存トリガを判定
-- **`src/shared/session-state-validator.ts`**: `SerializedMeta.mdTabFilePaths` フィールドと `SESSION_STATE_MAX_MD_TABS` 定数を削除。validator は旧形式に `mdTabFilePaths` が含まれていても黙って無視（後方互換）
-- **`src/renderer/components/Header.tsx`**: 右サイドバートグルボタンを設定ボタンの左隣に追加（`PanelRightIcon` / `useRightSidebarStore.toggleOpen`）。aria-pressed / hover 状態 / 開閉時のボーダー色変化は左サイドバートグルと統一
-- **`src/renderer/components/Sidebar/icons.tsx`**: `PanelRightIcon` を新規追加（`PanelLeftIcon` の鏡映: `<line x1="15" y1="3" x2="15" y2="21" />`）
-- **`src/renderer/App.tsx`**: 大幅整理（682 行 → 568 行）。
-  - `<RightSidebar />` を main area の最右に追加（Sidebar / SplitContainer の隣）
-  - `OpenMarkdownModal` import / render を撤去、`dialogRequest?.kind === "unsaved"` のみ render
-  - `handleRequestEditMarkdown` を `openMarkdownInRightSidebar(filePath)` 1 行に簡素化
-  - `close-pane` ショートカットの dirty 警告フローを撤去（MD はペイン非依存）
-  - `resolveActiveViewMode()` を撤去し、`isMarkdownEditorFocused()` で「現在 MD エディタに focus があるか」を判定。`adjustGlobalFontSize` / `resetGlobalFontSize` はこれをもとに editor / terminal を切替
-  - `isInsideMarkdownEditor` の検出セレクタを `[data-md-editor-pane]` から `[data-md-editor-tab]` に変更（paneId 依存撤去に伴う rename）
-- **削除**: `src/renderer/components/OpenMarkdownModal.tsx`（241 行）、`src/renderer/components/MdTabPickerDropdown.tsx`（314 行）、`src/renderer/components/__tests__/OpenMarkdownModal.test.tsx`（149 行）
-- **新規テスト 22 件**:
-  - `stores/__tests__/markdownTabsStore.test.ts` (9): openMarkdown 新規追加 / 既存タブアクティブ化 / 上限 8 到達 / closeTab 左隣フォールバック / 最後のタブで activeTabId=null / setDirty タブ独立 / markSaved / canOpenMore
-  - `stores/__tests__/rightSidebarStore.test.ts` (13): clamp の min/max/round/non-finite/overflow/underflow / `effectiveMaxWidth` の 50% 計算 / setOpen / toggleOpen / 値同一時の no-op / setWidth + clamp
-- **既存テスト改訂**:
-  - `terminalMetaStore.test.ts`: `mdTabs` 系テスト群（restore / openMarkdown / closeMdTab / setMdDirty / markMdSaved / canOpenMoreMd）を削除、初期化系の核テストのみ維持
-  - `markdownDialogStore.test.ts`: `showOpenConfirm` テスト 3 件削除、`UnsavedRequest` ベースの 2 件のみ維持
-  - `markdownOpenService.test.ts`: 旧 API ベースの巨大テスト群を撤去、`openMarkdownInRightSidebar` の 5 ケース（happy / 自動オープン / 非 MD スキップ / 上限到達 / readFile 失敗）に書き換え
-  - `mdFileListing.test.ts`: `makeMeta()` から `viewMode / mdTabs / activeMdTabId` を削除
-  - `TerminalPane.test.tsx`: md→cli 遷移テスト 2 件を削除、`useTerminalMeta` mock を簡素化
-- **テスト合計**: 34 ファイル / 480 件グリーン（修正前 467 から +13 件）+ `npm run build` 通過
-- **設計判断**:
-  - **viewMode の概念を全廃 → 右サイドバー独立表示**: 旧仕様「ペイン内で CLI/MD overlay 切替」は xterm の display:none / 復帰時の re-fit / scrollback cols 整合 / 復帰直後の入力安全性 / md→cli の useLayoutEffect 二段保険など複雑なロジックを生んでいた。MD を完全に別領域（右サイドバー）に分離することで、xterm は常に表示され続け、MD タブ切替も terminal の resize lifecycle を一切触らない。コード量・状態空間・バグ可能性が劇的に縮小
-  - **MD タブをグローバル化（ペイン非依存）**: 旧仕様の「ペインごとに mdTabs を持つ」は、ペイン close 時の dirty 警告 / セッション復元時のペインバインド / + ボタンの paneId 引数など、本質的でない複雑性を生んでいた。MD は「アプリ全体で 1 つのワークスペース」として捉える方が UX 自然（複数ペインが同じ MD を参照するケースで一貫）。グローバル化で `paneId` を引数から完全に削除でき、API も簡潔化
-  - **最大幅は実行時にウィンドウ幅 × 50% で clamp**: ユーザー要望「中央付近まで」を画面幅の半分として解釈。永続化は絶対値 px のままにして、ウィンドウサイズ変化時に再 clamp + 永続化更新。ウィンドウを縮めた後に拡げると、縮めた時点の幅は失われる（永続化値も clamp 済み）が、UX 上の混乱はない（ユーザーは現在見える幅で記憶している）
-  - **左サイドバーと同じ独自 ResizeHandle パターン**: react-resizable-panels の Group/Panel/Separator は SplitContainer 内で既に使っており、サイドバーの絶対配置リサイズには合わない。既存 `Sidebar/ResizeHandle.tsx` と同じく `position: absolute` + `mousedown/mousemove/mouseup` で実装。座標計算だけ反転（`rect.right - clientX` で右端からの距離）
-  - **「ファイルを選択してください」の空状態を内蔵**: タブが 0 件のときも RightSidebar 自体は開いた状態を保ち、中央に文言を表示する。ユーザーが Header トグルで先に開いてからファイルを選ぶフローを自然に許容する。Sidebar の「ターミナルが起動するとここに CWD が表示されます」と同じ思想
-  - **dirty 警告は「タブ close」のみに残す**: 旧仕様の `switch-to-cli` / `close-pane` reason は概念ごと不要に（CLI への切替は「右サイドバーを閉じる」だけで MD 状態は破壊されないため、ペイン close は MD と無関係になったため）。`open-other` だけが残る
-  - **起動時のレースコンディションを `openInitialized` フラグで解消**: `useEffect [isOpen]` が初期 isOpen=false で発火 → main 側に setOpen(false) を送信 → main の永続化値（前回 open=true）を上書き、というレースが発見された。永続化値の取得 promise が解決するまで IPC 送信を保留する state フラグで解消。useRef ではなく useState を使う理由は、フラグ変化で再レンダーをトリガしないと「getOpen 解決前にユーザーがトグルした場合」が永続化されないため
-  - **`mdTabFilePaths` をセッションスキーマから削除（後方互換維持）**: グローバル化に伴い「ペイン単位の MD タブ復元」は無意味に。CLAUDE.md §3.7 の「保存対象: レイアウト二分木と各葉ペインの CWD のみ」本来の仕様にも合致。旧 JSON にフィールドが残っていても validator で黙って無視することで、既存ユーザーのセッション破棄を防ぐ
-  - **MdTabPickerDropdown を新規 RightSidebarFilePicker に置き換えた理由**: 既存ファイルを修正する案もあったが、(a) `paneId` 引数全廃、(b) anchor の親が変わる、(c) `openMarkdownDirect(paneId, fp)` から `openMarkdownInRightSidebar(fp)` に呼び出し変更、と差分が大きく、新規ファイルにした方が読みやすい
-  - **Header トグルの位置（右側 / 設定ボタン左隣）**: 左サイドバートグルが Header 左側にあるのと対称な配置。Settings ボタンの隣に置くことで「画面構成の制御」アイコン群を視覚的にまとめる
-  - **ショートカットを追加しなかった理由（ユーザー回答 3）**: 自動開閉（Markdown クリック → 自動 open）が主動線になるので、明示開閉のショートカットは出番が少ない。Cmd+B 系は左サイドバーで埋まっており、衝突を避けたい。将来要望があれば `right-sidebar-toggle` を registry に追加可能な設計を保つ
-
-### 2026-05-02 - ズーム / split / scrollback 連鎖バグ修正（pty.resize debounce + Chromium 抑制）
-
-#### 概要
-
-ユーザー報告の 3 連続バグを根本原因まで掘り下げて修正。(1)「Cmd+\_ がまだ縮小として効く」: globalShortcut で intercept しないキーは Chromium が `prePerformKeyEquivalent:` で webFrame zoom として消費するため、`Cmd+= / Cmd+Plus / Cmd+Shift+= / Cmd+Shift+-` を no-op の SUPPRESS_ACCELERATORS として登録して抑制。フォントズームのアクティブショートカットは `Cmd+;`（拡大）と `Cmd+-`（縮小）と `Cmd+0`（リセット）の 3 つのみに整理。(2)「分割直後にスクロールバックが 2 文字幅で表示される」: `react-resizable-panels` を v2.1.7 → v4.5.9 にアップグレードした際の API 変更（数値 = ピクセル化）に追従漏れがあり、`defaultSize={50}` が 50% ではなく 50 ピクセルとして解釈されていた。`defaultSize="50%"` / `minSize="10%"` の percent string に修正。さらに `terminalManager.fit()` に `proposeDimensions()` の事前検証を追加し、`MIN_REASONABLE_COLS=5` 未満の異常値では `fitAddon.fit()` を呼ばない（呼ぶと scrollback が破壊的に reflow されて元に戻らない）。(3)「長文中に同じ文章が一つのパネル内に複数縦に並ぶ」: ペイン境界 drag や CSS transition で Panel.onResize / ResizeObserver がフレーム単位で発火し、毎フレーム `pty.resize` IPC → SIGWINCH → TUI（Claude CLI 等）が連続再描画 → 古い描画が scrollback に積層する SIGWINCH スパムが原因。`terminalManager.ts` に PTY 専用の trailing-debounce（80ms）を新設し、`fit()` 内部で `schedulePtyResize` を呼ぶ集中管理に切替。caller 側の `window.api.pty.resize` 二重呼び出し（TerminalPane.handleFit / applyOptions / SplitContainer.handlePanelResize）を撤去。`destroy(id)` でも保留中 timer をクリアして破棄済みペインへの IPC 漏洩を防止。テスト合計 33 ファイル / 484 件グリーン（修正前 479 から +5 件: proposeDimensions ガード 2 件 / pty.resize debounce 集約 + cancel + destroy クリーンアップ 3 件）。
-
-#### 変更点
-
-- **src/main/zoom-shortcuts.ts**: BINDINGS を `{ font-zoom:in: ["CommandOrControl+;"], font-zoom:out: ["CommandOrControl+-"], font-zoom:reset: ["CommandOrControl+0"] }` に統一。`SUPPRESS_ACCELERATORS = ["CommandOrControl+=", "CommandOrControl+Plus", "CommandOrControl+Shift+=", "CommandOrControl+Shift+-"]` を新設し、`registerAll()` 内で no-op コールバックの globalShortcut として登録 → OS レベルで先取り消費して Chromium のデフォルトズームに到達させない。`unregisterAll()` は SUPPRESS 分も REGISTERED に積んであるため自動的にクリーンアップされる
-- **src/renderer/shortcuts/registry.ts**: `font-zoom-in` の defaultKey を `"Cmd+Plus"` → `"Cmd+;"` に変更。`Cmd+Plus` 用に書かれていた Shift 省略コメントを削除
-- **src/renderer/App.tsx**: 早期 keydown ハンドラの `isZoomIn` マッチ条件を `e.key === "+" || (e.shiftKey && e.code === "Equal/Semicolon")` から `!e.shiftKey && (e.key === ";" || e.code === "Semicolon")` に書き換え。`Cmd+;` 単発の検出に純化
-- **src/renderer/components/SplitContainer.tsx**: `<Panel minSize={10} defaultSize={100 / children.length}>` を `<Panel minSize="10%" defaultSize={`${100 / children.length}%`}>` に修正（v4 で number = px、string = % という新仕様に追従）。`handlePanelResize` から `window.api.pty.resize(panelId, ...)` を撤去（`terminalManager.fit()` 内部の debounce で集約）
-- **src/renderer/services/terminalManager.ts**:
-  - 定数 `MIN_REASONABLE_COLS = 5` を新設。`fit()` の `tryFit()` 内で `fitAddon.proposeDimensions()` を先に呼んで cols/rows を検証し、`cols < MIN_REASONABLE_COLS || rows <= 0` のときは `fitAddon.fit()` を呼ばずに null 返却（scrollback の破壊的 reflow を防止）
-  - `PTY_RESIZE_DEBOUNCE_MS = 80` と `pendingPtyResizes: Map<id, { cols, rows, timer }>` を新設。`schedulePtyResize(id, cols, rows)` で既存予約を `clearTimeout` してから `setTimeout` で再スケジュール → 連続発火しても最終サイズだけが PTY に届く
-  - `fit()` 内のサイズ変化判定後（または rAF retry 成功後）で `schedulePtyResize` を呼ぶよう変更。これにより caller が `window.api.pty.resize` を直接呼ばなくても自動的に PTY に伝わる
-  - `destroy(id)` で `pendingPtyResizes.get(id)` を `clearTimeout` + `delete`（破棄済みペインへの IPC 漏洩防止）
-  - テスト用 export `cancelPendingPtyResizes()` を追加
-- **src/renderer/components/TerminalPane.tsx**:
-  - `handleFit` から `window.api.pty.resize(id, result.cols, result.rows)` を撤去。`terminalManager.fit(id)` のみに簡略化（重複呼び出しは debounce を素通りして SIGWINCH スパムを再導入するため NG）
-  - `applyOptions` の戻り値を握りつぶし、その後の `window.api.pty.resize` も撤去
-- **src/renderer/components/settings/TerminalSettings.tsx**: 説明テキストを「`Cmd+= / Cmd+-` でアクティブペインのみ拡縮」→「`Cmd+; / Cmd+-` でアクティブペインのみ拡縮」に変更
-- **新規テスト 5 件 (`renderer/services/__tests__/terminalManager.test.ts`)**:
-  - `skips fit when proposeDimensions returns cols below MIN_REASONABLE_COLS`: 提案 cols=2 のときは `fitAddon.fit()` が呼ばれず null 返却
-  - `skips fit when proposeDimensions returns undefined`: undefined 提案でも安全に null 返却
-  - `coalesces rapid fit() calls into a single pty.resize (last value wins)`: 異なる 3 サイズで連続 `fit()` → debounce 中は IPC 0 件 / 80ms 経過後に最終サイズ 1 件のみ IPC される
-  - `cancelPendingPtyResizes drops pending IPC`: pending を明示的にキャンセルすると 200ms 経過しても IPC されない
-  - `destroy() cancels pending pty.resize for that id`: debounce 経過前に destroy → タイマーが解除され破棄済み id への IPC が飛ばない
-- **既存テスト更新**:
-  - `MockFitAddon` に `proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }))` を追加（既定で妥当な提案を返す）
-  - `terminalManager` の rAF retry テストを fake timers に切替えて 100ms 進めて `pty.resize` の呼び出しを検証
-  - `SplitContainer.test.tsx` / `TerminalPane.test.tsx`: 「fit + 直 IPC」検証から「invalidate + fit のみ呼ばれる」検証に書き換え（pty.resize は terminalManager 内部の debounce 経由になったため、コンポーネント層では検証しない）
-  - `registry.test.ts`: `font-zoom-in default is Cmd+Plus` → `Cmd+;` に更新
-- **テスト合計**: 33 ファイル / 484 件グリーン（修正前 479 から +5 件）+ `npm run build` 通過
-- **設計判断**:
-  - **Chromium デフォルトズーム抑制を SUPPRESS_ACCELERATORS でやる根拠**: Electron の `webContents.setVisualZoomLevelLimits` は pinch zoom 専用で、キーボードショートカットには効かない。`before-input-event` で `preventDefault` する手もあるが、Chromium は `prePerformKeyEquivalent:` でこれより前にズームを発火する。OS レベルの globalShortcut は最も早い経路に乗り、no-op コールバックを置くだけで Chromium への到達を遮断できる
-  - **`Cmd+;` 単発を拡大に選んだ理由**: ユーザー要望「`Cmd+Shift+; / Cmd+Shift+=` の 2 候補を `Cmd+;` 一つだけにして」に従う。Shift なしの `;` キー単体は `Plus` キーと違って US/JIS の差を受けず一意で、`Cmd+,`（設定）の隣で運指も近い。Chromium のデフォルトとも衝突しない
-  - **`react-resizable-panels` v4 で number→px に変わった経緯**: v2/v3 は `defaultSize={50}` を 50% として解釈していたが、v4 で「数値 = px」「文字列 = %」と仕様変更された（CSS の他単位 `rem`/`vh` 対応のため）。マイグレーションガイドを見落としていたため `defaultSize={50}` が 50px として解釈され、splitter 直後にペイン幅が 50px → xterm fit-addon が `MINIMUM_COLS=2` までクランプ → scrollback が破壊的に再 wrap される連鎖が起きていた
-  - **`MIN_REASONABLE_COLS=5` 未満で fitAddon.fit を見送る理由**: xterm の MINIMUM_COLS=2 まで落ちると `terminal.resize(2, rows)` がそのまま走って scrollback が 2 文字幅で再 wrap される。reflow はロスを伴うため、後で広い cols に戻しても元の見た目には戻らない（80 文字行が 40 行 × 2 文字に分割されたまま固着）。`proposeDimensions()` で先に検証して `fitAddon.fit()` 自体を呼ばないことが正しい防御
-  - **PTY resize の trailing-debounce を 80ms に設定**: drag-resize の体感的な「区切り」（指がやや止まる瞬間）が 50〜100ms 程度。80ms は: (a) drag 中の連続発火を確実に集約、(b) drag 終了後の最終 SIGWINCH を素早く届ける、のバランス。長すぎると release 後にカーソル位置がしばらく古い cols のまま残る違和感が出る
-  - **xterm 側 reflow は即時 / PTY 側 SIGWINCH は debounce の二段構え**: xterm の `terminal.resize()`（fitAddon.fit 内部）は即時実行して見た目をスムーズに追従させ、PTY への通知だけ集約する。これにより drag 中の視覚的レスポンスは保ちつつ、TUI（Claude CLI / Vim 等）の連続再描画を防げる。debounce 中の 80ms 間は xterm.cols=40 / PTY.cols=80 の不整合があるが、PTY からの出力を xterm が wrap するだけなので実害なし
-  - **caller 側の `window.api.pty.resize` を撤去した理由**: `fit()` 内部で `schedulePtyResize` を呼ぶ仕様にしたあと、caller が直接 `window.api.pty.resize` を呼ぶと debounce を素通りして SIGWINCH スパムが復活する。「fit を呼んだら pty も resize される」という単一責務に統一し、TerminalPane.handleFit / applyOptions / SplitContainer.handlePanelResize の 3 箇所から重複呼び出しを撤去
-  - **`destroy(id)` で pendingPtyResizes をクリアする根拠**: ペイン close 直後にまだ debounce が経過していない pty.resize が残っていると、`window.api.pty.resize(deadId, ...)` が main プロセスへ飛ぶ。Main 側は知らない id を握りつぶすだけだが、IPC リソースの無駄遣い + ログノイズ + 将来 main 側で warn を出すようにすると誤報になる。同 destroy 内で `lastSizes.delete(id)` / `pathBuffers.delete(id)` をしているのと同じ性質のクリーンアップ
-  - **`pty.create` 直後の初期 resize は debounce 経由にしない**: TerminalPane の pty.create flow にある `window.api.pty.resize(id, cols, rows)` は startup の one-shot で、direct 呼び出しのまま残した。これは「PTY が初期出力を流す前に正しい cols を知っておく必要がある」一種の同期点で、80ms 遅らせると zsh 起動メッセージが小さい cols（24 cols のシェルデフォルト）で wrap されるため。fit 経由ではないので新 debounce path とは独立に動く
-  - **テスト書き換えの方針**: SplitContainer / TerminalPane の責務が「fit を呼ぶ」までになったので、コンポーネント層では `pty.resize` を検証しない。`pty.resize` の挙動は `terminalManager.test.ts` でドメインごとにカバー（debounce coalesce / cancel / destroy）。これにより責務境界が tests に反映され、将来 caller を増やしても terminalManager 側のテストでデバウンスが担保される
-  - **既知の Issue #002（scrollback cols 不整合）との関係**: 2026-04-27 のフィックスでは「fit が呼ばれない経路」を 5 つ塞いだが、今回見つかった「fit が**呼ばれすぎる**経路」は対角線の問題。`MIN_REASONABLE_COLS` ガード + pty.resize debounce で双方向の防御が揃う

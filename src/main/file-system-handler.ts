@@ -460,39 +460,49 @@ class FileSystemManager {
   }
 
   async openInVSCode(targetPath: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      // shell:false + argv 配列で実行。targetPath にバッククオートや $() があっても
-      // shell が解釈せず、command injection を回避できる
-      const proc = spawn("code", [targetPath], {
-        shell: false,
-        detached: true,
-        stdio: "ignore",
-        env: process.env,
-      });
-      let resolved = false;
-      proc.on("error", () => {
-        if (!resolved) {
-          resolved = true;
-          resolve(false);
-        }
-      });
-      proc.on("spawn", () => {
-        proc.unref();
-        // spawn 後すぐ exit したら失敗として扱う
-        setTimeout(() => {
+    // shell:false + argv 配列で実行。targetPath にバッククオートや $() があっても
+    // shell が解釈せず、command injection を回避できる
+    const trySpawn = (cmd: string, args: string[]): Promise<boolean> =>
+      new Promise((resolve) => {
+        const proc = spawn(cmd, args, {
+          shell: false,
+          detached: true,
+          stdio: "ignore",
+          env: process.env,
+        });
+        let resolved = false;
+        proc.on("error", () => {
           if (!resolved) {
             resolved = true;
-            resolve(true);
+            resolve(false);
           }
-        }, 200);
+        });
+        proc.on("spawn", () => {
+          proc.unref();
+          // spawn 後すぐ exit したら失敗として扱う
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              resolve(true);
+            }
+          }, 200);
+        });
+        proc.on("exit", (code) => {
+          if (!resolved) {
+            resolved = true;
+            resolve(code === 0);
+          }
+        });
       });
-      proc.on("exit", (code) => {
-        if (!resolved) {
-          resolved = true;
-          resolve(code === 0);
-        }
-      });
-    });
+
+    // まず PATH 上の `code` を試し、失敗したら macOS の `open -a` でフォールバック。
+    // パッケージ版でも /Applications 配下を直接起動できるため、ユーザーが Shell Command:
+    // Install 'code' command を未実行でも VSCode が開ける
+    if (await trySpawn("code", [targetPath])) return true;
+    if (process.platform === "darwin") {
+      return trySpawn("open", ["-a", "Visual Studio Code", targetPath]);
+    }
+    return false;
   }
 
   closeAll(): void {
